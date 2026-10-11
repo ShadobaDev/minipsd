@@ -34,9 +34,12 @@ leaves a tag pointing at a broken commit.
 ```bash
 git checkout master
 git pull
-git tag 0.1.0
+git tag -a 0.1.0 -m "minipsd 0.1.0" -m "<one-line summary of the release>"
 git push origin 0.1.0
 ```
+
+An annotated tag (`-a`) records who tagged, when and why. Its message stays short: the release
+notes come from `docs/CHANGELOG.md`, not from the tag.
 
 ## 3. Verify
 
