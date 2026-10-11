@@ -1,0 +1,52 @@
+# A minimal consumer of minipsd, configured once per way of bringing it in (MODE):
+#   copy          the header copied into this project
+#   subdirectory  add_subdirectory of the source tree (git submodule)
+#   fetchcontent  FetchContent_MakeAvailable
+#   package       find_package of an install
+#   pkgconfig     pkg-config of an install
+# Besides building and running, it checks the version and, where CMake carries it, the SBOM.
+cmake_minimum_required(VERSION 3.21)
+project(minipsd-consumer LANGUAGES C)
+
+set(MODE "" CACHE STRING "How minipsd is brought in")
+set(_lib minipsd::minipsd)
+
+if(MODE STREQUAL "copy")
+    configure_file("${MINIPSD_SOURCE_DIR}/include/minipsd.h" vendor/minipsd.h COPYONLY)
+    add_library(vendored-minipsd INTERFACE)
+    target_include_directories(vendored-minipsd INTERFACE "${CMAKE_CURRENT_BINARY_DIR}/vendor")
+    set(_lib vendored-minipsd)
+elseif(MODE STREQUAL "subdirectory")
+    add_subdirectory("${MINIPSD_SOURCE_DIR}" minipsd)
+elseif(MODE STREQUAL "fetchcontent")
+    include(FetchContent)
+    FetchContent_Declare(minipsd SOURCE_DIR "${MINIPSD_SOURCE_DIR}")
+    FetchContent_MakeAvailable(minipsd)
+elseif(MODE STREQUAL "package")
+    find_package(minipsd ${MINIPSD_EXPECTED_VERSION} EXACT CONFIG REQUIRED)
+elseif(MODE STREQUAL "pkgconfig")
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(MINIPSD REQUIRED IMPORTED_TARGET minipsd=${MINIPSD_EXPECTED_VERSION})
+    set(_lib PkgConfig::MINIPSD)
+else()
+    message(FATAL_ERROR "Unknown MODE '${MODE}'")
+endif()
+
+if(_lib STREQUAL "minipsd::minipsd")
+    if(TARGET minipsd-tests)
+        message(FATAL_ERROR "minipsd built its tests as a subproject")
+    endif()
+    get_target_property(_sbom minipsd::minipsd MINIPSD_SBOM_FILE)
+    if(NOT EXISTS "${_sbom}")
+        message(FATAL_ERROR "MINIPSD_SBOM_FILE does not name a file: '${_sbom}'")
+    endif()
+    file(READ "${_sbom}" _json)
+    string(JSON _sbom_version GET "${_json}" packages 0 versionInfo)
+    if(NOT _sbom_version STREQUAL MINIPSD_EXPECTED_VERSION)
+        message(FATAL_ERROR "SBOM version ${_sbom_version}, expected ${MINIPSD_EXPECTED_VERSION}")
+    endif()
+endif()
+
+add_executable(minipsd-consumer main.c)
+target_link_libraries(minipsd-consumer PRIVATE ${_lib})
+target_compile_definitions(minipsd-consumer PRIVATE MINIPSD_EXPECTED_VERSION="${MINIPSD_EXPECTED_VERSION}")

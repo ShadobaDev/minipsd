@@ -1,0 +1,50 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "minipsd-@PROJECT_VERSION@",
+  "documentNamespace": "@PROJECT_HOMEPAGE_URL@/spdx/minipsd-@PROJECT_VERSION@-@MINIPSD_HEADER_SHA256@",
+  "creationInfo": {
+    "created": "@MINIPSD_SBOM_CREATED@",
+    "creators": [
+      "Organization: ShadobaDev",
+      "Tool: minipsd-cmake"
+    ]
+  },
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-minipsd",
+      "name": "minipsd",
+      "versionInfo": "@PROJECT_VERSION@",
+      "supplier": "Organization: ShadobaDev",
+      "downloadLocation": "git+@PROJECT_HOMEPAGE_URL@.git@@PROJECT_VERSION@",
+      "homepage": "@PROJECT_HOMEPAGE_URL@",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "@MINIPSD_HEADER_SHA256@"
+        }
+      ],
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2026 ShadobaDev",
+      "summary": "@PROJECT_DESCRIPTION@",
+      "comment": "Header-only; the checksum is that of minipsd.h, the whole library.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/ShadobaDev/minipsd@@PROJECT_VERSION@"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-minipsd"
+    }
+  ]
+}

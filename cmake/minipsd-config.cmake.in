@@ -1,0 +1,8 @@
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/minipsd-targets.cmake")
+
+# The SPDX SBOM fragment, the same property an add_subdirectory / FetchContent build sets.
+set_target_properties(minipsd::minipsd PROPERTIES MINIPSD_SBOM_FILE "@PACKAGE_MINIPSD_INSTALL_SBOM@")
+
+check_required_components(minipsd)

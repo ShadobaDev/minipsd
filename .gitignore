@@ -1,0 +1,18 @@
+# build artifacts
+build
+install
+dist
+
+# OS-generated files
+*.pyc
+*__pycache__
+*\.pytest_cache
+.vscode
+
+# Vibe-coding decimation
+*\.clinerules
+*\.claude
+graphify-out
+
+# Temporary files for editors
+temp
