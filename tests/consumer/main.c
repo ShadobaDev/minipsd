@@ -3,7 +3,7 @@
  * \brief Writes a one-pixel document and checks the header reports the expected version.
  *
  * SPDX-License-Identifier: MIT
- * SPDX-FileCopyrightText: Copyright (c) 2026 ShadobaDev
+ * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
  */
 
 #define MINIPSD_IMPLEMENTATION

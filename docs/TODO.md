@@ -34,9 +34,7 @@ The code and tests are in (`include/`, `tests/`) but nothing builds them yet: `C
 - [x] `MINIPSD_VERSION_MAJOR/MINOR/PATCH` and `MINIPSD_VERSION_STRING` in the header; the single
       version source (CMake reads it, see the next section).
 - [x] `SPDX-License-Identifier` and `SPDX-FileCopyrightText` in the header.
-- [ ] **On hold until the repository is published:** the project URL and the full MIT text inside
-      the header. The URL does not exist yet, and the MIT text carries the copyright line, which
-      waits for the copyright-holder decision below.
+- [x] The project URL and the full MIT text inside the header.
 
 **Build and packaging**
 - [x] `CMakeLists.txt`: version parsed from `minipsd.h` (`file(STRINGS)`) and passed to
@@ -56,9 +54,10 @@ The code and tests are in (`include/`, `tests/`) but nothing builds them yet: `C
 - [ ] CI: Windows (MSVC, MinGW), Linux (gcc, clang); each builds the tests as C and as C++.
 - [ ] `psd-tools` round trip in CI: write documents, read them back, compare pixels and fields.
 - [ ] Release workflow per [GITHUB-RELEASE.md](GITHUB-RELEASE.md).
-- [ ] `git init`, push to `ShadobaDev/minipsd`, tag `0.1.0`.
-- [ ] After the first publish: check that GitHub detects the licence from `LICENSE.MIT`; if not,
-      rename it to `LICENSE` (and update the links).
+- [x] `git init`, push to `ShadobaDev/minipsd`.
+- [ ] Tag `0.1.0`.
+- [x] After the first publish: check that GitHub detects the licence from `LICENSE.MIT` (it does:
+      MIT; no rename needed).
 
 **Last step of the release: switch Platemaker to it**
 - [ ] FetchContent with a guard (no download when the header is already available, e.g. via
@@ -74,10 +73,10 @@ The code and tests are in (`include/`, `tests/`) but nothing builds them yet: `C
       used if present, otherwise it is fetched, and only for top-level builds.
 - [ ] **Own test reader *and* `psd-tools`, or `psd-tools` only.** Proposed: both — the own reader
       checks fields, `psd-tools` checks compatibility.
-- [ ] **Contributor terms.** `CLA.md` is Platemaker's (relicensing grant). For an MIT library the
-      usual choice is inbound = outbound (contributions under MIT) without a CLA.
-- [ ] **Copyright holder.** The Platemaker header says "ShadobaDev", `LICENSE.MIT` says
-      "Bartłomiej Mucha"; pick one, ASCII-safe for the header.
+- [x] **Contributor terms.** Inbound = outbound: contributions are licensed under MIT, stated in
+      `CONTRIBUTING.md`; no CLA.
+- [x] **Copyright holder.** `Bartlomiej Mucha <shadobadev@gmail.com>`, ASCII everywhere
+      (licence, header, sources, SBOM); `ShadobaDev` stays the GitHub account in URLs and the PURL.
 
 ---
 

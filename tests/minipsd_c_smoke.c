@@ -4,7 +4,7 @@
  *        C build produces the same bytes as the C++ one.
  *
  * SPDX-License-Identifier: MIT
- * SPDX-FileCopyrightText: Copyright (c) 2026 ShadobaDev
+ * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
  */
 
 #define MINIPSD_STATIC

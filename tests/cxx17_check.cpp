@@ -4,7 +4,7 @@
  *        Built, never run: the check is a warning-free compile.
  *
  * SPDX-License-Identifier: MIT
- * SPDX-FileCopyrightText: Copyright (c) 2026 ShadobaDev
+ * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
  */
 
 #include "minipsd_c_smoke.c"

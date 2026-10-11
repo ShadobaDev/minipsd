@@ -14,12 +14,12 @@ There is nothing to build for consumers: the source tree at the tag *is* the rel
 - The `MINIPSD_VERSION_*` macros in `minipsd.h` match the tag you are about to push. (CMake reads
   its version from the header, so there is no second place to update.)
 - `docs/CHANGELOG.md` has the entry for this version.
-- CI is green on `main` for every toolchain, including the `psd-tools` round trip.
+- CI is green on `master` for every toolchain, including the `psd-tools` round trip.
 
 ## 1. Publish
 
 ```bash
-git checkout main
+git checkout master
 git pull
 git tag 0.1.0
 git push origin 0.1.0

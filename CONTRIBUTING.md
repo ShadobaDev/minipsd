@@ -10,9 +10,15 @@ Read [docs/SPECIFICATION.md](docs/SPECIFICATION.md) (the contract, including the
 [docs/CODING_STYLE_CPP.md](docs/CODING_STYLE_CPP.md)). minipsd stays small on purpose: open an
 issue to discuss a new feature before writing it.
 
+## Licensing of contributions
+
+minipsd is MIT licensed, and so are contributions to it: by submitting a pull request you agree
+that your contribution is licensed under the [MIT License](LICENSE.MIT), and that you have the
+right to submit it. There is no separate contributor agreement to sign.
+
 ## Submitting a pull request
 
-1. Fork the repository and create a branch from `main`.
+1. Fork the repository and create a branch from `master`.
 2. Make your changes; the tests must pass as C and as C++, without warnings.
 3. A change to the bytes written must come with a test, and must be checked with an independent
    reader (`psd-tools`), not only with the project's own test reader.
