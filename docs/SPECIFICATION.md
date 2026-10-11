@@ -54,6 +54,9 @@ real readers win (see [Verification](#verification)).
 
 - **One header, stb style:** `#define MINIPSD_IMPLEMENTATION` in exactly one translation unit
   before `#include "minipsd.h"`; include it plainly everywhere else.
+- **Header location:** `include/minipsd.h`, included as `"minipsd.h"`. If the library is ever
+  split, the extra headers go to `include/minipsd/` (`writer.h`, `reader.h`, ...) and
+  `include/minipsd.h` stays the entry point, so existing `#include` lines keep working.
 - **C99, also valid C++** (C++17/20): explicit `void *` casts, no designated initialisers;
   declarations are `extern "C"` under C++.
 - **No dependencies** beyond the C standard library.

@@ -55,6 +55,9 @@ The code and tests are in (`include/`, `tests/`) but nothing builds them yet: `C
       Not yet run on GitHub: the first push of `.github/` is its first run.
 - [x] `psd-tools` round trip in CI: write documents, read them back, compare pixels and fields.
 - [x] Release workflow per [GITHUB-RELEASE.md](GITHUB-RELEASE.md).
+- [x] CPack packages of the install tree: `minipsd-X.Y.Z.tar.gz` / `.zip` and
+      `libminipsd-dev_X.Y.Z_all.deb` (commands in [CHEATSHEET.md](CHEATSHEET.md)).
+- [ ] **Decide:** attach those packages to the GitHub Release too, or only `minipsd.h`?
 - [x] `git init`, push to `ShadobaDev/minipsd`.
 - [ ] Tag `0.1.0`.
 - [x] After the first publish: check that GitHub detects the licence from `LICENSE.MIT` (it does:

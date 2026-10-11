@@ -97,6 +97,25 @@ if(MINIPSD_INSTALL)
     install(FILES LICENSE.MIT "${CMAKE_CURRENT_BINARY_DIR}/minipsd.spdx.json"
         DESTINATION "${_minipsd_doc_dir}"
     )
+
+    # Packages of the install tree: minipsd-X.Y.Z.tar.gz / .zip (any platform; unpack and point
+    # CMAKE_PREFIX_PATH at it, or extract into a prefix) and, with -G DEB, libminipsd-dev.
+    # Nothing in the tree depends on the platform, so neither name carries one.
+    set(CPACK_PACKAGE_NAME                minipsd)
+    set(CPACK_PACKAGE_VENDOR              "Bartlomiej Mucha")
+    set(CPACK_PACKAGE_CONTACT             "Bartlomiej Mucha <shadobadev@gmail.com>")
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "${PROJECT_DESCRIPTION}")
+    set(CPACK_RESOURCE_FILE_LICENSE       "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE.MIT")
+    set(CPACK_PACKAGE_FILE_NAME           "minipsd-${PROJECT_VERSION}")
+    set(CPACK_OUTPUT_FILE_PREFIX          "${CMAKE_CURRENT_SOURCE_DIR}/dist")
+    set(CPACK_PACKAGE_DIRECTORY           "${CMAKE_CURRENT_BINARY_DIR}")   # staging, not the cwd
+    set(CPACK_GENERATOR                   "TGZ;ZIP")
+    set(CPACK_DEBIAN_PACKAGE_NAME         libminipsd-dev)
+    set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE all)
+    set(CPACK_DEBIAN_PACKAGE_SECTION      libdevel)
+    set(CPACK_DEBIAN_PACKAGE_HOMEPAGE     "${PROJECT_HOMEPAGE_URL}")
+    set(CPACK_DEBIAN_FILE_NAME            DEB-DEFAULT)   # libminipsd-dev_X.Y.Z_all.deb
+    include(CPack)
 endif()
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,76 @@
+# Installing minipsd
+
+Every way of adding minipsd to a project, and the SBOM fragment each one carries.
+
+> The tag `0.1.0` below does not exist yet; everything else is in place and tested.
+
+**Copy the header.** Drop `minipsd.h` into your tree. The file carries its own version, licence
+and SPDX tags, so it stays identifiable in an SBOM.
+
+**CMake FetchContent**
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(minipsd
+    GIT_REPOSITORY https://github.com/ShadobaDev/minipsd.git
+    GIT_TAG        0.1.0)
+FetchContent_MakeAvailable(minipsd)
+target_link_libraries(my-app PRIVATE minipsd::minipsd)
+```
+
+**git submodule**
+
+```bash
+git submodule add https://github.com/ShadobaDev/minipsd.git external/minipsd
+```
+```cmake
+add_subdirectory(external/minipsd)
+target_link_libraries(my-app PRIVATE minipsd::minipsd)
+```
+
+As a subproject, minipsd builds no tests, fetches nothing and enables no language.
+
+**Installed package.** minipsd installs as a tree with nothing platform-specific in it:
+
+```
+include/minipsd.h
+share/cmake/minipsd/      CMake package (find_package)
+share/pkgconfig/minipsd.pc
+share/doc/minipsd/        LICENSE.MIT, minipsd.spdx.json
+```
+
+You can get that tree in any of these ways:
+
+- **From the source, with CMake** (any system):
+  ```bash
+  cmake -S minipsd -B build -DMINIPSD_BUILD_TESTS=OFF
+  cmake --install build --prefix /usr/local        # Linux: with sudo
+  ```
+- **As an archive**, `minipsd-X.Y.Z.tar.gz` or `.zip`: use it unpacked where it is, or extract
+  it into a prefix. The tree is relocatable, so nothing needs regenerating:
+  ```bash
+  sudo tar -xzf minipsd-0.1.0.tar.gz --strip-components=1 -C /usr/local
+  ```
+- **As a Debian/Ubuntu package**, `libminipsd-dev_X.Y.Z_all.deb`:
+  ```bash
+  sudo apt install ./libminipsd-dev_0.1.0_all.deb
+  ```
+
+The archive and the `.deb` are built with CPack, see
+[CHEATSHEET.md](CHEATSHEET.md#packages-and-installing).
+
+Then, in CMake (add `-DCMAKE_PREFIX_PATH=<tree>` unless the tree is in a system prefix):
+
+```cmake
+find_package(minipsd CONFIG REQUIRED)
+target_link_libraries(my-app PRIVATE minipsd::minipsd)
+```
+
+or, without CMake, `pkg-config --cflags minipsd`.
+
+**SBOM.** Every CMake path gives the same SPDX 2.3 fragment for minipsd, ready to merge into your
+own SBOM:
+
+```cmake
+get_target_property(minipsd_sbom minipsd::minipsd MINIPSD_SBOM_FILE)
+```

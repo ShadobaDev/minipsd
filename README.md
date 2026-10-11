@@ -46,49 +46,8 @@ The full contract is in [docs/SPECIFICATION.md](docs/SPECIFICATION.md).
 
 ## Adding it to a project
 
-> The tag `0.1.0` below does not exist yet; everything else is in place and tested.
-
-**Copy the header.** Drop `minipsd.h` into your tree. The file carries its own version, licence
-and SPDX tags, so it stays identifiable in an SBOM.
-
-**CMake FetchContent**
-
-```cmake
-include(FetchContent)
-FetchContent_Declare(minipsd
-    GIT_REPOSITORY https://github.com/ShadobaDev/minipsd.git
-    GIT_TAG        0.1.0)
-FetchContent_MakeAvailable(minipsd)
-target_link_libraries(my-app PRIVATE minipsd::minipsd)
-```
-
-**git submodule**
-
-```bash
-git submodule add https://github.com/ShadobaDev/minipsd.git external/minipsd
-```
-```cmake
-add_subdirectory(external/minipsd)
-target_link_libraries(my-app PRIVATE minipsd::minipsd)
-```
-
-**Installed package** (a distro package or `cmake --install`)
-
-```cmake
-find_package(minipsd CONFIG REQUIRED)
-target_link_libraries(my-app PRIVATE minipsd::minipsd)
-```
-
-or `pkg-config --cflags minipsd`.
-
-As a subproject, minipsd builds no tests, fetches nothing and enables no language.
-
-**SBOM.** Every CMake path gives the same SPDX 2.3 fragment for minipsd, ready to merge into your
-own SBOM:
-
-```cmake
-get_target_property(minipsd_sbom minipsd::minipsd MINIPSD_SBOM_FILE)
-```
+Copy `include/minipsd.h`, or use CMake (FetchContent, git submodule, `find_package`),
+pkg-config, an archive or a `.deb`; see [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Configuration
 
@@ -104,6 +63,7 @@ Define before the implementation include:
 
 | Document | Contents |
 |---|---|
+| [docs/INSTALL.md](docs/INSTALL.md) | every way of adding minipsd to a project, SBOM |
 | [docs/SPECIFICATION.md](docs/SPECIFICATION.md) | the contract: API, file contents, guarantees, PSD primer |
 | [docs/CODING_STYLE_C.md](docs/CODING_STYLE_C.md) | C rules: language, naming, comments |
 | [docs/CODING_STYLE_CPP.md](docs/CODING_STYLE_CPP.md) | C++ rules (tests, the planned wrapper) |

@@ -2,6 +2,7 @@
 build
 install
 dist
+_CPack_Packages
 
 # OS-generated files
 *.pyc

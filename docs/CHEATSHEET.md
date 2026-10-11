@@ -26,6 +26,39 @@ cmake --install build/mingw              # install tree in install/mingw/
 cmake --install build/msvc --config Debug   # MSVC is multi-config
 ```
 
+## Packages and installing
+
+Packages need no compiler and no tests; configure a separate tree with tests off. CPack writes
+to `dist/` (ignored by git).
+
+```bash
+cmake -S . -B build/package -DMINIPSD_BUILD_TESTS=OFF
+
+# Install the tree into a prefix (Linux: /usr/local with sudo)
+cmake --install build/package --prefix <prefix>
+
+# minipsd-X.Y.Z.tar.gz + minipsd-X.Y.Z.zip (any host)
+cpack --config build/package/CPackConfig.cmake
+
+# libminipsd-dev_X.Y.Z_all.deb (on Linux)
+cpack --config build/package/CPackConfig.cmake -G DEB
+```
+
+Check and install the `.deb`:
+
+```bash
+dpkg-deb -I dist/libminipsd-dev_0.1.0_all.deb       # metadata
+dpkg-deb -c dist/libminipsd-dev_0.1.0_all.deb       # files
+sudo apt install ./dist/libminipsd-dev_0.1.0_all.deb
+sudo apt remove libminipsd-dev
+```
+
+Install from the archive instead (the tree is relocatable):
+
+```bash
+sudo tar -xzf dist/minipsd-0.1.0.tar.gz --strip-components=1 -C /usr/local
+```
+
 ## What the tests are
 
 | Test | Checks |
