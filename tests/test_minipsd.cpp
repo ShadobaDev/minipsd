@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -387,6 +388,8 @@ TEST(MinipsdTest, FractionalDpiIsKept)
     minipsd_doc d = docOf(2, 2, &layer, 1);
     d.dpi = 72.5;
     EXPECT_DOUBLE_EQ(read(write(d)).dpiX, 72.5);
+    d.dpi = 65535.99;   // just below what 16.16 fixed point can hold
+    EXPECT_NEAR(read(write(d)).dpiX, 65535.99, 1.0 / 65536);
 }
 
 // PackBits splits at 128 both ways; the sizes prove it compresses rather than merely round-trips.
@@ -429,8 +432,12 @@ TEST(MinipsdTest, RejectsBadDocuments)
     EXPECT_EQ(minipsd_write(nullptr, collect, &out), MINIPSD_ERR_ARG);
     minipsd_doc d = docOf(2, 2, &layer, 0);
     EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_ARG) << "no layers";
-    d = docOf(2, 2, &layer, 1); d.dpi = 0;
-    EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_ARG) << "dpi 0";
+    // The dpi goes out as 16.16 fixed point: it must round to 1 .. 2^32 - 1.
+    for (double dpi : {0.0, -1.0, 1e-9, 65536.0, 1e300,
+                       std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
+        d = docOf(2, 2, &layer, 1); d.dpi = dpi;
+        EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_ARG) << "dpi " << dpi;
+    }
     d = docOf(2, 2, &layer, 1); d.icc_size = 4;
     EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_ARG) << "ICC size without data";
     d = docOf(2, 2, &layer, 1);
@@ -439,8 +446,20 @@ TEST(MinipsdTest, RejectsBadDocuments)
     EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_SIZE);
     d = docOf(MINIPSD_MAX_SIDE + 1, 2, &layer, 1);
     EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_SIZE);
+
+    // Section lengths are 32-bit.  Both documents are refused before a pixel or an ICC byte is read,
+    // so a 4-byte buffer stands in for gigabytes: RAW channel sizes are arithmetic, and the ICC size
+    // is checked first.  Two full 30000 x 30000 RAW layers are about 7.2 GB of channel data.
+    const std::uint8_t stand_in[4] = {};
+    const minipsd_layer huge[2] = {{"A", stand_in, 255, 0}, {"B", stand_in, 255, 0}};
+    d = docOf(MINIPSD_MAX_SIDE, MINIPSD_MAX_SIDE, huge, 2); d.compression = MINIPSD_RAW;
+    EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_SIZE) << "layer section above 4 GiB";
+    d = docOf(2, 2, &layer, 1); d.icc = stand_in; d.icc_size = std::numeric_limits<std::uint32_t>::max();
+    EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_SIZE) << "resource section above 4 GiB";
+
     EXPECT_TRUE(out.empty()) << "nothing is written for a refused document";
-    EXPECT_STREQ(minipsd_error_string(MINIPSD_ERR_SIZE), "width or height is outside 1..30000");
+    EXPECT_STREQ(minipsd_error_string(MINIPSD_ERR_SIZE),
+                 "too large for PSD: a side outside 1..30000, or a section above 4 GiB");
 }
 
 TEST(MinipsdTest, WriteFailureIsReported)

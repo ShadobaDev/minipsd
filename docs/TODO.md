@@ -71,8 +71,8 @@ The code and tests are in (`include/`, `tests/`) but nothing builds them yet: `C
 **Open decisions** (each one is a contract change, so only before `0.1.0`)
 - [ ] **Opacity default.** Today `opacity = 0` is fully transparent, so a zero-initialised layer
       is invisible. Alternative: treat 0 as 255. Cheaper now than ever again.
-- [ ] **Struct versioning.** A `size`/`version` field for ABI growth, or rely on tags? For a
-      header compiled into its consumer, tags are usually enough.
+- [x] **Struct versioning.** No `size`/`version` field: a break shows in the library version,
+      not per struct (see [Extensibility rules](SPECIFICATION.md#extensibility-rules)).
 - [x] **Test framework.** GoogleTest kept: the existing tests ported as-is; a system install is
       used if present, otherwise it is fetched, and only for top-level builds.
 - [x] **Own test reader *and* `psd-tools`.** Both: the own reader checks every field and runs

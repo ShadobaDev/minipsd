@@ -92,8 +92,9 @@
 /** \brief Return codes: MINIPSD_OK, or one of the negative errors. */
 enum {
     MINIPSD_OK          =  0, /*!< Success.                                                   */
-    MINIPSD_ERR_ARG     = -1, /*!< A NULL document, no layers, or a dpi that is not positive.  */
-    MINIPSD_ERR_SIZE    = -2, /*!< Width or height is 0 or above MINIPSD_MAX_SIDE.             */
+    MINIPSD_ERR_ARG     = -1, /*!< A NULL document, no layers, or a dpi outside (0, 65536).    */
+    MINIPSD_ERR_SIZE    = -2, /*!< A side is 0 or above MINIPSD_MAX_SIDE, or the document is too
+                                   large for PSD's 32-bit section lengths (about 4 GiB).      */
     MINIPSD_ERR_WRITE   = -3, /*!< The write callback reported a failure.                      */
     MINIPSD_ERR_ALLOC   = -4, /*!< MINIPSD_MALLOC returned NULL.                               */
     MINIPSD_ERR_OPEN    = -5  /*!< minipsd_write_file could not open (or close) the file.      */
@@ -127,7 +128,7 @@ typedef struct minipsd_layer {
  */
 typedef struct minipsd_doc {
     uint32_t             width, height;  /*!< 1 .. MINIPSD_MAX_SIDE.                        */
-    double               dpi;            /*!< > 0; recorded, pixels are not resampled.       */
+    double               dpi;            /*!< Above 0, below 65536; recorded, not resampled. */
     const minipsd_layer *layers;         /*!< Bottom first.                                  */
     size_t               layer_count;    /*!< >= 1.                                          */
     const uint8_t       *icc;            /*!< Optional ICC profile; NULL means none (sRGB).  */
@@ -157,9 +158,10 @@ typedef int (*minipsd_write_fn)(void *user, const void *data, size_t size);
  * \return MINIPSD_OK or an error code.
  *
  * \retval MINIPSD_OK        The whole file went to fn.
- * \retval MINIPSD_ERR_ARG   doc or fn is NULL, there are no layers, dpi is not positive, or
+ * \retval MINIPSD_ERR_ARG   doc or fn is NULL, there are no layers, dpi is outside (0, 65536), or
  *                           icc_size is set without icc.  Nothing was written.
- * \retval MINIPSD_ERR_SIZE  A side is 0 or above MINIPSD_MAX_SIDE.  Nothing was written.
+ * \retval MINIPSD_ERR_SIZE  A side is 0 or above MINIPSD_MAX_SIDE, or the layers or the ICC
+ *                           profile do not fit a 32-bit section length.  Nothing was written.
  * \retval MINIPSD_ERR_ALLOC An allocation failed.  Nothing was written.
  * \retval MINIPSD_ERR_WRITE fn returned 0; the output is incomplete.
  */
@@ -476,12 +478,21 @@ static void mpsd__layer_info(mpsd__sink *s, const minipsd_doc *d, const uint64_t
             mpsd__layer_channel(s, d, &d->layers[i], mpsd__channel_of[k]);
 }
 
+/* PSD (version 1) stores section lengths in 32 bits. */
+#define MPSD__MAX_SECTION 0xFFFFFFFFu
+
 static int mpsd__check(const minipsd_doc *d)
 {
-    if (!d || !d->layers || d->layer_count < 1 || d->layer_count > 32767 || !(d->dpi > 0.0)
+    double res;
+    if (!d) return MINIPSD_ERR_ARG;
+    /* The dpi is stored as 16.16 fixed point: it must round to 1 .. 2^32 - 1.  NaN fails both. */
+    res = d->dpi * 65536.0 + 0.5;
+    if (!d->layers || d->layer_count < 1 || d->layer_count > 32767 || !(res >= 1.0 && res < 4294967296.0)
         || (d->icc_size && !d->icc))
         return MINIPSD_ERR_ARG;
     if (d->width < 1 || d->height < 1 || d->width > MINIPSD_MAX_SIDE || d->height > MINIPSD_MAX_SIDE)
+        return MINIPSD_ERR_SIZE;
+    if ((uint64_t)d->icc_size + 28 + 12 + 1 > MPSD__MAX_SECTION)   /* resources: resolution + ICC, padded */
         return MINIPSD_ERR_SIZE;
     return MINIPSD_OK;
 }
@@ -507,6 +518,8 @@ MINIPSDDEF int minipsd_write(const minipsd_doc *d, minipsd_write_fn fn, void *us
         for (k = 0; k < 4; ++k)
             content += sizes[i * 4 + k] = mpsd__layer_channel_size(d, &d->layers[i], mpsd__channel_of[k]);
     }
+    info = (content + 1) / 2 * 2;             /* the layer info is padded to an even length */
+    if (4 + info + 4 > MPSD__MAX_SECTION) { MINIPSD_FREE(sizes); return MINIPSD_ERR_SIZE; }
     rc = mpsd__composite_init(&comp, d);
     if (rc != MINIPSD_OK) { MINIPSD_FREE(sizes); return rc; }
 
@@ -536,7 +549,6 @@ MINIPSDDEF int minipsd_write(const minipsd_doc *d, minipsd_write_fn fn, void *us
     }
 
     /* Layer and mask information. */
-    info = (content + 1) / 2 * 2;             /* the layer info is padded to an even length */
     mpsd__u32(&s, (uint32_t)(4 + info + 4));
     mpsd__u32(&s, (uint32_t)info);
     mpsd__layer_info(&s, d, sizes);
@@ -609,7 +621,7 @@ MINIPSDDEF const char *minipsd_error_string(int code)
     switch (code) {
     case MINIPSD_OK:        return "success";
     case MINIPSD_ERR_ARG:   return "invalid argument";
-    case MINIPSD_ERR_SIZE:  return "width or height is outside 1..30000";
+    case MINIPSD_ERR_SIZE:  return "too large for PSD: a side outside 1..30000, or a section above 4 GiB";
     case MINIPSD_ERR_WRITE: return "write failed";
     case MINIPSD_ERR_ALLOC: return "out of memory";
     case MINIPSD_ERR_OPEN:  return "cannot open or close the file";

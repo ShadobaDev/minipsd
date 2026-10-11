@@ -84,7 +84,7 @@ typedef struct minipsd_layer {
 
 typedef struct minipsd_doc {
     uint32_t             width, height;  /* 1 .. MINIPSD_MAX_SIDE                  */
-    double               dpi;            /* > 0; recorded, pixels not resampled    */
+    double               dpi;            /* (0, 65536); recorded, not resampled    */
     const minipsd_layer *layers;         /* bottom first                           */
     size_t               layer_count;    /* >= 1                                   */
     const uint8_t       *icc;            /* optional ICC profile; NULL means sRGB  */
@@ -111,8 +111,8 @@ const char *minipsd_error_string(int code);
 | Code | Value | Meaning |
 |---|---|---|
 | `MINIPSD_OK` | 0 | success |
-| `MINIPSD_ERR_ARG` | -1 | NULL document, no layers, or `dpi <= 0` |
-| `MINIPSD_ERR_SIZE` | -2 | a side is 0 or above `MINIPSD_MAX_SIDE` |
+| `MINIPSD_ERR_ARG` | -1 | NULL document or callback, no layers, ICC size without data, or a dpi that 16.16 fixed point cannot hold (see below) |
+| `MINIPSD_ERR_SIZE` | -2 | a side is 0 or above `MINIPSD_MAX_SIDE`, or a section is longer than its 32-bit length field allows (see below) |
 | `MINIPSD_ERR_WRITE` | -3 | the callback returned 0 |
 | `MINIPSD_ERR_ALLOC` | -4 | `MINIPSD_MALLOC` returned NULL |
 | `MINIPSD_ERR_OPEN` | -5 | `minipsd_write_file` could not open or close the file |
@@ -143,7 +143,15 @@ const char *minipsd_error_string(int code);
 - **Allocations:** the per-channel compressed-size table (`layer_count * 4` numbers), one
   composite row (`width * 4` bytes) and, on Windows, the UTF-16 copy of the path.
   Layer pixels are read in place, never copied.
-- **Limits:** each side 1 .. 30 000 px (otherwise `MINIPSD_ERR_SIZE`); 1 .. 32 767 layers.
+- **Limits** (all checked before anything is written):
+  - each side 1 .. 30 000 px, otherwise `MINIPSD_ERR_SIZE`;
+  - 1 .. 32 767 layers, otherwise `MINIPSD_ERR_ARG`;
+  - dpi must round to 1 .. 2^32 - 1 in 16.16 fixed point, i.e. from about 0.0000076 to just below
+    65 536 (NaN and infinity excluded), otherwise `MINIPSD_ERR_ARG`;
+  - PSD version 1 stores section lengths in 32 bits, so the layer section (records and channel
+    data) and the image resources (resolution + ICC profile) must each stay under 4 GiB,
+    otherwise `MINIPSD_ERR_SIZE`. Example: two full 30 000 x 30 000 layers in RAW are about
+    7.2 GB and are refused; the same in RLE usually fits. The composite has no length field.
 - **Windows paths:** `minipsd_write_file` converts the UTF-8 path to UTF-16 and opens it with
   `_wfopen` (`_wfopen_s` under MSVC), because `fopen` interprets the ANSI code page.
 
@@ -226,6 +234,9 @@ Rules that make this work:
 
 Rules for adding features without breaking existing callers:
 
+- **The library version is the contract version.** Structs carry no `version` or `size` field:
+  the header is compiled into its consumer, so the struct layout always matches the code using
+  it. A break is announced by the version of the whole library (pre-1.0: the MINOR).
 - **Zero means "previous behaviour".** Callers zero-initialise structs; a new field must keep
   the old output when it is 0/NULL.
 - **New struct fields go at the end.** Positional initialisers (C99 without designated

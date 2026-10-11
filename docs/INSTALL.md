@@ -2,8 +2,6 @@
 
 Every way of adding minipsd to a project, and the SBOM fragment each one carries.
 
-> The tag `0.1.0` below does not exist yet; everything else is in place and tested.
-
 **Copy the header.** Drop `minipsd.h` into your tree. The file carries its own version, licence
 and SPDX tags, so it stays identifiable in an SBOM.
 
