@@ -36,18 +36,19 @@ jobs:
           python-version: "3.13"
       - run: python -m pip install -r tests/requirements.txt
 
-      # Windows / MinGW: gcc, cmake, ninja and pkg-config from MSYS2. path-type inherit keeps the
-      # Python above reachable from the msys2 shell.
+      # Windows / MinGW: gcc, cmake, ninja and pkg-config from MSYS2's UCRT64 (MINGW64 is deprecated
+      # there; local builds on MINGW64 still cover the old msvcrt runtime). path-type inherit keeps
+      # the Python above reachable from the msys2 shell.
       - if: matrix.preset == 'mingw'
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           path-type: inherit
           install: >-
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
 
       # Linux: gcc and clang are preinstalled.
       - if: runner.os == 'Linux'

@@ -13,8 +13,9 @@ minipsd was written for [Platemaker](https://github.com/ShadobaDev/PlateMaker), 
 for webcomic artists, to save canvas templates that Photoshop, GIMP, Krita, Photopea and
 Procreate open as layered documents.
 
-> **Status:** pre-release, not yet tagged. The header is [include/minipsd.h](include/minipsd.h);
-> CI and the release workflow are next, see [docs/TODO.md](docs/TODO.md).
+# Status
+
+**pre-release**, not yet tagged. The header is [include/minipsd.h](include/minipsd.h);
 
 ## Example
 

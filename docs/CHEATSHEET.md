@@ -7,7 +7,7 @@ consumers, so there is nothing to ship from a build.
 | Preset | Host | Toolchain |
 |---|---|---|
 | `msvc` | Windows | Visual Studio 2022 (Build Tools are enough) |
-| `mingw` | Windows | MSYS2 MinGW-w64 GCC + Ninja, `C:\msys64\mingw64\bin` on PATH |
+| `mingw` | Windows | MSYS2 GCC + Ninja on PATH: `C:\msys64\ucrt64\bin` (CI) or `C:\msys64\mingw64\bin` |
 | `linux-gcc` | Linux / WSL | GCC + Ninja |
 | `linux-clang` | Linux / WSL | Clang + Ninja |
 
