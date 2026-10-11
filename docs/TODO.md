@@ -51,9 +51,10 @@ The code and tests are in (`include/`, `tests/`) but nothing builds them yet: `C
       FetchContent, `find_package` and pkg-config after install).
 
 **CI and release**
-- [ ] CI: Windows (MSVC, MinGW), Linux (gcc, clang); each builds the tests as C and as C++.
-- [ ] `psd-tools` round trip in CI: write documents, read them back, compare pixels and fields.
-- [ ] Release workflow per [GITHUB-RELEASE.md](GITHUB-RELEASE.md).
+- [x] CI: Windows (MSVC, MinGW), Linux (gcc, clang); each builds the tests as C and as C++.
+      Not yet run on GitHub: the first push of `.github/` is its first run.
+- [x] `psd-tools` round trip in CI: write documents, read them back, compare pixels and fields.
+- [x] Release workflow per [GITHUB-RELEASE.md](GITHUB-RELEASE.md).
 - [x] `git init`, push to `ShadobaDev/minipsd`.
 - [ ] Tag `0.1.0`.
 - [x] After the first publish: check that GitHub detects the licence from `LICENSE.MIT` (it does:
@@ -71,8 +72,8 @@ The code and tests are in (`include/`, `tests/`) but nothing builds them yet: `C
       header compiled into its consumer, tags are usually enough.
 - [x] **Test framework.** GoogleTest kept: the existing tests ported as-is; a system install is
       used if present, otherwise it is fetched, and only for top-level builds.
-- [ ] **Own test reader *and* `psd-tools`, or `psd-tools` only.** Proposed: both — the own reader
-      checks fields, `psd-tools` checks compatibility.
+- [x] **Own test reader *and* `psd-tools`.** Both: the own reader checks every field and runs
+      everywhere; `psd-tools` checks compatibility and is required in CI.
 - [x] **Contributor terms.** Inbound = outbound: contributions are licensed under MIT, stated in
       `CONTRIBUTING.md`; no CLA.
 - [x] **Copyright holder.** `Bartlomiej Mucha <shadobadev@gmail.com>`, ASCII everywhere

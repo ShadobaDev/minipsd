@@ -1,0 +1,69 @@
+# Builds and tests minipsd on every supported toolchain: the unit tests (C99 + C++20), the C++17
+# compile check, the psd-tools round trip (required here, optional locally) and the consumer tests.
+# release.yml calls this workflow before it publishes anything.
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.preset }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # windows-2022, not windows-latest: the msvc preset's generator is "Visual Studio 17 2022".
+          - { os: windows-2022,   preset: msvc }
+          - { os: windows-latest, preset: mingw }
+          - { os: ubuntu-latest,  preset: linux-gcc }
+          - { os: ubuntu-latest,  preset: linux-clang }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # The independent reader for the round trip, in the Python that CMake is pointed at below.
+      - id: python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -r tests/requirements.txt
+
+      # Windows / MinGW: gcc, cmake, ninja and pkg-config from MSYS2. path-type inherit keeps the
+      # Python above reachable from the msys2 shell.
+      - if: matrix.preset == 'mingw'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-pkgconf
+
+      # Linux: gcc and clang are preinstalled.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build pkg-config
+
+      - name: Configure, build, test (MinGW)
+        if: matrix.preset == 'mingw'
+        shell: msys2 {0}
+        run: |
+          cmake --preset mingw -DMINIPSD_REQUIRE_PSD_TOOLS=ON "-DPython3_EXECUTABLE=${{ steps.python.outputs.python-path }}"
+          cmake --build --preset mingw
+          ctest --preset mingw
+
+      - name: Configure, build, test
+        if: matrix.preset != 'mingw'
+        run: |
+          cmake --preset ${{ matrix.preset }} -DMINIPSD_REQUIRE_PSD_TOOLS=ON "-DPython3_EXECUTABLE=${{ steps.python.outputs.python-path }}"
+          cmake --build --preset ${{ matrix.preset }}
+          ctest --preset ${{ matrix.preset }}

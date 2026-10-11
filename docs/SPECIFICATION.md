@@ -167,7 +167,13 @@ Platemaker is the first consumer. Breaking any of these breaks it:
   white matte, and the test reader shared the same wrong assumption, so tests passed;
   `psd-tools` then read the margin pink as `(255, 0, 105)` instead of `(255, 105, 180)`.
   **Every change to the bytes written is checked with an independent reader**: `psd-tools`
-  (Python) automatically, and by hand in GIMP, Krita, Photopea and Procreate when relevant.
+  automatically (`psd-tools-roundtrip`, required in CI), and by hand in GIMP, Krita, Photopea
+  and Procreate when relevant.
+- The round trip builds its documents and expected results in Python and calls the real writer
+  through a shared build of minipsd, so no expectation comes from the code under test. It
+  checks size, depth, mode, dpi, layer names (Unicode), opacity, visibility, bounds, every layer
+  pixel exactly, and the composite against an independent "over" within the matting tolerance.
+  Removing the white matte makes it fail with the `(255, 0, 105)` pink.
 - 8-bit rounding through matting and un-matting may shift a colour by one level (the pink
   returns as `(255, 105, 179)`); Photoshop behaves the same, so this is expected, not a bug.
 - Verified by hand: GIMP opens the output; Procreate opens a 1600x10240 template as a canvas

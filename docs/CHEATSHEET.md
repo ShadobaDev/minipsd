@@ -32,6 +32,7 @@ cmake --install build/msvc --config Debug   # MSVC is multi-config
 |---|---|
 | `MinipsdTest.*` | the writer, read back field by field (C++20, plus one C99 translation unit) |
 | `minipsd-cxx17` (build target) | the header compiles warning-free as C++17 |
+| `psd-tools-roundtrip` | documents written through minipsd, read back by `psd-tools` |
 | `install` | `cmake --install` into the build tree (`tests/prefix/`) |
 | `consumer-copy` | a project with `minipsd.h` copied in |
 | `consumer-subdirectory` | `add_subdirectory` (git submodule) |
@@ -48,5 +49,15 @@ paths also check the SBOM fragment's version.
 |---|---|---|
 | `MINIPSD_BUILD_TESTS` | ON only as the top-level project | the tests above |
 | `MINIPSD_INSTALL` | ON only as the top-level project | install rules |
+| `MINIPSD_REQUIRE_PSD_TOOLS` | OFF (CI: ON) | fail the configure instead of skipping the round trip |
 
 GoogleTest comes from the system if installed (`libgtest-dev`), otherwise it is fetched.
+
+The round trip needs Python with `psd-tools`; without it the test is skipped. A venv keeps it
+out of the system Python:
+
+```bash
+python -m venv .venv
+.venv/bin/pip install -r tests/requirements.txt          # Windows: .venv\Scripts\pip
+cmake --preset mingw -DPython3_EXECUTABLE=<path to .venv's python>
+```

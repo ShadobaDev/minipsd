@@ -16,3 +16,5 @@ graphify-out
 
 # Temporary files for editors
 temp
+# Python virtual environments
+.venv

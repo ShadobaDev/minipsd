@@ -1,0 +1,2 @@
+# The independent reader for the round-trip test (tests/psd_tools/roundtrip.py).
+psd-tools==1.24.0

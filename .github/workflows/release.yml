@@ -1,0 +1,64 @@
+# Release: a pushed tag X.Y.Z (bare semver) runs the full CI, checks the tag against the header
+# version and the changelog, and publishes minipsd.h + minipsd.h.sha256 as a GitHub Release with a
+# build-provenance attestation. "Run workflow" (workflow_dispatch) does everything except publish,
+# so it is a dry run. See docs/GITHUB-RELEASE.md.
+name: Release
+
+on:
+  push:
+    tags: [ '*.*.*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write        # create the Release
+  id-token: write        # sign the attestation
+  attestations: write    # store it
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the tag, the header version and the changelog agree
+        run: |
+          version=$(sed -nE 's/^#define MINIPSD_VERSION_(MAJOR|MINOR|PATCH) +([0-9]+)$/\2/p' include/minipsd.h | paste -sd.)
+          echo "header version: $version"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the header version $version"
+            exit 1
+          fi
+          # The release notes: the changelog section of this version, without its heading.
+          awk -v head="## [$version]" 'index($0, head) == 1 { on = 1; next } on && /^## \[/ { exit } on' \
+              docs/CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::docs/CHANGELOG.md has no entry for $version"
+            exit 1
+          fi
+          cat notes.md
+
+      - name: Stage the header and its checksum
+        run: |
+          mkdir dist
+          cp include/minipsd.h dist/
+          cd dist && sha256sum minipsd.h > minipsd.h.sha256 && cat minipsd.h.sha256
+
+      # Verifiable with: gh attestation verify minipsd.h --repo ShadobaDev/minipsd
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/minipsd.h
+
+      - name: Publish the GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          body_path: notes.md
+          fail_on_unmatched_files: true
+          files: |
+            dist/minipsd.h
+            dist/minipsd.h.sha256

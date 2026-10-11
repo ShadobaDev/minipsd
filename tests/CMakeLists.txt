@@ -50,6 +50,38 @@ target_compile_options(minipsd-cxx17 PRIVATE ${MINIPSD_WARNINGS})
 set_target_properties(minipsd-cxx17 PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 
 # ---------------------------------------------------------------------------
+# psd-tools round trip: Python writes documents through the real minipsd (a shared build, via ctypes)
+# and reads them back with psd-tools, an independent reader. Skipped when psd-tools is missing,
+# unless MINIPSD_REQUIRE_PSD_TOOLS is set (CI sets it).
+# ---------------------------------------------------------------------------
+option(MINIPSD_REQUIRE_PSD_TOOLS "Fail the configure when psd-tools is not installed" OFF)
+find_package(Python3 COMPONENTS Interpreter QUIET)
+set(_psd_tools_rc 1)
+if(Python3_FOUND)
+    execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import psd_tools"
+                    RESULT_VARIABLE _psd_tools_rc OUTPUT_QUIET ERROR_QUIET)
+endif()
+if(_psd_tools_rc EQUAL 0)
+    add_library(minipsd-shared SHARED psd_tools/minipsd_shared.c)
+    target_link_libraries(minipsd-shared PRIVATE minipsd::minipsd)
+    target_compile_options(minipsd-shared PRIVATE ${MINIPSD_WARNINGS})
+    set_target_properties(minipsd-shared PROPERTIES
+        C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+        WINDOWS_EXPORT_ALL_SYMBOLS ON)   # MSVC; MinGW exports everything by default
+    if(MINGW)
+        target_link_options(minipsd-shared PRIVATE -static-libgcc)   # loadable by any Python
+    endif()
+    add_test(NAME psd-tools-roundtrip
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/psd_tools/roundtrip.py"
+                "$<TARGET_FILE:minipsd-shared>" "${CMAKE_CURRENT_BINARY_DIR}/psd-tools")
+elseif(MINIPSD_REQUIRE_PSD_TOOLS)
+    message(FATAL_ERROR "psd-tools is required but not importable by '${Python3_EXECUTABLE}' "
+                        "(pip install -r tests/requirements.txt)")
+else()
+    message(STATUS "psd-tools not found: skipping the round trip (pip install -r tests/requirements.txt)")
+endif()
+
+# ---------------------------------------------------------------------------
 # Consumer tests: configure, build and run consumer/ against this source tree, once per way of
 # bringing minipsd in. "package" and "pkgconfig" use an install of this build.
 # ---------------------------------------------------------------------------
