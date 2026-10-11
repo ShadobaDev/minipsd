@@ -63,14 +63,9 @@ The code and tests are in (`include/`, `tests/`) but nothing builds them yet: `C
 - [x] After the first publish: check that GitHub detects the licence from `LICENSE.MIT` (it does:
       MIT; no rename needed).
 
-**Last step of the release: switch Platemaker to it**
-- [ ] FetchContent with a guard (no download when the header is already available, e.g. via
-      `MINIPSD_INCLUDE_DIR`), replacing its private copy of `minipsd.h`.
-- [ ] An entry in `lib/cmake/third_party.json` and the minipsd package in its SBOM.
-
 **Open decisions** (each one is a contract change, so only before `0.1.0`)
-- [ ] **Opacity default.** Today `opacity = 0` is fully transparent, so a zero-initialised layer
-      is invisible. Alternative: treat 0 as 255. Cheaper now than ever again.
+- [x] **Opacity default.** Kept: `opacity` is the PSD byte, 0 fully transparent, 255 opaque. A
+      zero-initialised layer is therefore invisible; that is documented, not special-cased.
 - [x] **Struct versioning.** No `size`/`version` field: a break shows in the library version,
       not per struct (see [Extensibility rules](SPECIFICATION.md#extensibility-rules)).
 - [x] **Test framework.** GoogleTest kept: the existing tests ported as-is; a system install is
