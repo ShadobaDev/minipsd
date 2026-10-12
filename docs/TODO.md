@@ -78,10 +78,11 @@ The code and tests are in (`include/`, `tests/`) but nothing builds them yet: `C
       (licence, header, sources, SBOM); `ShadobaDev` stays the GitHub account in URLs and the PURL.
 
 **Quality** (after `0.1.0`)
-- [x] CI job `analysis`: AddressSanitizer + UBSan, clang-tidy, line coverage of `minipsd.h`
-      (gated at 100 %, gcovr), presets `linux-asan` / `linux-tidy` / `linux-coverage`.
+- [x] CI job `analysis`: AddressSanitizer + UBSan, clang-tidy, coverage of `minipsd.h` (gcovr;
+      lines 100 %, branches >= 95 %, allocation failures tested); presets `linux-asan`,
+      `linux-tidy`, `linux-coverage`.
 - [x] README badges: CI, coverage, release, licence.
-- [ ] Enable the repository on coveralls.io (until then the coverage badge reads "unknown").
+- [x] Repository enabled on coveralls.io.
 
 **Distribution** (after `0.1.0`; none of these changes the library)
 - [ ] GitHub repository topics and description.

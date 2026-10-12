@@ -74,7 +74,7 @@ jobs:
   #   linux-asan      AddressSanitizer + UBSan: out-of-bounds access, overflow, undefined shifts.
   #                   No round trip: Python would need the sanitizer runtime preloaded.
   #   linux-tidy      clang-tidy with .clang-tidy, findings are errors.
-  #   linux-coverage  line coverage of minipsd.h, round trip included; must stay at 100 %.
+  #   linux-coverage  coverage of minipsd.h, round trip included: lines 100 %, branches >= 95 %.
   analysis:
     name: ${{ matrix.preset }}
     strategy:
@@ -102,11 +102,15 @@ jobs:
           ctest --preset ${{ matrix.preset }}
 
       # --merge-lines: minipsd.h is compiled into several test files; count each line once.
+      # --exclude-throw-branches: the C++ builds add exception edges that C code never takes.
+      # Branches stop just short of 100 % where gcovr keeps the C and C++ copies of a function apart.
       - name: Coverage report
         if: matrix.preset == 'linux-coverage'
         run: |
-          gcovr --root . --filter include/ --merge-lines --fail-under-line 100 \
-                --cobertura coverage.xml --txt coverage.txt --txt-summary build/linux-coverage || status=$?
+          gcovr --root . --filter include/ --merge-lines --exclude-throw-branches \
+                --fail-under-line 100 --fail-under-branch 95 \
+                --cobertura coverage.xml --txt coverage.txt --txt-metric branch --txt-summary \
+                build/linux-coverage || status=$?
           { echo '```'; cat coverage.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           exit ${status:-0}
 

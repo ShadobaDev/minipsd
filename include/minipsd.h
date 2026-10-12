@@ -345,7 +345,7 @@ static const uint8_t *mpsd__composite_row(mpsd__composite *c, uint32_t y)
     return c->row;
 }
 
-static void mpsd__composite_free(mpsd__composite *c) { if (c->row) MINIPSD_FREE(c->row); }
+static void mpsd__composite_free(mpsd__composite *c) { MINIPSD_FREE(c->row); }   /* only after a successful init */
 
 /* --- names: a legacy ASCII Pascal string and the UTF-16 one --- */
 

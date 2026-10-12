@@ -23,6 +23,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 extern "C" int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size);   // minipsd_c_smoke.c
@@ -277,15 +278,17 @@ TEST(MinipsdTest, OneLayerRoundTripsThroughRle)
 
 TEST(MinipsdTest, RawCompressionRoundTrips)
 {
-    const Bytes px = testImage(9, 4);
-    const minipsd_layer layer{"Raw", px.data(), 255, 0};
-    minipsd_doc d = docOf(9, 4, &layer, 1);
-    d.compression = MINIPSD_RAW;
-    const Psd p = read(write(d));
-    EXPECT_EQ(p.layers[0].compression, (std::vector<int>{0, 0, 0, 0}));
-    EXPECT_EQ(p.compositeCompression, 0);
-    EXPECT_EQ(p.layers[0].rgba, px);
-    EXPECT_EQ(p.composite, matted(px));
+    for (std::uint32_t w : {9u, 300u}) {   // 300: a row longer than the writer's 256-byte chunk
+        const Bytes px = testImage(w, 4);
+        const minipsd_layer layer{"Raw", px.data(), 255, 0};
+        minipsd_doc d = docOf(w, 4, &layer, 1);
+        d.compression = MINIPSD_RAW;
+        const Psd p = read(write(d));
+        EXPECT_EQ(p.layers[0].compression, (std::vector<int>{0, 0, 0, 0}));
+        EXPECT_EQ(p.compositeCompression, 0);
+        EXPECT_EQ(p.layers[0].rgba, px) << "width " << w;
+        EXPECT_EQ(p.composite, matted(px)) << "width " << w;
+    }
 }
 
 TEST(MinipsdTest, EmptyLayerHasNoPixelsAndLeavesTheComposite)
@@ -338,16 +341,23 @@ TEST(MinipsdTest, CompositeIsMattedAgainstWhite)
     const Psd p = read(write(docOf(1, 1, &layer, 1)));
     EXPECT_EQ(p.composite, (Bytes{255, 180, 217, 128}));
     EXPECT_EQ(p.layers[0].rgba, pink) << "layers are stored as they are";
+
+    const Bytes clear = {10, 20, 30, 0};
+    const minipsd_layer empty{"Clear", clear.data(), 255, 0};
+    EXPECT_EQ(read(write(docOf(1, 1, &empty, 1))).composite, (Bytes{255, 255, 255, 0}))
+        << "a fully transparent pixel is plain white";
 }
 
 TEST(MinipsdTest, HiddenLayerIsFlaggedAndLeftOutOfTheComposite)
 {
     const Bytes red  = {255, 0, 0, 255};
     const Bytes blue = {0, 0, 255, 255};
-    const minipsd_layer layers[2] = {{"Red", red.data(), 255, 0}, {"Blue", blue.data(), 255, 1}};
-    const Psd p = read(write(docOf(1, 1, layers, 2)));
+    const minipsd_layer layers[3] = {
+        {"Red", red.data(), 255, 0}, {"Blue", blue.data(), 255, 1}, {"Clear", blue.data(), 0, 0}};
+    const Psd p = read(write(docOf(1, 1, layers, 3)));
     EXPECT_EQ(p.layers[1].flags, 0x02);
-    EXPECT_EQ(p.composite, red);
+    EXPECT_EQ(p.layers[2].opacity, 0);
+    EXPECT_EQ(p.composite, red) << "neither the hidden nor the zero-opacity layer shows";
 }
 
 TEST(MinipsdTest, UnicodeNameGoesToLuniAndAsciiToThePascalString)
@@ -359,9 +369,19 @@ TEST(MinipsdTest, UnicodeNameGoesToLuniAndAsciiToThePascalString)
     EXPECT_EQ(p.layers[0].unicodeName, u"Szablon \u017C\u00F3\u0142w \U0001F422");
     EXPECT_EQ(p.layers[0].pascalName, "Szablon ???w ?") << "one '?' per non-ASCII character";
 
-    const minipsd_layer bad{"a\x80" "b\xC5", px.data(), 255, 0};   // a stray continuation byte, a cut sequence
+    const minipsd_layer euro{"\xE2\x82\xAC", px.data(), 255, 0};   // three bytes
+    EXPECT_EQ(read(write(docOf(2, 2, &euro, 1))).layers[0].unicodeName, u"\u20AC");
+
+    // A stray continuation byte, a code point above U+10FFFF, a cut sequence.
+    const minipsd_layer bad{"a\x80" "b\xF4\x90\x80\x80" "c\xC5", px.data(), 255, 0};
     const Psd q = read(write(docOf(2, 2, &bad, 1)));
-    EXPECT_EQ(q.layers[0].unicodeName, u"a\uFFFDb\uFFFD") << "malformed UTF-8: one U+FFFD per bad byte";
+    EXPECT_EQ(q.layers[0].unicodeName, u"a\uFFFDb\uFFFDc\uFFFD") << "malformed UTF-8: U+FFFD";
+
+    const std::string longName(300, 'x');
+    const minipsd_layer named{longName.c_str(), px.data(), 255, 0};
+    const Psd r = read(write(docOf(2, 2, &named, 1)));
+    EXPECT_EQ(r.layers[0].pascalName, longName.substr(0, 255)) << "a Pascal string holds 255 bytes";
+    EXPECT_EQ(r.layers[0].unicodeName, std::u16string(300, u'x')) << "luni holds the whole name";
 }
 
 TEST(MinipsdTest, NullNameIsEmpty)
@@ -383,6 +403,9 @@ TEST(MinipsdTest, IccProfileIsStoredWithOddLengthPadding)
     const Psd p = read(write(d));
     EXPECT_EQ(p.icc, icc);
     EXPECT_DOUBLE_EQ(p.dpiX, 300.0);
+
+    d.icc_size = 0;
+    EXPECT_TRUE(read(write(d)).icc.empty()) << "an empty profile is an empty resource";
 }
 
 TEST(MinipsdTest, FractionalDpiIsKept)
@@ -436,6 +459,10 @@ TEST(MinipsdTest, RejectsBadDocuments)
     EXPECT_EQ(minipsd_write(nullptr, collect, &out), MINIPSD_ERR_ARG);
     minipsd_doc d = docOf(2, 2, &layer, 0);
     EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_ARG) << "no layers";
+    d = docOf(2, 2, nullptr, 1);
+    EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_ARG) << "a layer count without layers";
+    d = docOf(2, 2, &layer, 32768);   // refused before a layer is read
+    EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_ARG) << "more layers than PSD counts";
     // The dpi goes out as 16.16 fixed point: it must round to 1 .. 2^32 - 1.
     for (double dpi : {0.0, -1.0, 1e-9, 65536.0, 1e300,
                        std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
@@ -446,10 +473,11 @@ TEST(MinipsdTest, RejectsBadDocuments)
     EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_ARG) << "ICC size without data";
     d = docOf(2, 2, &layer, 1);
     EXPECT_EQ(minipsd_write(&d, nullptr, nullptr), MINIPSD_ERR_ARG) << "no callback";
-    d = docOf(0, 2, &layer, 1);
-    EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_SIZE);
-    d = docOf(MINIPSD_MAX_SIDE + 1, 2, &layer, 1);
-    EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_SIZE);
+    for (const auto &[w, h] : {std::pair<std::uint32_t, std::uint32_t>{0, 2}, {2, 0},
+                               {MINIPSD_MAX_SIDE + 1, 2}, {2, MINIPSD_MAX_SIDE + 1}}) {
+        d = docOf(w, h, &layer, 1);
+        EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_SIZE) << w << " x " << h;
+    }
 
     // Section lengths are 32-bit.  Both documents are refused before a pixel or an ICC byte is read,
     // so a 4-byte buffer stands in for gigabytes: RAW channel sizes are arithmetic, and the ICC size
@@ -474,10 +502,20 @@ TEST(MinipsdTest, WriteFailureIsReported)
     const Bytes px = testImage(4, 4);
     const minipsd_layer layer{"L", px.data(), 255, 0};
     const minipsd_doc d = docOf(4, 4, &layer, 1);
-    int calls = 0;
-    const auto failSecond = [](void *user, const void *, size_t) -> int { return ++*static_cast<int *>(user) < 2; };
-    EXPECT_EQ(minipsd_write(&d, failSecond, &calls), MINIPSD_ERR_WRITE);
-    EXPECT_EQ(calls, 2) << "the writer stops calling back after the first failure";
+    struct Calls { int made, failAt; };
+    const auto failing = [](void *user, const void *, size_t) -> int {
+        auto *c = static_cast<Calls *>(user);
+        return ++c->made != c->failAt;
+    };
+    Calls all{0, 0};   // never fails
+    ASSERT_EQ(minipsd_write(&d, failing, &all), MINIPSD_OK);
+
+    // Early in the header, and in the last channel of the composite with rows still to come.
+    for (int failAt : {2, all.made - 3}) {
+        Calls c{0, failAt};
+        EXPECT_EQ(minipsd_write(&d, failing, &c), MINIPSD_ERR_WRITE) << "failing call " << failAt;
+        EXPECT_EQ(c.made, failAt) << "the writer stops calling back after the first failure";
+    }
 }
 
 TEST(MinipsdTest, WriteFileTakesAUtf8PathAndMatchesTheStream)
@@ -501,6 +539,17 @@ TEST(MinipsdTest, WriteFileTakesAUtf8PathAndMatchesTheStream)
 
     const std::u8string missing = (dir / "missing" / "x.psd").u8string();
     EXPECT_EQ(minipsd_write_file(&d, std::string(missing.begin(), missing.end()).c_str()), MINIPSD_ERR_OPEN);
+    EXPECT_EQ(minipsd_write_file(&d, nullptr), MINIPSD_ERR_ARG) << "no path";
+    EXPECT_EQ(minipsd_write_file(nullptr, utf8.c_str()), MINIPSD_ERR_ARG) << "no document";
+
+#ifdef __linux__
+    // /dev/full opens, but every flush fails: a small file only at fclose, a large one already in fwrite.
+    EXPECT_EQ(minipsd_write_file(&d, "/dev/full"), MINIPSD_ERR_OPEN) << "fclose failed";
+    const Bytes big = testImage(512, 512);
+    const minipsd_layer bigLayer{"L", big.data(), 255, 0};
+    const minipsd_doc bigDoc = docOf(512, 512, &bigLayer, 1);
+    EXPECT_EQ(minipsd_write_file(&bigDoc, "/dev/full"), MINIPSD_ERR_WRITE) << "fwrite failed first";
+#endif
 }
 
 TEST(MinipsdTest, CompiledAsCItWritesTheSameBytes)

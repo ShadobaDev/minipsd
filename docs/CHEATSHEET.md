@@ -40,12 +40,15 @@ cmake --preset linux-asan && cmake --build --preset linux-asan && ctest --preset
 cmake --preset linux-tidy && cmake --build --preset linux-tidy   # findings fail the build
 
 cmake --preset linux-coverage && cmake --build --preset linux-coverage && ctest --preset linux-coverage
-gcovr --root . --filter include/ --merge-lines --txt build/linux-coverage   # lines missing a test
+gcovr --root . --filter include/ --merge-lines --exclude-throw-branches \
+      --txt-metric branch --txt build/linux-coverage          # lines and branches missing a test
 ```
 
-`--merge-lines` counts each line of `minipsd.h` once, although several test files compile it.
+`--merge-lines` counts each line of `minipsd.h` once, although several test files compile it;
+`--exclude-throw-branches` drops the exception edges of the C++ builds, which C code never takes.
 Coverage data adds up across runs: delete `build/linux-coverage` for a clean report. CI fails
-below 100 % line coverage and publishes the report to Coveralls.
+below 100 % of lines or 95 % of branches and publishes the report to Coveralls. Branches stop
+just short of 100 % where gcovr keeps the C and C++ copies of a function apart.
 
 ## Packages and installing
 

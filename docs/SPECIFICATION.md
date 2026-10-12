@@ -190,8 +190,9 @@ Platemaker is the first consumer. Breaking any of these breaks it:
 - Verified by hand: GIMP opens the output; Procreate opens a 1600x10240 template as a canvas
   with the correct dpi.
 - The same tests also run instrumented in CI: under AddressSanitizer and UBSan, under clang-tidy
-  (`.clang-tidy`, findings are errors), and with line coverage of `minipsd.h`, which **must stay at
-  100 %**: new code comes with the test that executes it.
+  (`.clang-tidy`, findings are errors), and with coverage of `minipsd.h`: **lines must stay at
+  100 %** and branches at 95 % or more, so new code comes with the test that executes it,
+  error paths included (`test_alloc_failure.cpp` fails each allocation in turn).
 
 ## Distribution and SBOM
 
