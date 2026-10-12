@@ -59,7 +59,7 @@ The code and tests are in (`include/`, `tests/`) but nothing builds them yet: `C
       `libminipsd-dev_X.Y.Z_all.deb` (commands in [CHEATSHEET.md](CHEATSHEET.md)).
 - [ ] **Decide:** attach those packages to the GitHub Release too, or only `minipsd.h`?
 - [x] `git init`, push to `ShadobaDev/minipsd`.
-- [ ] Tag `0.1.0`.
+- [x] Tag `0.1.0` (released 2026-10-12).
 - [x] After the first publish: check that GitHub detects the licence from `LICENSE.MIT` (it does:
       MIT; no rename needed).
 
@@ -76,6 +76,15 @@ The code and tests are in (`include/`, `tests/`) but nothing builds them yet: `C
       `CONTRIBUTING.md`; no CLA.
 - [x] **Copyright holder.** `Bartlomiej Mucha <shadobadev@gmail.com>`, ASCII everywhere
       (licence, header, sources, SBOM); `ShadobaDev` stays the GitHub account in URLs and the PURL.
+
+**Distribution** (after `0.1.0`; none of these changes the library)
+- [ ] GitHub repository topics and description.
+- [ ] CPM.cmake line in [INSTALL.md](INSTALL.md).
+- [ ] vcpkg port (PR to `microsoft/vcpkg`).
+- [ ] Conan Center recipe (PR to `conan-io/conan-center-index`).
+- [ ] Listing in `nothings/single_file_libs`.
+- [ ] Listing in `awesome-c`.
+- [ ] Announcement (r/C_Programming, r/cpp "Show and tell").
 
 ---
 
@@ -105,4 +114,4 @@ Nothing planned.
 
 ## Release history & coordination
 
-**planned:** `0.1.0`, released together with Platemaker's switch to it.
+**released:** `0.1.0` — 2026-10-12, together with Platemaker's switch to it.

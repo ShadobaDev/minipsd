@@ -15,7 +15,8 @@ Procreate open as layered documents.
 
 # Status
 
-**pre-release**, not yet tagged. The header is [include/minipsd.h](include/minipsd.h);
+**release: 0.1.0**
+The header is [include/minipsd.h](include/minipsd.h);
 
 ## Example
 
