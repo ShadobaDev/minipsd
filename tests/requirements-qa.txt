@@ -1,0 +1,4 @@
+# Tools for the quality jobs in CI (linux-tidy, linux-coverage). Pinned so a local run reports
+# exactly what CI reports: pip install -r tests/requirements-qa.txt
+clang-tidy==22.1.8
+gcovr==8.6

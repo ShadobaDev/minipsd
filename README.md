@@ -1,5 +1,10 @@
 # minipsd
 
+[![CI](https://github.com/ShadobaDev/minipsd/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/ShadobaDev/minipsd/actions/workflows/ci.yml)
+[![Coverage](https://coveralls.io/repos/github/ShadobaDev/minipsd/badge.svg?branch=master)](https://coveralls.io/github/ShadobaDev/minipsd?branch=master)
+[![Release](https://img.shields.io/github/v/release/ShadobaDev/minipsd)](https://github.com/ShadobaDev/minipsd/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/ShadobaDev/minipsd)](LICENSE.MIT)
+
 > A single-header, dependency-free C99 library that writes layered Photoshop (PSD) files.
 
 - **One header**, stb style. C99, also compiles as C++.

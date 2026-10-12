@@ -1,0 +1,24 @@
+# Static analysis for the linux-tidy preset. A short list on purpose: bug finders, not style.
+# Each disabled check says why; prefer fixing the code over adding to this list.
+#
+#   bugprone-easily-swappable-parameters   style, not a bug
+#   bugprone-reserved-identifier           the mpsd__ / MPSD__ prefix is the stb-style convention
+#                                          for internal names (docs/CODING_STYLE_C.md)
+#   bugprone-incorrect-roundings           every value minipsd rounds with + 0.5 is non-negative;
+#                                          lround would make consumers link libm
+#   clang-analyzer-security.ArrayBound     does not model string contents, so it reports reads past
+#                                          a UTF-8 name's terminator that cannot happen; real
+#                                          out-of-bounds reads are caught by the linux-asan preset
+#   int -> float narrowing (option below)  the composite turns 0..255 bytes into float, which is exact
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-reserved-identifier,
+  -bugprone-incorrect-roundings,
+  -clang-analyzer-security.ArrayBound
+CheckOptions:
+  bugprone-narrowing-conversions.WarnOnIntegerToFloatingPointNarrowingConversion: false
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*/include/minipsd.*'

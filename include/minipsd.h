@@ -505,7 +505,7 @@ MINIPSDDEF int minipsd_write(const minipsd_doc *d, minipsd_write_fn fn, void *us
     uint64_t        info, content;
     uint32_t        y, res;
     size_t          i;
-    int             k, rc = mpsd__check(d);
+    int             k, rc = d ? mpsd__check(d) : MINIPSD_ERR_ARG;   /* d spelled out for static analysers */
     if (rc != MINIPSD_OK) return rc;
     if (!fn) return MINIPSD_ERR_ARG;
 

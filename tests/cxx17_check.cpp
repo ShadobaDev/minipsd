@@ -7,4 +7,4 @@
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
  */
 
-#include "minipsd_c_smoke.c"
+#include "minipsd_c_smoke.c"   // NOLINT(bugprone-suspicious-include): the C smoke test, compiled as C++17

@@ -49,6 +49,14 @@ target_link_libraries(minipsd-cxx17 PRIVATE minipsd::minipsd)
 target_compile_options(minipsd-cxx17 PRIVATE ${MINIPSD_WARNINGS})
 set_target_properties(minipsd-cxx17 PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 
+# clang-tidy (the linux-tidy preset) on our own targets only, not on a fetched GoogleTest.
+# Checks and options come from .clang-tidy at the repository root.
+set(MINIPSD_CLANG_TIDY "" CACHE STRING "clang-tidy command to run on the test sources; empty = off")
+if(MINIPSD_CLANG_TIDY)
+    set_target_properties(minipsd-tests minipsd-cxx17 PROPERTIES
+        C_CLANG_TIDY "${MINIPSD_CLANG_TIDY}" CXX_CLANG_TIDY "${MINIPSD_CLANG_TIDY}")
+endif()
+
 # ---------------------------------------------------------------------------
 # psd-tools round trip: Python writes documents through the real minipsd (a shared build, via ctypes)
 # and reads them back with psd-tools, an independent reader. Skipped when psd-tools is missing,
@@ -61,7 +69,10 @@ if(Python3_FOUND)
     execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import psd_tools"
                     RESULT_VARIABLE _psd_tools_rc OUTPUT_QUIET ERROR_QUIET)
 endif()
-if(_psd_tools_rc EQUAL 0)
+if(CMAKE_C_FLAGS MATCHES "-fsanitize=")
+    # A sanitized library does not load into an uninstrumented Python (linux-asan).
+    message(STATUS "Sanitizer build: skipping the psd-tools round trip")
+elseif(_psd_tools_rc EQUAL 0)
     add_library(minipsd-shared SHARED psd_tools/minipsd_shared.c)
     target_link_libraries(minipsd-shared PRIVATE minipsd::minipsd)
     target_compile_options(minipsd-shared PRIVATE ${MINIPSD_WARNINGS})

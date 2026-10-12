@@ -78,7 +78,7 @@ public:
     std::uint8_t  u8()  { need(1); return m_b[m_pos++]; }
     std::uint16_t u16() { const std::uint16_t hi = u8(); return static_cast<std::uint16_t>((hi << 8) | u8()); }
     std::uint32_t u32() { const std::uint32_t hi = u16(); return (hi << 16) | u16(); }
-    std::string   tag(std::size_t n) { need(n); std::string s(m_b.begin() + m_pos, m_b.begin() + m_pos + n); m_pos += n; return s; }
+    std::string   tag(std::size_t n) { need(n); std::string s(at(), at() + n); m_pos += n; return s; }
     void          skip(std::size_t n) { need(n); m_pos += n; }
     std::size_t   pos() const { return m_pos; }
     void          seek(std::size_t p) { m_pos = p; }
@@ -358,6 +358,10 @@ TEST(MinipsdTest, UnicodeNameGoesToLuniAndAsciiToThePascalString)
     const Psd p = read(write(docOf(2, 2, &layer, 1)));
     EXPECT_EQ(p.layers[0].unicodeName, u"Szablon \u017C\u00F3\u0142w \U0001F422");
     EXPECT_EQ(p.layers[0].pascalName, "Szablon ???w ?") << "one '?' per non-ASCII character";
+
+    const minipsd_layer bad{"a\x80" "b\xC5", px.data(), 255, 0};   // a stray continuation byte, a cut sequence
+    const Psd q = read(write(docOf(2, 2, &bad, 1)));
+    EXPECT_EQ(q.layers[0].unicodeName, u"a\uFFFDb\uFFFD") << "malformed UTF-8: one U+FFFD per bad byte";
 }
 
 TEST(MinipsdTest, NullNameIsEmpty)
@@ -396,7 +400,7 @@ TEST(MinipsdTest, FractionalDpiIsKept)
 TEST(MinipsdTest, RleSplitsLongRepeatsAndLiterals)
 {
     const std::uint32_t w = 300;
-    Bytes px(w * 4);
+    Bytes px(std::size_t(w) * 4);
     for (std::uint32_t x = 0; x < w; ++x) {
         px[x * 4 + 0] = 7;                                    // one long repeat
         px[x * 4 + 1] = static_cast<std::uint8_t>(x);         // all literals
@@ -416,7 +420,7 @@ TEST(MinipsdTest, RleSplitsLongRepeatsAndLiterals)
 TEST(MinipsdTest, ShortRowsEncode)
 {
     for (std::uint32_t w : {1u, 2u, 3u, 129u}) {
-        Bytes px(w * 4, 255);
+        Bytes px(std::size_t(w) * 4, 255);
         px[0] = 1;
         const minipsd_layer layer{"L", px.data(), 255, 0};
         EXPECT_EQ(read(write(docOf(w, 1, &layer, 1))).composite, px) << "width " << w;
@@ -460,6 +464,9 @@ TEST(MinipsdTest, RejectsBadDocuments)
     EXPECT_TRUE(out.empty()) << "nothing is written for a refused document";
     EXPECT_STREQ(minipsd_error_string(MINIPSD_ERR_SIZE),
                  "too large for PSD: a side outside 1..30000, or a section above 4 GiB");
+    EXPECT_STREQ(minipsd_error_string(-100), "unknown error");
+    for (int code : {MINIPSD_OK, MINIPSD_ERR_ARG, MINIPSD_ERR_WRITE, MINIPSD_ERR_ALLOC, MINIPSD_ERR_OPEN})
+        EXPECT_STRNE(minipsd_error_string(code), "unknown error") << "every return code has its own text: " << code;
 }
 
 TEST(MinipsdTest, WriteFailureIsReported)
@@ -503,7 +510,7 @@ TEST(MinipsdTest, CompiledAsCItWritesTheSameBytes)
     size_t size = 0;
     ASSERT_EQ(minipsd_c_smoke(buf, sizeof buf, &size), MINIPSD_OK);
 
-    Bytes px(3 * 2 * 4);
+    Bytes px(std::size_t(3) * 2 * 4);
     for (std::size_t i = 0; i < px.size(); ++i) px[i] = static_cast<std::uint8_t>(i * 17);
     const minipsd_layer layers[2] = {{"Template", px.data(), 255, 0}, {"Layer", nullptr, 255, 0}};
     EXPECT_EQ(Bytes(buf, buf + size), write(docOf(3, 2, layers, 2)));

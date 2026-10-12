@@ -10,6 +10,9 @@ consumers, so there is nothing to ship from a build.
 | `mingw` | Windows | MSYS2 GCC + Ninja on PATH: `C:\msys64\ucrt64\bin` (CI) or `C:\msys64\mingw64\bin` |
 | `linux-gcc` | Linux / WSL | GCC + Ninja |
 | `linux-clang` | Linux / WSL | Clang + Ninja |
+| `linux-asan` | Linux / WSL | GCC + AddressSanitizer and UBSan (no round trip) |
+| `linux-tidy` | Linux / WSL | Clang + clang-tidy on the tests and the header |
+| `linux-coverage` | Linux / WSL | GCC + `--coverage`; report with gcovr below |
 
 ```bash
 cmake --preset mingw
@@ -25,6 +28,24 @@ ctest --preset mingw -R consumer -V      # the integration tests, with their out
 cmake --install build/mingw              # install tree in install/mingw/
 cmake --install build/msvc --config Debug   # MSVC is multi-config
 ```
+
+## Quality checks (as in CI)
+
+The tools are pinned in `tests/requirements-qa.txt`, so a local run reports what CI reports.
+
+```bash
+pip install -r tests/requirements-qa.txt -r tests/requirements.txt
+
+cmake --preset linux-asan && cmake --build --preset linux-asan && ctest --preset linux-asan
+cmake --preset linux-tidy && cmake --build --preset linux-tidy   # findings fail the build
+
+cmake --preset linux-coverage && cmake --build --preset linux-coverage && ctest --preset linux-coverage
+gcovr --root . --filter include/ --merge-lines --txt build/linux-coverage   # lines missing a test
+```
+
+`--merge-lines` counts each line of `minipsd.h` once, although several test files compile it.
+Coverage data adds up across runs: delete `build/linux-coverage` for a clean report. CI fails
+below 100 % line coverage and publishes the report to Coveralls.
 
 ## Packages and installing
 
@@ -83,6 +104,7 @@ paths also check the SBOM fragment's version.
 | `MINIPSD_BUILD_TESTS` | ON only as the top-level project | the tests above |
 | `MINIPSD_INSTALL` | ON only as the top-level project | install rules |
 | `MINIPSD_REQUIRE_PSD_TOOLS` | OFF (CI: ON) | fail the configure instead of skipping the round trip |
+| `MINIPSD_CLANG_TIDY` | empty (`linux-tidy`: `clang-tidy`) | run clang-tidy on the test targets |
 
 GoogleTest comes from the system if installed (`libgtest-dev`), otherwise it is fetched.
 

@@ -51,6 +51,34 @@
       "displayName": "Linux · Clang",
       "inherits": "linux",
       "cacheVariables": { "CMAKE_C_COMPILER": "clang", "CMAKE_CXX_COMPILER": "clang++" }
+    },
+    {
+      "name": "linux-asan",
+      "displayName": "Linux · GCC + AddressSanitizer/UBSan",
+      "inherits": "linux-gcc",
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
+    },
+    {
+      "name": "linux-tidy",
+      "displayName": "Linux · Clang + clang-tidy (.clang-tidy)",
+      "inherits": "linux-clang",
+      "cacheVariables": { "MINIPSD_CLANG_TIDY": "clang-tidy" }
+    },
+    {
+      "name": "linux-coverage",
+      "displayName": "Linux · GCC + coverage (gcovr)",
+      "inherits": "linux-gcc",
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "--coverage",
+        "CMAKE_CXX_FLAGS": "--coverage",
+        "CMAKE_EXE_LINKER_FLAGS": "--coverage",
+        "CMAKE_SHARED_LINKER_FLAGS": "--coverage"
+      }
     }
   ],
 
@@ -58,7 +86,10 @@
     { "name": "msvc",        "configurePreset": "msvc", "configuration": "Debug" },
     { "name": "mingw",       "configurePreset": "mingw" },
     { "name": "linux-gcc",   "configurePreset": "linux-gcc" },
-    { "name": "linux-clang", "configurePreset": "linux-clang" }
+    { "name": "linux-clang", "configurePreset": "linux-clang" },
+    { "name": "linux-asan",     "configurePreset": "linux-asan" },
+    { "name": "linux-tidy",     "configurePreset": "linux-tidy" },
+    { "name": "linux-coverage", "configurePreset": "linux-coverage" }
   ],
 
   "testPresets": [
@@ -70,6 +101,9 @@
     { "name": "msvc",        "inherits": "base", "configurePreset": "msvc", "configuration": "Debug" },
     { "name": "mingw",       "inherits": "base", "configurePreset": "mingw" },
     { "name": "linux-gcc",   "inherits": "base", "configurePreset": "linux-gcc" },
-    { "name": "linux-clang", "inherits": "base", "configurePreset": "linux-clang" }
+    { "name": "linux-clang", "inherits": "base", "configurePreset": "linux-clang" },
+    { "name": "linux-asan",     "inherits": "base", "configurePreset": "linux-asan" },
+    { "name": "linux-tidy",     "inherits": "base", "configurePreset": "linux-tidy" },
+    { "name": "linux-coverage", "inherits": "base", "configurePreset": "linux-coverage" }
   ]
 }
