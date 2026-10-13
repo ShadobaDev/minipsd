@@ -85,8 +85,8 @@ The code and tests are in (`include/`, `tests/`) but nothing builds them yet: `C
 - [x] Repository enabled on coveralls.io.
 
 **Distribution** (after `0.1.0`; none of these changes the library)
-- [ ] GitHub repository topics and description.
-- [ ] CPM.cmake line in [INSTALL.md](INSTALL.md).
+- [x] GitHub repository topics and description.
+- [x] CPM.cmake line in [INSTALL.md](INSTALL.md).
 - [ ] vcpkg port (PR to `microsoft/vcpkg`).
 - [ ] Conan Center recipe (PR to `conan-io/conan-center-index`).
 - [ ] Listing in `nothings/single_file_libs`.
@@ -97,25 +97,15 @@ The code and tests are in (`include/`, `tests/`) but nothing builds them yet: `C
 
 ## PATCH — additions
 
-Candidates, none started. Each must follow the
+The planned features and their order are in [ROADMAP.md](ROADMAP.md); the design behind them
+is in [CODE-ARCH.md](CODE-ARCH.md). Each must follow the
 [extensibility rules](SPECIFICATION.md#extensibility-rules).
-
-| Feature | Notes |
-|---|---|
-| C++ wrapper | ~40 lines under `#ifdef __cplusplus`: RAII, `std::vector` as output buffer |
-| Layers smaller than the canvas | a rectangle per layer; today a layer is full canvas or empty |
-| Layer groups (`lsct`) | |
-| Layer masks | |
-| Blend modes other than `norm` | the composite must compute them too |
-| 16-bit channels | not needed for comic strips; for other users |
-| PSB (version 2) | sides above 30 000 px; RLE row counts become 32-bit; opt-in, zero keeps PSD |
-| Reading | out of scope today; would be a separate opt-in implementation block |
 
 ---
 
 ## MINOR — breaking
 
-Nothing planned.
+- [ ] `0.2.0`: `minipsd_write_file` moves to `examples/` ([ROADMAP.md](ROADMAP.md), stage 3).
 
 ---
 

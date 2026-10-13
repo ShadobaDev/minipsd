@@ -16,6 +16,15 @@ FetchContent_MakeAvailable(minipsd)
 target_link_libraries(my-app PRIVATE minipsd::minipsd)
 ```
 
+**[CPM.cmake](https://github.com/cpm-cmake/CPM.cmake)**
+
+```cmake
+CPMAddPackage("gh:ShadobaDev/minipsd#0.1.0")
+target_link_libraries(my-app PRIVATE minipsd::minipsd)
+```
+
+Use `#0.1.0`, not `@0.1.0`: the `@` form looks for a tag `v0.1.0`, and minipsd tags have no `v`.
+
 **git submodule**
 
 ```bash
