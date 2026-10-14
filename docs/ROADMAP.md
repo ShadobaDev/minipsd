@@ -74,7 +74,7 @@ See [Files and modules](CODE-ARCH.md#files-and-modules).
       - the SBOM fragment lists every header with its SHA-256;
       - the consumer tests cover a raw copy of the `include/` directory;
       - the Conan recipe in `temp/packaging/` copies the directory, and `check.ps1` passes.
-- [ ] **S1.5** `tools/amalgamate.cmake`. The CI builds the test suite against the amalgamated file
+- [x] **S1.5** `tools/amalgamate.cmake`. The CI builds the test suite against the amalgamated file
       too, and the release workflow attaches it as an artifact
       ([Decisions](CODE-ARCH.md#decisions), 3).
       *Done when:* both builds give the golden bytes.

@@ -4,7 +4,8 @@
 #   minipsd-tests      GoogleTest, one test_<module>.cpp per module: the writer read back field
 #                      by field, the internal modules tested directly; built as C99 + C++20;
 #                      plus allocation failures and the golden bytes of 0.1.0
-#   minipsd-cxx17      compile-only: the header and its implementation as C++17
+#   minipsd-tests-amalgamated  the same tests (but base) against the single-file minipsd.h
+#   minipsd-cxx17     compile-only: the header and its implementation as C++17
 #   minipsd-module-*   compile-only: each public module alone, with its implementation, as C
 #   consumer-<mode>    a tiny project using minipsd each supported way (see consumer/)
 # ---------------------------------------------------------------------------
@@ -30,8 +31,8 @@ else()
     set(MINIPSD_WARNINGS -Wall -Wextra -Wpedantic -Werror)
 endif()
 
-add_executable(minipsd-tests
-    test_base.cpp
+# Every test file but test_base.cpp includes minipsd.h, so it also runs against the amalgamated file.
+set(_minipsd_test_sources
     test_bytes.cpp
     test_utf.cpp
     test_packbits.cpp
@@ -41,7 +42,6 @@ add_executable(minipsd-tests
     test_alloc_failure.cpp   # minipsd.h with an allocator that fails on demand
     test_golden.cpp          # the bytes of 0.1.0, by SHA-256, for a fixed set of documents
 )
-target_link_libraries(minipsd-tests PRIVATE minipsd::minipsd GTest::gtest GTest::gtest_main)
 # Each test file has its own static copy of the library and uses only part of it; whether the
 # library leaves a function unused is checked by the minipsd-module-* targets below instead.
 if(MSVC)
@@ -49,16 +49,37 @@ if(MSVC)
 else()
     set(_minipsd_test_only_warnings -Wno-unused-function)
 endif()
-target_compile_options(minipsd-tests PRIVATE ${MINIPSD_WARNINGS} ${_minipsd_test_only_warnings})
-set_target_properties(minipsd-tests PROPERTIES
-    C_STANDARD   99 C_STANDARD_REQUIRED   ON C_EXTENSIONS   OFF
-    CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF   # the tests use std::u8string
-)
-if(MINGW)
-    # Self-contained executable: runs without the MinGW runtime DLLs on PATH.
-    target_link_options(minipsd-tests PRIVATE -static)
-endif()
+
+function(minipsd_add_test_executable target)
+    add_executable(${target} ${ARGN})
+    target_link_libraries(${target} PRIVATE GTest::gtest GTest::gtest_main)
+    target_compile_options(${target} PRIVATE ${MINIPSD_WARNINGS} ${_minipsd_test_only_warnings})
+    set_target_properties(${target} PROPERTIES
+        C_STANDARD   99 C_STANDARD_REQUIRED   ON C_EXTENSIONS   OFF
+        CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF   # the tests use std::u8string
+    )
+    if(MINGW)
+        # Self-contained executable: runs without the MinGW runtime DLLs on PATH.
+        target_link_options(${target} PRIVATE -static)
+    endif()
+endfunction()
+
+minipsd_add_test_executable(minipsd-tests test_base.cpp ${_minipsd_test_sources})
+target_link_libraries(minipsd-tests PRIVATE minipsd::minipsd)
 gtest_discover_tests(minipsd-tests)
+
+# The same tests against the single file the release attaches (tools/amalgamate.cmake), with only
+# that file's directory on the include path. Generated at configure time; editing a header
+# reconfigures (the top-level CMakeLists.txt depends on every header).
+set(_minipsd_amalgamated "${CMAKE_CURRENT_BINARY_DIR}/amalgamated/minipsd.h")
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" "-DOUTPUT=${_minipsd_amalgamated}" -P "${PROJECT_SOURCE_DIR}/tools/amalgamate.cmake"
+    OUTPUT_QUIET
+    COMMAND_ERROR_IS_FATAL ANY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/tools/amalgamate.cmake")
+minipsd_add_test_executable(minipsd-tests-amalgamated ${_minipsd_test_sources})
+target_include_directories(minipsd-tests-amalgamated PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/amalgamated")
+gtest_discover_tests(minipsd-tests-amalgamated TEST_PREFIX "amalgamated.")
 
 # The contract promises C++17; the tests themselves need C++20, so check 17 separately.
 add_library(minipsd-cxx17 OBJECT cxx17_check.cpp)
