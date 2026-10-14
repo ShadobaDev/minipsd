@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <algorithm>
 #include <limits>
 #include <utility>
 
@@ -203,6 +204,68 @@ TEST(MinipsdWriterTest, PullTotalIsTheFileSize)
                 EXPECT_EQ(pullTotal(d, offset), written)
                     << "compression " << compression << ", ICC " << withIcc << ", workspace at +" << offset;
         }
+}
+
+TEST(MinipsdWriterTest, PullWriterFeedsANonBlockingTarget)
+{
+    // A target that takes 0 to 5 bytes per round, like a non-blocking socket: the caller keeps what
+    // it did not take and pulls more only once that is gone.
+    const Bytes px = testImage(37, 5);
+    const minipsd_layer layers[2] = {{"Template", px.data(), 255, 0}, {"Layer", nullptr, 255, 0}};
+    for (int compression : {MINIPSD_RLE, MINIPSD_RAW}) {
+        minipsd_doc d = docOf(37, 5, layers, 2);
+        d.compression = compression;
+        std::size_t size = 0;
+        ASSERT_EQ(minipsd_writer_workspace_size(&d, &size), MINIPSD_OK);
+        Bytes workspace(size), target, pending;
+        minipsd_writer *w = nullptr;
+        ASSERT_EQ(minipsd_writer_init(&w, &d, workspace.data(), size), MINIPSD_OK);
+
+        std::uint8_t  chunk[16];
+        std::uint32_t state = 7;
+        int           rc = MINIPSD_MORE, rounds = 0;
+        while ((rc == MINIPSD_MORE || !pending.empty()) && ++rounds < 100000) {
+            if (pending.empty()) {
+                std::size_t n = 0;
+                rc = minipsd_writer_fill(w, chunk, sizeof chunk, &n);
+                ASSERT_GE(rc, 0);
+                pending.assign(chunk, chunk + n);
+            }
+            state = state * 1664525u + 1013904223u;
+            const auto took = static_cast<std::ptrdiff_t>(std::min<std::size_t>((state >> 16) % 6, pending.size()));
+            target.insert(target.end(), pending.begin(), pending.begin() + took);
+            pending.erase(pending.begin(), pending.begin() + took);
+        }
+        EXPECT_EQ(rc, MINIPSD_OK);
+        EXPECT_EQ(target, write(d)) << "compression " << compression;
+    }
+}
+
+TEST(MinipsdWriterTest, FillKeepsItsProtocol)
+{
+    const Bytes px = testImage(4, 4);
+    const minipsd_layer layer{"L", px.data(), 255, 0};
+    const minipsd_doc d = docOf(4, 4, &layer, 1);
+    std::size_t size = 0;
+    ASSERT_EQ(minipsd_writer_workspace_size(&d, &size), MINIPSD_OK);
+    Bytes workspace(size), buf(16);
+    minipsd_writer *w = nullptr;
+    ASSERT_EQ(minipsd_writer_init(&w, &d, workspace.data(), size), MINIPSD_OK);
+
+    std::size_t n = 99;
+    EXPECT_EQ(minipsd_writer_fill(nullptr, buf.data(), buf.size(), &n), MINIPSD_ERR_ARG);
+    EXPECT_EQ(n, 0u) << "produced is cleared even on an error";
+    EXPECT_EQ(minipsd_writer_fill(w, buf.data(), buf.size(), nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_writer_fill(w, nullptr, buf.size(), &n), MINIPSD_ERR_ARG) << "no buffer for 16 bytes";
+    EXPECT_EQ(minipsd_writer_fill(w, nullptr, 0, &n), MINIPSD_MORE) << "nothing asked, nothing produced";
+    EXPECT_EQ(n, 0u);
+
+    Bytes all(static_cast<std::size_t>(minipsd_writer_total(w)));
+    EXPECT_EQ(minipsd_writer_fill(w, all.data(), all.size(), &n), MINIPSD_OK) << "one call with room for the file";
+    EXPECT_EQ(n, all.size());
+    EXPECT_EQ(all, write(d));
+    EXPECT_EQ(minipsd_writer_fill(w, buf.data(), buf.size(), &n), MINIPSD_OK) << "finished stays finished";
+    EXPECT_EQ(n, 0u);
 }
 
 TEST(MinipsdWriterTest, PullWriterRefusesWhatItCannotUse)

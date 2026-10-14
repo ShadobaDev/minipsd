@@ -125,34 +125,26 @@ static uint64_t mpsd__layer_extra_size(const char *name)
     return c.count;
 }
 
-/* The layer info: count, records, then every layer's channel data.  sizes[i * 4 + k] is layer i's
-   channel k (in PSD order), from mpsd__layer_channel_size. */
-static void mpsd__layer_info(mpsd__sink *s, const minipsd_doc *d, const uint64_t *sizes)
+/* One layer record.  sizes holds its four channels' sizes (PSD order), from
+   mpsd__layer_channel_size. */
+static void mpsd__layer_record(mpsd__sink *s, const minipsd_doc *d, const minipsd_layer *l, const uint64_t *sizes)
 {
-    size_t i;
     int k;
-    mpsd__u16(s, (unsigned)(uint16_t)-(int16_t)d->layer_count);   /* negative: composite has alpha */
-    for (i = 0; i < d->layer_count; ++i) {
-        const minipsd_layer *l = &d->layers[i];
-        mpsd__u32(s, 0); mpsd__u32(s, 0);                         /* top, left       */
-        mpsd__u32(s, l->rgba ? d->height : 0);                    /* bottom          */
-        mpsd__u32(s, l->rgba ? d->width  : 0);                    /* right           */
-        mpsd__u16(s, 4);
-        for (k = 0; k < 4; ++k) {
-            mpsd__u16(s, (unsigned)(uint16_t)(int16_t)mpsd__channel_id[k]);
-            mpsd__u32(s, (uint32_t)sizes[i * 4 + k]);
-        }
-        mpsd__put(s, "8BIMnorm", 8);
-        mpsd__u8(s, l->opacity);
-        mpsd__u8(s, 0);                                           /* clipping: base  */
-        mpsd__u8(s, l->hidden ? 0x02 : 0x00);                     /* flags           */
-        mpsd__u8(s, 0);                                           /* filler          */
-        mpsd__u32(s, (uint32_t)mpsd__layer_extra_size(l->name));
-        mpsd__layer_extra(s, l->name);
+    mpsd__u32(s, 0); mpsd__u32(s, 0);                             /* top, left       */
+    mpsd__u32(s, l->rgba ? d->height : 0);                        /* bottom          */
+    mpsd__u32(s, l->rgba ? d->width  : 0);                        /* right           */
+    mpsd__u16(s, 4);
+    for (k = 0; k < 4; ++k) {
+        mpsd__u16(s, (unsigned)(uint16_t)(int16_t)mpsd__channel_id[k]);
+        mpsd__u32(s, (uint32_t)sizes[k]);
     }
-    for (i = 0; i < d->layer_count; ++i)
-        for (k = 0; k < 4; ++k)
-            mpsd__layer_channel(s, d, &d->layers[i], mpsd__channel_of[k]);
+    mpsd__put(s, "8BIMnorm", 8);
+    mpsd__u8(s, l->opacity);
+    mpsd__u8(s, 0);                                               /* clipping: base  */
+    mpsd__u8(s, l->hidden ? 0x02 : 0x00);                         /* flags           */
+    mpsd__u8(s, 0);                                               /* filler          */
+    mpsd__u32(s, (uint32_t)mpsd__layer_extra_size(l->name));
+    mpsd__layer_extra(s, l->name);
 }
 
 /* --- the file --- */
@@ -199,7 +191,63 @@ static int mpsd__measure_layers(const minipsd_doc *d, uint64_t *sizes, uint64_t 
     return 4 + *info + 4 > MPSD__MAX_SECTION ? MINIPSD_ERR_SIZE : MINIPSD_OK;
 }
 
+/* Everything up to the first layer record: the file header, the colour mode data, the image
+   resources (resolution, then the ICC profile if any), the layer section's lengths and the layer
+   count. */
+static void mpsd__head(mpsd__sink *s, const minipsd_doc *d, uint64_t info)
+{
+    const uint32_t res = (uint32_t)(d->dpi * 65536.0 + 0.5);    /* 16.16 fixed point */
+    mpsd__put(s, "8BPS", 4);
+    mpsd__u16(s, 1);                          /* version: PSD        */
+    mpsd__zeros(s, 6);
+    mpsd__u16(s, 4);                          /* R, G, B, alpha      */
+    mpsd__u32(s, d->height);
+    mpsd__u32(s, d->width);
+    mpsd__u16(s, 8);                          /* bits per channel    */
+    mpsd__u16(s, 3);                          /* colour mode: RGB    */
+
+    mpsd__u32(s, 0);                          /* colour mode data    */
+
+    mpsd__u32(s, (uint32_t)mpsd__resources_size(d));
+    mpsd__put(s, "8BIM", 4); mpsd__u16(s, 1005); mpsd__u16(s, 0); mpsd__u32(s, 16);
+    mpsd__u32(s, res); mpsd__u16(s, 1); mpsd__u16(s, 1);      /* pixels per inch, shown in inches */
+    mpsd__u32(s, res); mpsd__u16(s, 1); mpsd__u16(s, 1);
+    if (d->icc) {
+        mpsd__put(s, "8BIM", 4); mpsd__u16(s, 1039); mpsd__u16(s, 0);
+        mpsd__u32(s, (uint32_t)d->icc_size);
+        mpsd__put(s, d->icc, d->icc_size);
+        mpsd__zeros(s, d->icc_size & 1);
+    }
+
+    mpsd__u32(s, (uint32_t)(4 + info + 4));   /* layer and mask information */
+    mpsd__u32(s, (uint32_t)info);
+    mpsd__u16(s, (unsigned)(uint16_t)-(int16_t)d->layer_count);   /* negative: composite has alpha */
+}
+
+/* After the last layer channel: the layer info's padding, the empty global layer mask, and the
+   composite's compression. */
+static void mpsd__tail(mpsd__sink *s, const minipsd_doc *d, uint64_t content, uint64_t info)
+{
+    mpsd__zeros(s, (size_t)(info - content));
+    mpsd__u32(s, 0);
+    mpsd__u16(s, d->compression == MINIPSD_RAW ? 0 : 1);
+}
+
 /* --- the pull writer: everything in the caller's workspace --- */
+
+/* The file as a sequence of pieces, each small (one record, one row, one count) except the head
+   with an ICC profile in it, which is copied, never re-encoded. */
+enum {
+    MPSD__HEAD,              /* mpsd__head                                    */
+    MPSD__RECORD,            /* a layer record                     (layer)    */
+    MPSD__COMPRESSION,       /* a layer channel's compression      (layer, k) */
+    MPSD__COUNT,             /* a layer row's byte count, RLE      (layer, k, row) */
+    MPSD__ROW,               /* a layer row                        (layer, k, row) */
+    MPSD__TAIL,              /* mpsd__tail                                    */
+    MPSD__COMPOSITE_COUNT,   /* a composite row's byte count, RLE  (k, row)   */
+    MPSD__COMPOSITE_ROW,     /* a composite row                    (k, row)   */
+    MPSD__DONE
+};
 
 struct minipsd_writer {
     const minipsd_doc *doc;
@@ -208,7 +256,16 @@ struct minipsd_writer {
     uint8_t           *composite_row;     /* width * 4                        */
     uint64_t           content, info;     /* the layer info's length, unpadded and padded */
     uint64_t           total;             /* the file size                    */
+    /* the cursor */
+    int                piece;             /* MPSD__HEAD .. MPSD__DONE         */
+    size_t             layer;
+    int                channel;           /* 0..3: PSD order in layers, RGBA offset in the composite */
+    uint32_t           row;
+    uint64_t           offset;            /* bytes of the current piece already handed out */
+    uint32_t           composite_y;       /* the row composite_row holds; MPSD__NO_ROW for none */
 };
+
+#define MPSD__NO_ROW 0xFFFFFFFFu
 
 #define MPSD__ALIGN 8u   /* the writer and the uint64_t size table */
 
@@ -273,7 +330,13 @@ MINIPSDDEF int minipsd_writer_init(minipsd_writer **out, const minipsd_doc *d, m
             }
         }
     }
-    w->total = total;
+    w->total       = total;
+    w->piece       = MPSD__HEAD;
+    w->layer       = 0;
+    w->channel     = 0;
+    w->row         = 0;
+    w->offset      = 0;
+    w->composite_y = MPSD__NO_ROW;
     *out = w;
     return MINIPSD_OK;
 }
@@ -281,6 +344,127 @@ MINIPSDDEF int minipsd_writer_init(minipsd_writer **out, const minipsd_doc *d, m
 MINIPSDDEF uint64_t minipsd_writer_total(const minipsd_writer *w)
 {
     return w ? w->total : 0;
+}
+
+/* A sink callback that keeps bytes [skip, skip + room) of what goes through it, so a piece can
+   be produced again from its start and only the part not yet handed out is copied.
+   ponytail: a call re-encodes the piece it stops in; a staging buffer would save that if tiny
+   caps ever matter. */
+typedef struct mpsd__window {
+    uint8_t *out;
+    uint64_t skip, seen;
+    size_t   room, taken;
+} mpsd__window;
+
+static int mpsd__window_out(void *user, const void *data, size_t size)
+{
+    mpsd__window  *win = (mpsd__window *)user;
+    const uint8_t *p   = (const uint8_t *)data;
+    const uint64_t at  = win->seen;
+    win->seen += size;
+    if (win->seen <= win->skip) return 1;     /* still before the window */
+    if (at < win->skip) { p += win->skip - at; size = (size_t)(win->seen - win->skip); }
+    if (size > win->room - win->taken) size = win->room - win->taken;
+    memcpy(win->out + win->taken, p, size);
+    win->taken += size;
+    return win->taken < win->room;            /* full: the rest is only counted */
+}
+
+/* The composite row y, blended once and kept while pieces of it are produced. */
+static const uint8_t *mpsd__writer_composite(minipsd_writer *w, uint32_t y)
+{
+    if (w->composite_y != y) {
+        mpsd__composite c;
+        mpsd__composite_init(&c, w->doc, w->composite_row);
+        mpsd__composite_row(&c, y);
+        w->composite_y = y;
+    }
+    return w->composite_row;
+}
+
+/* Produces the current piece, whole, into s. */
+static void mpsd__writer_piece(minipsd_writer *w, mpsd__sink *s)
+{
+    const minipsd_doc   *d = w->doc;
+    const minipsd_layer *l = &d->layers[w->layer];   /* always valid: 0 outside the layer section */
+    const uint8_t       *row = l->rgba ? l->rgba + (size_t)w->row * d->width * 4 : NULL;
+    switch (w->piece) {
+    case MPSD__HEAD:            mpsd__head(s, d, w->info); break;
+    case MPSD__RECORD:          mpsd__layer_record(s, d, l, w->channel_sizes + w->layer * 4); break;
+    case MPSD__COMPRESSION:     mpsd__u16(s, d->compression == MINIPSD_RAW ? 0 : 1); break;
+    case MPSD__COUNT:           mpsd__u16(s, (unsigned)mpsd__row_size(d, row, mpsd__channel_of[w->channel])); break;
+    case MPSD__ROW:             mpsd__row(s, d, row, mpsd__channel_of[w->channel]); break;
+    case MPSD__TAIL:            mpsd__tail(s, d, w->content, w->info); break;
+    case MPSD__COMPOSITE_COUNT: mpsd__u16(s, w->composite_sizes[(size_t)w->channel * d->height + w->row]); break;
+    default:                    mpsd__row(s, d, mpsd__writer_composite(w, w->row), w->channel); break;
+    }
+}
+
+/* Moves the cursor to the piece after the current one, in file order. */
+static void mpsd__writer_next(minipsd_writer *w)
+{
+    const minipsd_doc *d   = w->doc;
+    const int          rle = d->compression != MINIPSD_RAW;
+    w->offset = 0;
+    switch (w->piece) {
+    case MPSD__HEAD:
+        w->piece = MPSD__RECORD;
+        return;
+    case MPSD__RECORD:
+        if (++w->layer < d->layer_count) return;
+        w->layer = 0;
+        w->piece = MPSD__COMPRESSION;
+        return;
+    case MPSD__COMPRESSION:                   /* rows follow, unless the layer is empty */
+        if (d->layers[w->layer].rgba) { w->piece = rle ? MPSD__COUNT : MPSD__ROW; return; }
+        break;
+    case MPSD__COUNT:
+        if (++w->row < d->height) return;
+        w->row   = 0;
+        w->piece = MPSD__ROW;
+        return;
+    case MPSD__ROW:
+        if (++w->row < d->height) return;
+        w->row = 0;
+        break;
+    case MPSD__TAIL:
+        w->piece = rle ? MPSD__COMPOSITE_COUNT : MPSD__COMPOSITE_ROW;
+        return;
+    default:                                  /* the composite: channel by channel, row by row */
+        if (++w->row < d->height) return;
+        w->row = 0;
+        if (++w->channel < 4) return;
+        w->channel = 0;
+        w->piece   = w->piece == MPSD__COMPOSITE_COUNT ? MPSD__COMPOSITE_ROW : MPSD__DONE;
+        return;
+    }
+    /* A layer channel is complete: the next channel, the next layer, or the tail. */
+    w->piece = MPSD__COMPRESSION;
+    if (++w->channel < 4) return;
+    w->channel = 0;
+    if (++w->layer < d->layer_count) return;
+    w->layer = 0;
+    w->piece = MPSD__TAIL;
+}
+
+MINIPSDDEF int minipsd_writer_fill(minipsd_writer *w, void *buf, size_t cap, size_t *produced)
+{
+    size_t n = 0;
+    if (produced) *produced = 0;
+    if (!w || !produced || (!buf && cap)) return MINIPSD_ERR_ARG;
+    while (w->piece != MPSD__DONE && n < cap) {
+        mpsd__window win;
+        mpsd__sink   s;
+        win.out = (uint8_t *)buf + n; win.skip = w->offset; win.seen = 0; win.room = cap - n; win.taken = 0;
+        s.fn = mpsd__window_out; s.user = &win; s.count = 0; s.failed = 0;
+        mpsd__writer_piece(w, &s);
+        n         += win.taken;
+        w->offset += win.taken;
+        if (w->offset < s.count) break;       /* buf is full inside this piece */
+        mpsd__writer_next(w);
+    }
+    *produced = n;
+    return w->piece == MPSD__DONE ? MINIPSD_OK : MINIPSD_MORE;
 }
 
 /* --- the push writer --- */
@@ -292,7 +476,8 @@ MINIPSDDEF int minipsd_write(const minipsd_doc *d, minipsd_write_fn fn, void *us
     uint64_t       *sizes;
     uint8_t        *row;
     uint64_t        info, content;
-    uint32_t        y, res;
+    uint32_t        y;
+    size_t          i;
     int             k, rc = d ? minipsd_doc_check(d) : MINIPSD_ERR_ARG;   /* d spelled out for static analysers */
     if (rc != MINIPSD_OK) return rc;
     if (!fn) return MINIPSD_ERR_ARG;
@@ -305,40 +490,15 @@ MINIPSDDEF int minipsd_write(const minipsd_doc *d, minipsd_write_fn fn, void *us
     if (!row) { MINIPSD_FREE(sizes); return MINIPSD_ERR_ALLOC; }
     mpsd__composite_init(&comp, d, row);
 
-    /* Header. */
-    mpsd__put(&s, "8BPS", 4);
-    mpsd__u16(&s, 1);                         /* version: PSD        */
-    mpsd__zeros(&s, 6);
-    mpsd__u16(&s, 4);                         /* R, G, B, alpha      */
-    mpsd__u32(&s, d->height);
-    mpsd__u32(&s, d->width);
-    mpsd__u16(&s, 8);                         /* bits per channel    */
-    mpsd__u16(&s, 3);                         /* colour mode: RGB    */
-
-    mpsd__u32(&s, 0);                         /* colour mode data    */
-
-    /* Image resources: resolution, then the ICC profile if any. */
-    mpsd__u32(&s, (uint32_t)mpsd__resources_size(d));
-    res = (uint32_t)(d->dpi * 65536.0 + 0.5);  /* 16.16 fixed point */
-    mpsd__put(&s, "8BIM", 4); mpsd__u16(&s, 1005); mpsd__u16(&s, 0); mpsd__u32(&s, 16);
-    mpsd__u32(&s, res); mpsd__u16(&s, 1); mpsd__u16(&s, 1);   /* pixels per inch, shown in inches */
-    mpsd__u32(&s, res); mpsd__u16(&s, 1); mpsd__u16(&s, 1);
-    if (d->icc) {
-        mpsd__put(&s, "8BIM", 4); mpsd__u16(&s, 1039); mpsd__u16(&s, 0);
-        mpsd__u32(&s, (uint32_t)d->icc_size);
-        mpsd__put(&s, d->icc, d->icc_size);
-        mpsd__zeros(&s, d->icc_size & 1);
-    }
-
-    /* Layer and mask information. */
-    mpsd__u32(&s, (uint32_t)(4 + info + 4));
-    mpsd__u32(&s, (uint32_t)info);
-    mpsd__layer_info(&s, d, sizes);
-    mpsd__zeros(&s, (size_t)(info - content));
-    mpsd__u32(&s, 0);                         /* global layer mask   */
+    mpsd__head(&s, d, info);
+    for (i = 0; i < d->layer_count; ++i)
+        mpsd__layer_record(&s, d, &d->layers[i], sizes + i * 4);
+    for (i = 0; i < d->layer_count; ++i)
+        for (k = 0; k < 4; ++k)
+            mpsd__layer_channel(&s, d, &d->layers[i], mpsd__channel_of[k]);
+    mpsd__tail(&s, d, content, info);
 
     /* The composite: R, G, B, then its transparency (RGBA offsets 0..3), each channel's rows in turn. */
-    mpsd__u16(&s, d->compression == MINIPSD_RAW ? 0 : 1);
     if (d->compression != MINIPSD_RAW)
         for (k = 0; k < 4; ++k)
             for (y = 0; y < d->height; ++y)

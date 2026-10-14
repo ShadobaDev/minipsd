@@ -8,8 +8,10 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
 ### Added
 - `minipsd_doc_check`: validates a document without writing it.
 - `MINIPSD_MORE` (positive, not an error): errors stay negative, so `rc < 0` tests for failure.
-- The pull writer's first part: `minipsd_writer_workspace_size`, `minipsd_writer_init` and
-  `minipsd_writer_total` give the exact file size before the first byte, with no allocation.
+- The pull writer, for memory, blocking and non-blocking targets alike, with no allocation:
+  `minipsd_writer_workspace_size`, `minipsd_writer_init` and `minipsd_writer_total` give the exact
+  file size before the first byte; `minipsd_writer_fill` then produces the file into the caller's
+  buffer, any size at a time, never waiting.
 
 ### Changed
 - The implementation moved out of `minipsd.h` into `include/minipsd/`; `minipsd.h` keeps the

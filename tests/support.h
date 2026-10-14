@@ -15,6 +15,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -245,6 +246,32 @@ std::uint64_t pullTotal(const minipsd_doc &d, std::size_t offset = 0)
     EXPECT_EQ(minipsd_writer_init(&w, &d, workspace.data() + offset, size), MINIPSD_OK);
     EXPECT_NE(w, nullptr);
     return minipsd_writer_total(w);
+}
+
+// The whole file through the pull writer, cap bytes per call; cap 0 draws a cap of 1..97 per call.
+// Checks the protocol on the way: every call but the last fills buf, and the size is the total.
+Bytes pull(const minipsd_doc &d, std::size_t cap)
+{
+    std::size_t size = 0;
+    EXPECT_EQ(minipsd_writer_workspace_size(&d, &size), MINIPSD_OK);
+    Bytes workspace(size), out, buf;
+    minipsd_writer *w = nullptr;
+    EXPECT_EQ(minipsd_writer_init(&w, &d, workspace.data(), size), MINIPSD_OK);
+    if (!w) return out;
+    std::uint32_t state = 12345;
+    int rc = MINIPSD_MORE;
+    while (rc == MINIPSD_MORE) {
+        std::size_t c = cap;
+        if (!c) { state = state * 1664525u + 1013904223u; c = 1 + (state >> 16) % 97; }
+        buf.assign(c, 0xEE);
+        std::size_t n = 0;
+        rc = minipsd_writer_fill(w, buf.data(), c, &n);
+        if (rc == MINIPSD_MORE && n != c) { ADD_FAILURE() << "a call that is not the last fills buf"; break; }
+        out.insert(out.end(), buf.begin(), buf.begin() + static_cast<std::ptrdiff_t>(n));
+    }
+    EXPECT_EQ(rc, MINIPSD_OK);
+    EXPECT_EQ(out.size(), minipsd_writer_total(w));
+    return out;
 }
 
 } // namespace

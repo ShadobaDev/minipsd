@@ -184,13 +184,18 @@ int      minipsd_writer_fill (minipsd_writer *w, void *buf, size_t cap, size_t *
   - the writer itself;
   - the per-channel size table (`layer_count * 4` values);
   - the composite row sizes (`4 * height` values);
-  - one composite row (`width * 4` bytes);
-  - one staging area: one encoded row, at least 64 bytes for the headers.
+  - one composite row (`width * 4` bytes).
 
-  That is today's allocations plus the row sizes, which today are recomputed.
-- **Cursor.** The writer's state is a position in a fixed sequence of pieces:
-  `section, layer, channel, row`. It also tracks how much of the current staged piece has been
-  handed out. `fill` stages the next piece, copies what fits, and returns.
+  That is `minipsd_write`'s allocations plus the composite row sizes, which it recomputes.
+- **Cursor.** The writer's state is a position in a fixed sequence of small pieces: the head, each
+  layer record, each layer channel's compression, row count and row, the tail, each composite row
+  count and row. It also tracks how many bytes of the current piece have been handed out.
+- **No staging buffer.** `fill` produces the current piece again from its start, through a sink
+  that copies only the bytes not yet handed out and only as many as fit. A piece is one row at
+  most (the ICC profile is copied, not re-encoded), so a call that stops inside a row costs one
+  more encoding of that row: nothing with a buffer of a few rows, quadratic in the row only for
+  tiny caps. The composite row being produced is blended once and kept. A staging buffer would
+  remove that cost at the price of workspace; it is left out until a caller needs tiny caps.
   - Any `cap >= 1` works, so a caller with a 1-byte buffer still gets the whole file.
   - A non-blocking caller writes as much of `buf` as the target accepts and keeps the rest for
     the next round. The library never needs to know about partial writes.

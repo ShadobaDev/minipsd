@@ -103,7 +103,7 @@ No byte change. See [Writer](CODE-ARCH.md#writer).
       the sizing pass runs into a caller workspace, which may have any alignment. Serves `W1`,
       `W4`, `W10`.
       *Done when:* `total` equals the golden file sizes.
-- [ ] **S2.3** `minipsd_writer_fill`: the cursor state machine. Serves `W3`, `W5`.
+- [x] **S2.3** `minipsd_writer_fill`: the cursor state machine. Serves `W3`, `W5`.
       *Done when:* the golden bytes come out with any `cap` (1, 7, random, the exact total), and
       through a fake non-blocking target that accepts 0 to k bytes per round.
 - [ ] **S2.4** `minipsd_write` rebuilt on `init` and `fill`; `MINIPSD_NO_MALLOC` removes it and

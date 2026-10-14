@@ -277,6 +277,27 @@ MINIPSDDEF int minipsd_writer_init(minipsd_writer **w, const minipsd_doc *doc, m
  */
 MINIPSDDEF uint64_t minipsd_writer_total(const minipsd_writer *w);
 
+/**
+ * \brief Produces the next bytes of the file into buf.
+ *
+ * Call it until it returns MINIPSD_OK.  Each call fills buf with as many bytes as fit, in file
+ * order, and returns at once: the writer never waits on anything, so it suits a non-blocking
+ * target as well as a blocking one.  A target that took only part of the bytes is the caller's
+ * business: keep the rest and send it before calling again.  Any cap works, 1 included; a call
+ * re-encodes the row it stops in, so a buffer of a few rows (64 KiB is plenty) keeps that cost
+ * negligible.  The bytes are those minipsd_write produces for the same document.
+ *
+ * \param w        A writer from minipsd_writer_init.
+ * \param buf      Receives up to cap bytes.
+ * \param cap      The size of buf in bytes; 0 produces nothing.
+ * \param produced Receives how many bytes went into buf.
+ * \return MINIPSD_MORE while bytes remain; MINIPSD_OK when the last byte has been produced (and on
+ *         every call after that, producing nothing); or an error code.
+ *
+ * \retval MINIPSD_ERR_ARG w or produced is NULL, or buf is NULL with cap above 0.
+ */
+MINIPSDDEF int minipsd_writer_fill(minipsd_writer *w, void *buf, size_t cap, size_t *produced);
+
 #ifndef MINIPSD_NO_STDIO
 /**
  * \brief Writes a document as PSD to a file, replacing it if it exists.

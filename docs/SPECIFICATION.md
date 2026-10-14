@@ -133,6 +133,7 @@ caller's memory:
 | `minipsd_workspace` | caller; lent to the writer | `minipsd_writer_workspace_size()` | for as long as the writer is used | heap; stack or static sized for the largest document |
 | `minipsd_writer` | inside `minipsd_workspace`; opaque | part of the workspace | as the workspace | the caller keeps only the pointer |
 | raw PSD bytes | passed to the callback of `minipsd_write()` | pieces of any size, in order | the callback copies what it keeps | the callback decides |
+| output buffer, `buf` of `minipsd_writer_fill()` | caller | any `cap`, 1 included; a few rows (64 KiB) keeps re-encoding negligible | the call | stack, static or heap |
 | `minipsd_write()` internals | minipsd, `MINIPSD_MALLOC` / `MINIPSD_FREE` | the workspace's tables and one row | the call | heap |
 | UTF-16 path, `minipsd_write_file()` on Windows | minipsd, as above | the converted path | the call | heap |
 

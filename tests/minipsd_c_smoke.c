@@ -33,9 +33,9 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
     minipsd_layer   layers[2];
     minipsd_doc     doc;
     minipsd_writer *w;
-    uint8_t         workspace[256];
+    uint8_t         workspace[256], again[1024];
     smoke_buf       b;
-    size_t          i, need;
+    size_t          i, need, n, pulled = 0;
     int             rc;
 
     for (i = 0; i < sizeof px; ++i) px[i] = (uint8_t)(i * 17);
@@ -54,10 +54,17 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
     *size = b.size;
     if (rc != MINIPSD_OK) return rc;
 
-    /* The pull writer, from a stack workspace: it knows the size before writing. */
+    /* The pull writer, from a stack workspace: it knows the size before writing, then gives the
+       same bytes 7 at a time. */
     if (minipsd_writer_workspace_size(&doc, &need) != MINIPSD_OK || need > sizeof workspace
         || minipsd_writer_init(&w, &doc, workspace, need) != MINIPSD_OK
-        || minipsd_writer_total(w) != b.size)
+        || minipsd_writer_total(w) != b.size || b.size > sizeof again)
         return -101;
+    do {
+        rc = minipsd_writer_fill(w, again + pulled, 7 < sizeof again - pulled ? 7 : sizeof again - pulled, &n);
+        pulled += n;
+    } while (rc == MINIPSD_MORE);
+    if (rc != MINIPSD_OK || pulled != b.size || memcmp(again, b.data, b.size) != 0)
+        return -102;
     return MINIPSD_OK;
 }

@@ -138,6 +138,8 @@ TEST(MinipsdGoldenTest, OutputMatchesTheBytesOf010)
         ASSERT_EQ(rc, MINIPSD_OK) << minipsd_error_string(rc);
         EXPECT_EQ(sha256(out), t.golden.sha256) << "the bytes of '" << t.golden.name << "' changed";
         EXPECT_EQ(pullTotal(t.doc), out.size()) << "the pull writer knows the size before writing";
+        for (std::size_t cap : {std::size_t(1), std::size_t(7), std::size_t(4096), out.size(), std::size_t(0)})
+            EXPECT_EQ(pull(t.doc, cap), out) << "pulled " << (cap ? std::to_string(cap) : "random") << " bytes at a time";
     }
 }
 
