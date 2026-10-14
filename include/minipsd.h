@@ -7,6 +7,7 @@
  * include/ directory.  Sections:
  * - Version and linkage
  * - Return codes
+ * - Workspace
  * - Document
  * - Writer
  *
@@ -123,6 +124,18 @@ enum {
  * \return A static string; "unknown error" for codes minipsd does not return.
  */
 MINIPSDDEF const char *minipsd_error_string(int code);
+
+/* --- Workspace ----------------------------------------------------------------------------- */
+
+/**
+ * \brief Caller memory lent to a minipsd object (the writer; later the reader).
+ *
+ * Its size depends on the document, so it has no layout of its own: the object's
+ * *_workspace_size function says how many bytes it needs, and its init function lays the object
+ * out inside.  Any alignment will do.  minipsd never allocates or frees it; it must stay valid for
+ * as long as the object is used.  A void typedef, so any pointer converts to it without a cast.
+ */
+typedef void minipsd_workspace;
 
 /* --- Document ------------------------------------------------------------------------------ */
 
@@ -253,7 +266,8 @@ MINIPSDDEF int minipsd_writer_workspace_size(const minipsd_doc *doc, size_t *siz
  * \retval MINIPSD_ERR_SIZE As minipsd_doc_check, or the compressed layers do not fit a 32-bit
  *                          section length.
  */
-MINIPSDDEF int minipsd_writer_init(minipsd_writer **w, const minipsd_doc *doc, void *workspace, size_t size);
+MINIPSDDEF int minipsd_writer_init(minipsd_writer **w, const minipsd_doc *doc, minipsd_workspace *workspace,
+                                   size_t size);
 
 /**
  * \brief The size of the whole file in bytes, known once minipsd_writer_init succeeded.

@@ -126,15 +126,15 @@ minipsd owns nothing the caller passes in, never copies a document, and allocate
 `minipsd_write` and `minipsd_write_file`, freeing it before they return. Everything else is the
 caller's memory:
 
-| Memory | Owner | Size | Must stay valid | May live in |
+| Name | Owner | Size | Must stay valid | May live in |
 |---|---|---|---|---|
-| `minipsd_doc`, the `minipsd_layer` array | caller; borrowed | `sizeof` each; the array has `layer_count` entries | for the call (`minipsd_write`); from `minipsd_writer_init` for as long as the writer is used | stack, static or heap |
-| layer pixels (`rgba`), names, ICC profile | caller; borrowed, read in place, never copied | `width * height * 4` bytes per layer | as the document | wherever the application keeps them |
-| pull-writer workspace | caller; lent to the writer | `minipsd_writer_workspace_size`: the writer, the per-channel size table (`layer_count * 4 * 8` bytes), the composite's row sizes (`4 * height * 2` bytes, RLE only), one composite row (`width * 4` bytes), alignment slack | for as long as the writer is used | heap; or stack / static sized for the largest document, since the size grows only with the layer count, width and height |
-| `minipsd_writer` | lives at the start of the workspace; opaque | part of the workspace size | as the workspace | the caller keeps only the pointer |
-| the file's bytes, `minipsd_write` | the callback | pieces of any size, in order | the callback copies what it keeps before returning | the callback decides |
-| inside `minipsd_write` | minipsd, through `MINIPSD_MALLOC` / `MINIPSD_FREE` | the size table and one composite row, as above | the call | heap |
-| inside `minipsd_write_file` (Windows) | minipsd, as above | the UTF-16 copy of the path | the call | heap |
+| `minipsd_doc`, `minipsd_layer[]` | caller; borrowed | `sizeof`; `layer_count` layers | the call; for the pull writer, from init for as long as the writer is used | stack, static, heap |
+| raw document data: layer pixels (`rgba`), names, ICC profile | caller; borrowed, read in place, never copied | `width * height * 4` bytes per layer | as `minipsd_doc` | wherever the application keeps it |
+| `minipsd_workspace` | caller; lent to the writer | `minipsd_writer_workspace_size()` | for as long as the writer is used | heap; stack or static sized for the largest document |
+| `minipsd_writer` | inside `minipsd_workspace`; opaque | part of the workspace | as the workspace | the caller keeps only the pointer |
+| raw PSD bytes | passed to the callback of `minipsd_write()` | pieces of any size, in order | the callback copies what it keeps | the callback decides |
+| `minipsd_write()` internals | minipsd, `MINIPSD_MALLOC` / `MINIPSD_FREE` | the workspace's tables and one row | the call | heap |
+| UTF-16 path, `minipsd_write_file()` on Windows | minipsd, as above | the converted path | the call | heap |
 
 - **The document is read-only and frozen while in use.** The pull writer sizes everything in
   `minipsd_writer_init`; a document changed afterwards would no longer match the sizes already

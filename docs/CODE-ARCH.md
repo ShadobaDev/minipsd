@@ -59,7 +59,9 @@ The rules apply to `include/` only. Tests and examples may use anything.
 | `<stdlib.h>` only behind the 0.1-compatible `minipsd_write` (see [Writer](#writer)) | allocation anywhere else |
 
 - **Objects with state are opaque** (the writer, later the reader): `minipsd.h` declares the
-  type only, and `init` builds the object inside the caller's workspace.
+  type only, and `init` builds the object inside the caller's workspace, a `minipsd_workspace *`
+  (`typedef void`: a name for memory whose size depends on the document). Plain data buffers stay
+  `void *` or `uint8_t *`.
 - **Public structs carry data only:**
   - fixed-width integers, `size_t`, `double`, `const` pointers to bytes, and nested structs of
     the same;
@@ -163,7 +165,7 @@ bytes as the caller has room for.
 
 ```c
 int      minipsd_writer_workspace_size(const minipsd_doc *doc, size_t *size);
-int      minipsd_writer_init (minipsd_writer **w, const minipsd_doc *doc, void *workspace, size_t size);
+int      minipsd_writer_init (minipsd_writer **w, const minipsd_doc *doc, minipsd_workspace *workspace, size_t size);
 uint64_t minipsd_writer_total(const minipsd_writer *w);              /* the file size, known after init */
 int      minipsd_writer_fill (minipsd_writer *w, void *buf, size_t cap, size_t *produced);
                              /* MINIPSD_MORE: call again; MINIPSD_OK: the file is complete */
@@ -228,7 +230,7 @@ int minipsd_layer_name       (const minipsd_layer_view *layer, char *utf8, size_
   | Memory | Owner | Notes |
   |---|---|---|
   | the file's bytes (the blob) | caller; borrowed, never copied | read in, `mmap`ed or received; must stay valid while views point into it |
-  | reader workspace | caller; lent to the reader | the opaque `minipsd_reader` and its state (section offsets, the layer cursor, later an index for `R5`); small; heap, stack or static |
+  | `minipsd_workspace` | caller; lent to the reader | the opaque `minipsd_reader` and its state (section offsets, the layer cursor, later an index for `R5`); small; heap, stack or static |
   | `minipsd_info`, `minipsd_layer_view` | caller | fixed size, stack; their `minipsd_bytes` fields point into the blob |
   | decoded pixels | caller | the target descriptor (`X2`) says where; one layer at a time (`R6`) or all of them (`R7`) |
   | a whole `minipsd_doc` (`R7`) | caller | stage 5: sizes first, then the caller's buffers or allocator; never a copy kept by the reader |

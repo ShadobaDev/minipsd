@@ -215,7 +215,7 @@ struct minipsd_writer {
 /* Lays the workspace out and returns the bytes it takes, alignment slack included: the writer,
    the size table, the composite row sizes (RLE only), one composite row.  With a workspace, the
    writer is built at its aligned start and returned through *w. */
-static size_t mpsd__writer_layout(const minipsd_doc *d, void *workspace, minipsd_writer **w)
+static size_t mpsd__writer_layout(const minipsd_doc *d, minipsd_workspace *workspace, minipsd_writer **w)
 {
     const size_t self  = mpsd__pad(sizeof(minipsd_writer), MPSD__ALIGN);
     const size_t sizes = d->layer_count * 4 * sizeof(uint64_t);
@@ -240,7 +240,8 @@ MINIPSDDEF int minipsd_writer_workspace_size(const minipsd_doc *d, size_t *size)
     return MINIPSD_OK;
 }
 
-MINIPSDDEF int minipsd_writer_init(minipsd_writer **out, const minipsd_doc *d, void *workspace, size_t size)
+MINIPSDDEF int minipsd_writer_init(minipsd_writer **out, const minipsd_doc *d, minipsd_workspace *workspace,
+                                   size_t size)
 {
     minipsd_writer *w = NULL;
     mpsd__composite comp;
