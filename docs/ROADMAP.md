@@ -43,7 +43,7 @@ The order of work from 0.1.0 to the design in [CODE-ARCH.md](CODE-ARCH.md). Case
 
 - [x] **S0.1** Target architecture, [CODE-ARCH.md](CODE-ARCH.md), reviewed; decisions recorded.
 - [x] **S0.2** Use cases catalogued, [USE-CASES.md](USE-CASES.md).
-- [ ] **S0.3** Golden test: `tests/test_golden.cpp` writes a fixed set of documents and compares
+- [x] **S0.3** Golden test: `tests/test_golden.cpp` writes a fixed set of documents and compares
       each file's SHA-256 against hashes recorded from the 0.1.0 code. The set covers:
       - RLE and RAW;
       - an empty layer, a hidden layer, partial opacity;

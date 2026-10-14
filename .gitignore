@@ -19,3 +19,6 @@ graphify-out
 temp
 # Python virtual environments
 .venv
+
+## Ignore test fixtures
+tests/fixtures/Test-g-example.psd

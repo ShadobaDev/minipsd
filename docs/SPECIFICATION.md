@@ -193,6 +193,9 @@ Platemaker is the first consumer. Breaking any of these breaks it:
   (`.clang-tidy`, findings are errors), and with coverage of `minipsd.h`: **lines must stay at
   100 %** and branches at 95 % or more, so new code comes with the test that executes it,
   error paths included (`test_alloc_failure.cpp` fails each allocation in turn).
+- **Golden bytes:** `test_golden.cpp` writes a fixed set of documents and compares each file's
+  SHA-256 with the hash recorded from 0.1.0. A change meant to keep the output must leave every
+  hash alone; changing a hash there is the explicit, reviewed sign of a byte change.
 
 ## Distribution and SBOM
 

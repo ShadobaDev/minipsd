@@ -2,7 +2,7 @@
 # minipsd tests
 #
 #   minipsd-tests      GoogleTest: the writer, read back field by field, built as C99 + C++20;
-#                      plus allocation failures
+#                      plus allocation failures and the golden bytes of 0.1.0
 #   minipsd-cxx17      compile-only: the header and its implementation as C++17
 #   consumer-<mode>    a tiny project using minipsd each supported way (see consumer/)
 # ---------------------------------------------------------------------------
@@ -32,6 +32,7 @@ add_executable(minipsd-tests
     test_minipsd.cpp
     minipsd_c_smoke.c        # minipsd.h compiled as C, compared byte for byte with the C++ build
     test_alloc_failure.cpp   # minipsd.h with an allocator that fails on demand
+    test_golden.cpp          # the bytes of 0.1.0, by SHA-256, for a fixed set of documents
 )
 target_link_libraries(minipsd-tests PRIVATE minipsd::minipsd GTest::gtest GTest::gtest_main)
 target_compile_options(minipsd-tests PRIVATE ${MINIPSD_WARNINGS})
