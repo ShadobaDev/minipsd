@@ -16,7 +16,7 @@
 #define MINIPSD_IMPLEMENTATION
 #include "minipsd.h"
 
-#include <gtest/gtest.h>
+#include "support.h"
 
 #include <array>
 #include <cstdint>
@@ -25,8 +25,6 @@
 #include <vector>
 
 namespace {
-
-using Bytes = std::vector<std::uint8_t>;
 
 // SHA-256 (FIPS 180-4), so the recorded hashes can be checked with sha256sum on a written file.
 std::string sha256(const Bytes &msg)
@@ -73,13 +71,6 @@ std::string sha256(const Bytes &msg)
         hex += buf;
     }
     return hex;
-}
-
-int collect(void *user, const void *data, size_t size)
-{
-    const auto *p = static_cast<const std::uint8_t *>(data);
-    static_cast<Bytes *>(user)->insert(static_cast<Bytes *>(user)->end(), p, p + size);
-    return 1;
 }
 
 // Deterministic pixels: flat runs (some longer than 128 px), a gradient and noise, varied alpha.
@@ -146,6 +137,7 @@ TEST(MinipsdGoldenTest, OutputMatchesTheBytesOf010)
         const int rc = minipsd_write(&t.doc, collect, &out);
         ASSERT_EQ(rc, MINIPSD_OK) << minipsd_error_string(rc);
         EXPECT_EQ(sha256(out), t.golden.sha256) << "the bytes of '" << t.golden.name << "' changed";
+        EXPECT_EQ(pullTotal(t.doc), out.size()) << "the pull writer knows the size before writing";
     }
 }
 

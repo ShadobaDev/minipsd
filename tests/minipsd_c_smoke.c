@@ -31,10 +31,12 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
 {
     uint8_t       px[3 * 2 * 4];
     minipsd_layer layers[2];
-    minipsd_doc   doc;
-    smoke_buf     b;
-    size_t        i;
-    int           rc;
+    minipsd_doc    doc;
+    minipsd_writer w;
+    uint8_t        workspace[256];
+    smoke_buf      b;
+    size_t         i, need;
+    int            rc;
 
     for (i = 0; i < sizeof px; ++i) px[i] = (uint8_t)(i * 17);
     layers[0].name = "Template"; layers[0].rgba = px;   layers[0].opacity = 255; layers[0].hidden = 0;
@@ -43,11 +45,19 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
     doc.width = 3; doc.height = 2; doc.dpi = 300.0; doc.layers = layers; doc.layer_count = 2;
 
     /* Every function, so a static build has none unused. */
-    if (minipsd_write_file(NULL, NULL) != MINIPSD_ERR_ARG || !minipsd_error_string(MINIPSD_OK)[0])
+    if (minipsd_write_file(NULL, NULL) != MINIPSD_ERR_ARG || !minipsd_error_string(MINIPSD_OK)[0]
+        || minipsd_doc_check(&doc) != MINIPSD_OK)
         return -100;
 
     b.data = out; b.size = 0; b.capacity = capacity;
     rc = minipsd_write(&doc, smoke_out, &b);
     *size = b.size;
-    return rc;
+    if (rc != MINIPSD_OK) return rc;
+
+    /* The pull writer, from a stack workspace: it knows the size before writing. */
+    if (minipsd_writer_workspace_size(&doc, &need) != MINIPSD_OK || need > sizeof workspace
+        || minipsd_writer_init(&w, &doc, workspace, need) != MINIPSD_OK
+        || minipsd_writer_total(&w) != b.size)
+        return -101;
+    return MINIPSD_OK;
 }

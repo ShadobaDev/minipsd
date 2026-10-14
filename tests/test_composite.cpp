@@ -18,14 +18,15 @@ namespace {
 Bytes composite(std::uint32_t w, std::uint32_t h, const minipsd_layer *layers, size_t n)
 {
     const minipsd_doc d = docOf(w, h, layers, n);
+    Bytes buffer(std::size_t(w) * 4);
     mpsd__composite c;
-    EXPECT_EQ(mpsd__composite_init(&c, &d), MINIPSD_OK);
+    mpsd__composite_init(&c, &d, buffer.data());
     Bytes out;
     for (std::uint32_t y = 0; y < h; ++y) {
         const std::uint8_t *row = mpsd__composite_row(&c, y);
+        EXPECT_EQ(row, buffer.data()) << "the row is built in the caller's buffer";
         out.insert(out.end(), row, row + std::size_t(w) * 4);
     }
-    mpsd__composite_free(&c);
     return out;
 }
 

@@ -14,16 +14,15 @@
 
 typedef struct mpsd__composite {
     const minipsd_doc *doc;
-    uint8_t           *row;      /* width * 4 */
+    uint8_t           *row;      /* width * 4, the caller's */
 } mpsd__composite;
 
 static int mpsd__contributes(const minipsd_layer *l) { return l->rgba && !l->hidden && l->opacity; }
 
-static int mpsd__composite_init(mpsd__composite *c, const minipsd_doc *d)
+static void mpsd__composite_init(mpsd__composite *c, const minipsd_doc *d, uint8_t *row)
 {
     c->doc = d;
-    c->row = (uint8_t *)MINIPSD_MALLOC((size_t)d->width * 4);
-    return c->row ? MINIPSD_OK : MINIPSD_ERR_ALLOC;
+    c->row = row;
 }
 
 static const uint8_t *mpsd__composite_row(mpsd__composite *c, uint32_t y)
@@ -58,7 +57,5 @@ static const uint8_t *mpsd__composite_row(mpsd__composite *c, uint32_t y)
     }
     return c->row;
 }
-
-static void mpsd__composite_free(mpsd__composite *c) { MINIPSD_FREE(c->row); }   /* only after a successful init */
 
 #endif /* MPSD__COMPOSITE_DONE */

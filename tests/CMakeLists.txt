@@ -34,6 +34,7 @@ endif()
 # Every test file includes only minipsd.h, so each also runs against the amalgamated file.
 set(_minipsd_test_sources
     test_base.cpp
+    test_document.cpp
     test_bytes.cpp
     test_utf.cpp
     test_packbits.cpp

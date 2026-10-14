@@ -234,6 +234,18 @@ minipsd_doc docOf(std::uint32_t w, std::uint32_t h, const minipsd_layer *layers,
     return d;
 }
 
+// The pull writer's file size, from a workspace of exactly the size it asks for, starting
+// `offset` bytes into a buffer (so any alignment is exercised).
+std::uint64_t pullTotal(const minipsd_doc &d, std::size_t offset = 0)
+{
+    std::size_t size = 0;
+    EXPECT_EQ(minipsd_writer_workspace_size(&d, &size), MINIPSD_OK);
+    Bytes workspace(size + offset);
+    minipsd_writer w;
+    EXPECT_EQ(minipsd_writer_init(&w, &d, workspace.data() + offset, size), MINIPSD_OK);
+    return minipsd_writer_total(&w);
+}
+
 } // namespace
 
 #endif // MINIPSD_TESTS_SUPPORT_H

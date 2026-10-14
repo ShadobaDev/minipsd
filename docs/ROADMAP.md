@@ -94,9 +94,9 @@ See [Files and modules](CODE-ARCH.md#files-and-modules).
 
 No byte change. See [Writer](CODE-ARCH.md#writer).
 
-- [ ] **S2.1** `minipsd_doc_check` public. New return code `MINIPSD_MORE = 1`, so success means
+- [x] **S2.1** `minipsd_doc_check` public. New return code `MINIPSD_MORE = 1`, so success means
       `rc >= 0`; documented where callers compare against `MINIPSD_OK`.
-- [ ] **S2.2** `minipsd_writer_workspace_size`, `minipsd_writer_init`, `minipsd_writer_total`:
+- [x] **S2.2** `minipsd_writer_workspace_size`, `minipsd_writer_init`, `minipsd_writer_total`:
       the sizing pass runs into a caller workspace, which may have any alignment. Serves `W1`,
       `W4`, `W10`.
       *Done when:* `total` equals the golden file sizes.

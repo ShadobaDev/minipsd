@@ -14,6 +14,7 @@ MINIPSDDEF const char *minipsd_error_string(int code)
 {
     switch (code) {
     case MINIPSD_OK:        return "success";
+    case MINIPSD_MORE:      return "not finished: call again";
     case MINIPSD_ERR_ARG:   return "invalid argument";
     case MINIPSD_ERR_SIZE:  return "too large for PSD: a side outside 1..30000, or a section above 4 GiB";
     case MINIPSD_ERR_WRITE: return "write failed";

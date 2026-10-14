@@ -98,9 +98,16 @@
 
 /* --- Return codes -------------------------------------------------------------------------- */
 
-/** \brief Return codes: MINIPSD_OK, or one of the negative errors. */
+/**
+ * \brief Return codes: MINIPSD_OK, MINIPSD_MORE, or one of the negative errors.
+ *
+ * Errors are negative and success is not, so a caller that also drives the pull writer tests
+ * `rc < 0` for failure; `rc == MINIPSD_OK` stays right for every function that never returns
+ * MINIPSD_MORE.
+ */
 enum {
     MINIPSD_OK          =  0, /*!< Success.                                                   */
+    MINIPSD_MORE        =  1, /*!< Not an error: the work is not finished, call again.         */
     MINIPSD_ERR_ARG     = -1, /*!< A NULL document, no layers, or a dpi outside (0, 65536).    */
     MINIPSD_ERR_SIZE    = -2, /*!< A side is 0 or above MINIPSD_MAX_SIDE, or the document is too
                                    large for PSD's 32-bit section lengths (about 4 GiB).      */
@@ -158,6 +165,23 @@ typedef struct minipsd_doc {
     int                  compression;    /*!< MINIPSD_RLE or MINIPSD_RAW.                    */
 } minipsd_doc;
 
+/**
+ * \brief Checks that a document can be written as PSD, without writing anything.
+ *
+ * The writer runs the same check first; call it alone to validate a document early.  One limit
+ * is left to the writer: the layer section must fit 4 GiB once compressed, which only the sizing
+ * pass can tell (MINIPSD_ERR_SIZE from minipsd_writer_init or minipsd_write).
+ *
+ * \param doc The document to check.
+ * \return MINIPSD_OK or an error code.
+ *
+ * \retval MINIPSD_ERR_ARG  doc is NULL, there are no layers (or more than 32767), dpi is outside
+ *                          (0, 65536), or icc_size is set without icc.
+ * \retval MINIPSD_ERR_SIZE A side is 0 or above MINIPSD_MAX_SIDE, or the ICC profile does not fit
+ *                          a 32-bit section length.
+ */
+MINIPSDDEF int minipsd_doc_check(const minipsd_doc *doc);
+
 /* --- Writer -------------------------------------------------------------------------------- */
 
 /**
@@ -190,6 +214,61 @@ typedef int (*minipsd_write_fn)(void *user, const void *data, size_t size);
  * \retval MINIPSD_ERR_WRITE fn returned 0; the output is incomplete.
  */
 MINIPSDDEF int minipsd_write(const minipsd_doc *doc, minipsd_write_fn fn, void *user);
+
+/**
+ * \brief The pull writer: produces the file into the caller's buffers, at the caller's pace.
+ *
+ * Every field is private: set them through minipsd_writer_init and read them through the
+ * functions.  The struct is declared here so a caller can place it anywhere, the stack included.
+ * It points into the workspace and at the document, both borrowed: they must stay valid, and the
+ * document unchanged, for as long as the writer is used.
+ */
+typedef struct minipsd_writer {
+    const minipsd_doc *doc;             /*!< Private. */
+    uint64_t          *channel_sizes;   /*!< Private: layer_count * 4, in the workspace.  */
+    uint16_t          *composite_sizes; /*!< Private: 4 * height (RLE), in the workspace. */
+    uint8_t           *composite_row;   /*!< Private: width * 4, in the workspace.        */
+    uint64_t           content, info;   /*!< Private: the layer info's length, unpadded and padded. */
+    uint64_t           total;           /*!< Private: see minipsd_writer_total.          */
+} minipsd_writer;
+
+/**
+ * \brief How many bytes of workspace minipsd_writer_init needs for a document.
+ *
+ * The size covers the per-channel size table, the composite's row sizes and one composite row,
+ * plus slack for aligning them: any pointer will do as the workspace.
+ *
+ * \param doc  The document to write.
+ * \param size Receives the size in bytes.
+ * \return MINIPSD_OK or an error code: as minipsd_doc_check, or MINIPSD_ERR_ARG when size is NULL.
+ */
+MINIPSDDEF int minipsd_writer_workspace_size(const minipsd_doc *doc, size_t *size);
+
+/**
+ * \brief Prepares a pull writer: checks the document and runs the sizing pass.
+ *
+ * Every layer channel and every composite row is compressed once here to learn its size, so the
+ * file's size is known before its first byte (minipsd_writer_total).  Nothing is allocated.
+ *
+ * \param w         The writer to prepare.
+ * \param doc       The document to write; borrowed for as long as the writer is used.
+ * \param workspace At least minipsd_writer_workspace_size bytes, any alignment; borrowed likewise.
+ * \param size      The size of workspace in bytes.
+ * \return MINIPSD_OK or an error code.
+ *
+ * \retval MINIPSD_ERR_ARG  As minipsd_doc_check, or w or workspace is NULL, or size is too small.
+ * \retval MINIPSD_ERR_SIZE As minipsd_doc_check, or the compressed layers do not fit a 32-bit
+ *                          section length.
+ */
+MINIPSDDEF int minipsd_writer_init(minipsd_writer *w, const minipsd_doc *doc, void *workspace, size_t size);
+
+/**
+ * \brief The size of the whole file in bytes, known once minipsd_writer_init succeeded.
+ *
+ * \param w A writer prepared by minipsd_writer_init.
+ * \return The file size; 0 when w is NULL or its init failed.
+ */
+MINIPSDDEF uint64_t minipsd_writer_total(const minipsd_writer *w);
 
 #ifndef MINIPSD_NO_STDIO
 /**

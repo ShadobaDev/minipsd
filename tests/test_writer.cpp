@@ -152,7 +152,9 @@ TEST(MinipsdWriterTest, FractionalDpiIsKept)
     EXPECT_NEAR(read(write(d)).dpiX, 65535.99, 1.0 / 65536);
 }
 
-TEST(MinipsdWriterTest, RejectsBadDocuments)
+// What minipsd_doc_check refuses is in test_document.cpp; here, that the writer refuses it too,
+// and what only the writer can refuse.
+TEST(MinipsdWriterTest, RefusesBeforeWritingAnything)
 {
     const Bytes px = testImage(2, 2);
     const minipsd_layer layer{"L", px.data(), 255, 0};
@@ -160,38 +162,70 @@ TEST(MinipsdWriterTest, RejectsBadDocuments)
 
     EXPECT_EQ(minipsd_write(nullptr, collect, &out), MINIPSD_ERR_ARG);
     minipsd_doc d = docOf(2, 2, &layer, 0);
-    EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_ARG) << "no layers";
-    d = docOf(2, 2, nullptr, 1);
-    EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_ARG) << "a layer count without layers";
-    d = docOf(2, 2, &layer, 32768);   // refused before a layer is read
-    EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_ARG) << "more layers than PSD counts";
-    // The dpi goes out as 16.16 fixed point: it must round to 1 .. 2^32 - 1.
-    for (double dpi : {0.0, -1.0, 1e-9, 65536.0, 1e300,
-                       std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
-        d = docOf(2, 2, &layer, 1); d.dpi = dpi;
-        EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_ARG) << "dpi " << dpi;
-    }
-    d = docOf(2, 2, &layer, 1); d.icc_size = 4;
-    EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_ARG) << "ICC size without data";
+    EXPECT_EQ(minipsd_write(&d, collect, &out), minipsd_doc_check(&d)) << "no layers";
+    d = docOf(0, 2, &layer, 1);
+    EXPECT_EQ(minipsd_write(&d, collect, &out), minipsd_doc_check(&d)) << "no width";
     d = docOf(2, 2, &layer, 1);
     EXPECT_EQ(minipsd_write(&d, nullptr, nullptr), MINIPSD_ERR_ARG) << "no callback";
-    for (const auto &[w, h] : {std::pair<std::uint32_t, std::uint32_t>{0, 2}, {2, 0},
-                               {MINIPSD_MAX_SIDE + 1, 2}, {2, MINIPSD_MAX_SIDE + 1}}) {
-        d = docOf(w, h, &layer, 1);
-        EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_SIZE) << w << " x " << h;
-    }
 
-    // Section lengths are 32-bit.  Both documents are refused before a pixel or an ICC byte is read,
-    // so a 4-byte buffer stands in for gigabytes: RAW channel sizes are arithmetic, and the ICC size
-    // is checked first.  Two full 30000 x 30000 RAW layers are about 7.2 GB of channel data.
+    // The layer section's length is 32-bit, and only compressing tells it.  The document is refused
+    // before a pixel is read, so a 4-byte buffer stands in for gigabytes: RAW channel sizes are
+    // arithmetic.  Two full 30000 x 30000 RAW layers are about 7.2 GB of channel data.
     const std::uint8_t stand_in[4] = {};
     const minipsd_layer huge[2] = {{"A", stand_in, 255, 0}, {"B", stand_in, 255, 0}};
     d = docOf(MINIPSD_MAX_SIDE, MINIPSD_MAX_SIDE, huge, 2); d.compression = MINIPSD_RAW;
+    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_OK) << "every field is fine on its own";
     EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_SIZE) << "layer section above 4 GiB";
-    d = docOf(2, 2, &layer, 1); d.icc = stand_in; d.icc_size = std::numeric_limits<std::uint32_t>::max();
-    EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_SIZE) << "resource section above 4 GiB";
+
+    std::size_t size = 0;
+    ASSERT_EQ(minipsd_writer_workspace_size(&d, &size), MINIPSD_OK);
+    Bytes workspace(size);
+    minipsd_writer w;
+    EXPECT_EQ(minipsd_writer_init(&w, &d, workspace.data(), size), MINIPSD_ERR_SIZE) << "init sizes it too";
+    EXPECT_EQ(minipsd_writer_total(&w), 0u) << "no size for a refused document";
 
     EXPECT_TRUE(out.empty()) << "nothing is written for a refused document";
+}
+
+TEST(MinipsdWriterTest, PullTotalIsTheFileSize)
+{
+    const Bytes px = testImage(37, 5);
+    const Bytes icc = {1, 2, 3, 4, 5};
+    const minipsd_layer layers[3] = {{"Template", px.data(), 255, 0}, {"Layer", nullptr, 255, 0},
+                                     {"Half \xC5\xBC", px.data(), 128, 1}};
+    for (int compression : {MINIPSD_RLE, MINIPSD_RAW})
+        for (bool withIcc : {false, true}) {
+            minipsd_doc d = docOf(37, 5, layers, 3);
+            d.compression = compression;
+            if (withIcc) { d.icc = icc.data(); d.icc_size = icc.size(); }
+            const std::uint64_t written = write(d).size();
+            for (std::size_t offset = 0; offset < 8; ++offset)
+                EXPECT_EQ(pullTotal(d, offset), written)
+                    << "compression " << compression << ", ICC " << withIcc << ", workspace at +" << offset;
+        }
+}
+
+TEST(MinipsdWriterTest, PullWriterRefusesWhatItCannotUse)
+{
+    const Bytes px = testImage(4, 4);
+    const minipsd_layer layer{"L", px.data(), 255, 0};
+    minipsd_doc d = docOf(4, 4, &layer, 1);
+    std::size_t size = 0;
+
+    EXPECT_EQ(minipsd_writer_workspace_size(nullptr, &size), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_writer_workspace_size(&d, nullptr), MINIPSD_ERR_ARG);
+    ASSERT_EQ(minipsd_writer_workspace_size(&d, &size), MINIPSD_OK);
+    Bytes workspace(size);
+    minipsd_writer w;
+    EXPECT_EQ(minipsd_writer_init(nullptr, &d, workspace.data(), size), MINIPSD_ERR_ARG) << "no writer";
+    EXPECT_EQ(minipsd_writer_init(&w, &d, nullptr, size), MINIPSD_ERR_ARG) << "no workspace";
+    EXPECT_EQ(minipsd_writer_init(&w, &d, workspace.data(), size - 1), MINIPSD_ERR_ARG) << "one byte short";
+    EXPECT_EQ(minipsd_writer_init(&w, nullptr, workspace.data(), size), MINIPSD_ERR_ARG) << "no document";
+    EXPECT_EQ(minipsd_writer_total(nullptr), 0u);
+
+    d.width = 0;
+    EXPECT_EQ(minipsd_writer_workspace_size(&d, &size), minipsd_doc_check(&d)) << "the document check comes first";
+    EXPECT_EQ(minipsd_writer_init(&w, &d, workspace.data(), workspace.size()), minipsd_doc_check(&d));
 }
 
 TEST(MinipsdWriterTest, WriteFailureIsReported)
