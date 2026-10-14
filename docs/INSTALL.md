@@ -2,8 +2,10 @@
 
 Every way of adding minipsd to a project, and the SBOM fragment each one carries.
 
-**Copy the header.** Drop `minipsd.h` into your tree. The file carries its own version, licence
-and SPDX tags, so it stays identifiable in an SBOM.
+**Copy the headers.** Copy the `include/` directory (`minipsd.h` and `minipsd/`) into your
+tree and include `minipsd.h`. Every file carries SPDX tags, and `minipsd.h` its version and the
+licence, so the copy stays identifiable in an SBOM. From 0.2.0 on, each GitHub Release also
+attaches the same headers joined into one `minipsd.h`, for those who prefer a single file.
 
 **CMake FetchContent**
 
@@ -40,7 +42,8 @@ As a subproject, minipsd builds no tests, fetches nothing and enables no languag
 **Installed package.** minipsd installs as a tree with nothing platform-specific in it:
 
 ```
-include/minipsd.h
+include/minipsd.h         the public API
+include/minipsd/          its implementation
 share/cmake/minipsd/      CMake package (find_package)
 share/pkgconfig/minipsd.pc
 share/doc/minipsd/        LICENSE.MIT, minipsd.spdx.json

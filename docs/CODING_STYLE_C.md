@@ -32,17 +32,28 @@ repository is in [This project](#this-project) at the end. C++ code follows
 | Internal macro | `<SHORT>__<NAME>` |
 | Local variable, parameter | `snake_case` |
 
-## Single-header libraries
+## Header-only libraries
 
-stb-style layout, in this order:
+stb style: the user includes one public header, and defines `<PREFIX>_IMPLEMENTATION` in exactly
+one source file to compile the implementation there.
 
-1. File heading: what it is, usage, configuration macros, scope.
-2. Declarations, guarded by `<PREFIX>_H`: includes, macros, enums, types, functions. Public
-   functions are declared through one linkage macro (`<PREFIX>DEF`) that becomes `static` under
-   `<PREFIX>_STATIC`.
-3. Implementation, guarded by `<PREFIX>_IMPLEMENTATION` (and a `_DONE` guard against a second
-   inclusion), grouped in sections, each opened by a one-line divider comment.
+**The public header** (`<prefix>.h`) is the whole API, in this order:
+
+1. File heading: what it is, its sections, usage, configuration macros, scope.
+2. Declarations, guarded by `<PREFIX>_H`: includes, macros, enums, types, functions, grouped in
+   sections, each opened by a one-line divider comment. Public functions are declared through
+   one linkage macro (`<PREFIX>DEF`) that becomes `static` under `<PREFIX>_STATIC`.
+3. Under `<PREFIX>_IMPLEMENTATION`, the `#include` of each implementation file.
 4. Licence text.
+
+**Implementation files** (`<prefix>/<module>.h`) hold no declaration of their own: they define
+what the public header declares, plus `static` internals. Each is guarded by its own
+`<SHORT>__<MODULE>_DONE`, so it is compiled once however often the public header is included.
+Internals shared by several modules go to `<prefix>/detail/`. Sections within a file are opened
+by one-line divider comments.
+
+A public header that needs nothing before it, and an implementation that leaves no internal
+function unused, are both checked by a build target.
 
 ## Comments
 
@@ -122,5 +133,7 @@ enum {
 | `<short>` / `<SHORT>` (internal) | `mpsd` / `MPSD` — e.g. `mpsd__packbits`, `MPSD__STR` |
 | linkage macro | `MINIPSDDEF` |
 | allocation macros | `MINIPSD_MALLOC` / `MINIPSD_FREE` |
+| public header / implementation | `include/minipsd.h` / `include/minipsd/<module>.h`, internals in `include/minipsd/detail/` |
+| implementation guards | `MPSD__<MODULE>_DONE` |
 
-Implementation sections follow the order of the PSD file they write.
+Implementation sections follow the order of the PSD file they write or read.

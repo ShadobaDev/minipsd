@@ -83,7 +83,7 @@ See [Files and modules](CODE-ARCH.md#files-and-modules).
       implementation.
       *Done when:* golden test unchanged, `minipsd.h` compiles alone and then with its
       implementation in the same file, with no internal function unused.
-- [ ] **S1.7** Docs:
+- [x] **S1.7** Docs:
       - [SPECIFICATION.md](SPECIFICATION.md): Form, Distribution and SBOM;
       - [CODING_STYLE_C.md](CODING_STYLE_C.md): the multi-header layout, section order per
         module;

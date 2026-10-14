@@ -44,11 +44,21 @@ gcovr --root . --filter include/ --merge-lines --exclude-throw-branches \
       --txt-metric branch --txt build/linux-coverage          # lines and branches missing a test
 ```
 
-`--merge-lines` counts each line of `minipsd.h` once, although several test files compile it;
+`--merge-lines` counts each line of a header once, although several test files compile it;
 `--exclude-throw-branches` drops the exception edges of the C++ builds, which C code never takes.
 Coverage data adds up across runs: delete `build/linux-coverage` for a clean report. CI fails
 below 100 % of lines or 95 % of branches and publishes the report to Coveralls. Branches stop
 just short of 100 % where gcovr keeps the C and C++ copies of a function apart.
+
+## The single-file header
+
+The release attaches `include/` joined into one `minipsd.h`; build the same file locally with
+
+```bash
+cmake -DOUTPUT=build/minipsd.h -P tools/amalgamate.cmake
+```
+
+The tests build it at configure time and run against it as `amalgamated.*`.
 
 ## Packages and installing
 
@@ -87,18 +97,21 @@ sudo tar -xzf dist/minipsd-0.1.0.tar.gz --strip-components=1 -C /usr/local
 
 | Test | Checks |
 |---|---|
-| `MinipsdTest.*` | the writer, read back field by field (C++20, plus one C99 translation unit) |
+| `Minipsd<Module>Test.*` | one suite per module (`test_<module>.cpp`): the writer read back field by field, the internal modules tested directly (C++20, plus one C99 translation unit) |
+| `MinipsdGoldenTest.*` | a fixed set of documents still gives the bytes of 0.1.0 (SHA-256) |
+| `amalgamated.*` | the same tests against the single-file `minipsd.h` |
 | `minipsd-cxx17` (build target) | the header compiles warning-free as C++17 |
+| `minipsd-include-check` (build target) | `minipsd.h` compiles alone, then with its implementation, leaving no internal function unused |
 | `psd-tools-roundtrip` | documents written through minipsd, read back by `psd-tools` |
 | `install` | `cmake --install` into the build tree (`tests/prefix/`) |
-| `consumer-copy` | a project with `minipsd.h` copied in |
+| `consumer-copy` | a project with `include/` copied in |
 | `consumer-subdirectory` | `add_subdirectory` (git submodule) |
 | `consumer-fetchcontent` | `FetchContent_MakeAvailable` |
 | `consumer-package` | `find_package(minipsd 0.x.y EXACT CONFIG)` on the install |
 | `consumer-pkgconfig` | `pkg-config minipsd` on the install; only if pkg-config is found |
 
 Each consumer test builds and runs a small program and checks the header version; the CMake
-paths also check the SBOM fragment's version.
+paths also check the SBOM fragment's version and that it lists the headers.
 
 ## Options
 

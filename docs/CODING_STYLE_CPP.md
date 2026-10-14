@@ -209,5 +209,5 @@ minipsd is a C library; C++ appears only in tests and in the planned wrapper.
   apply to them.
 - **The C++ wrapper** (planned) lives inside `minipsd.h` under `#ifdef __cplusplus`, in
   `namespace minipsd`, and adds no dependency beyond the C++ standard library. Being part of a
-  single header, it is exempt from the directory and header/source layout rules.
+  header-only library, it is exempt from the directory and header/source layout rules.
 - **Class-size exceptions:** none.

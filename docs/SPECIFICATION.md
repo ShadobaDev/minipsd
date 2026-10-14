@@ -8,7 +8,7 @@ planned work to [TODO.md](TODO.md).
 |---|---|
 | [Purpose](#purpose) | what minipsd is and is not |
 | [PSD in five minutes](#psd-in-five-minutes) | the parts of the file format minipsd touches |
-| [Form](#form) | single header, language, configuration macros |
+| [Form](#form) | header layout, language, configuration macros |
 | [API](#api) | types, functions, defaults, error codes |
 | [What goes into the file](#what-goes-into-the-file) | the exact PSD subset written |
 | [Consumer requirements](#consumer-requirements) | guarantees Platemaker depends on |
@@ -52,11 +52,13 @@ real readers win (see [Verification](#verification)).
 
 ## Form
 
-- **One header, stb style:** `#define MINIPSD_IMPLEMENTATION` in exactly one translation unit
+- **Header-only, stb style:** `#define MINIPSD_IMPLEMENTATION` in exactly one translation unit
   before `#include "minipsd.h"`; include it plainly everywhere else.
-- **Header location:** `include/minipsd.h`, included as `"minipsd.h"`. If the library is ever
-  split, the extra headers go to `include/minipsd/` (`writer.h`, `reader.h`, ...) and
-  `include/minipsd.h` stays the entry point, so existing `#include` lines keep working.
+- **One public header:** `include/minipsd.h`, included as `"minipsd.h"`, is the whole API: every
+  type, constant, macro and function declaration. A change to it is an API change.
+- **The implementation** sits in `include/minipsd/` (`base.h`, `writer.h`, and shared internals
+  in `detail/`) and comes in only under `MINIPSD_IMPLEMENTATION`; nothing there is public.
+  [CODE-ARCH.md](CODE-ARCH.md#files-and-modules) has the layout and its rules.
 - **C99, also valid C++** (C++17/20): explicit `void *` casts, no designated initialisers;
   declarations are `extern "C"` under C++.
 - **No dependencies** beyond the C standard library.
@@ -193,30 +195,33 @@ Platemaker is the first consumer. Breaking any of these breaks it:
   (`.clang-tidy`, findings are errors), and with coverage of `minipsd.h`: **lines must stay at
   100 %** and branches at 95 % or more, so new code comes with the test that executes it,
   error paths included (`test_alloc_failure.cpp` fails each allocation in turn).
+- **Single file:** the same tests also run against the single-file `minipsd.h` the release
+  attaches, and `minipsd.h` is compiled alone and then with its implementation, with no internal
+  function left unused.
 - **Golden bytes:** `test_golden.cpp` writes a fixed set of documents and compares each file's
   SHA-256 with the hash recorded from 0.1.0. A change meant to keep the output must leave every
   hash alone; changing a hash there is the explicit, reviewed sign of a byte change.
 
 ## Distribution and SBOM
 
-> **Status:** implemented and covered by the `consumer-*` tests, except the release assets
-> (`minipsd.h.sha256`), which wait for the release workflow ([TODO.md](TODO.md)).
+> **Status:** implemented and covered by the `consumer-*` tests; the release assets come from
+> the release workflow ([GITHUB-RELEASE.md](GITHUB-RELEASE.md)).
 
 minipsd must be usable in each of these ways, and in each one a consumer must be able to state
 **name, version, licence, supplier and source** of the copy it uses:
 
 | Integration | What the consumer does | Where the version comes from |
 |---|---|---|
-| **Raw copy** | copies `minipsd.h` into its tree | `MINIPSD_VERSION_*` macros and SPDX tags inside the header |
+| **Raw copy** | copies `include/` into its tree, or the release's single-file `minipsd.h` | `MINIPSD_VERSION_*` macros and SPDX tags inside the headers |
 | **git submodule** | `add_subdirectory(minipsd)` | `minipsd_VERSION` from `project()` |
 | **CMake FetchContent** | `FetchContent_Declare(minipsd GIT_TAG X.Y.Z)` | `minipsd_VERSION` from `project()` |
 | **Installed package** (distro, `cmake --install`) | `find_package(minipsd CONFIG)` or `pkg-config minipsd` | `minipsd-config-version.cmake` / `minipsd.pc` |
 
 Rules that make this work:
 
-- **The header is self-describing**, because a raw copy carries nothing else:
-  `SPDX-License-Identifier: MIT`, `SPDX-FileCopyrightText:`, the version macros, the project
-  URL, and the full MIT licence text at the end of the file.
+- **The headers are self-describing**, because a raw copy carries nothing else: every file has
+  `SPDX-License-Identifier: MIT` and `SPDX-FileCopyrightText:`; `minipsd.h` also has the version
+  macros, the project URL, and the full MIT licence text at the end of the file.
 - **One version source: the header.** `CMakeLists.txt` reads the `MINIPSD_VERSION_*` macros
   from `minipsd.h` and passes them to `project(VERSION)`, so the version cannot drift between
   the header, the CMake package, `minipsd.pc` and the SBOM fragment.
@@ -226,16 +231,18 @@ Rules that make this work:
 - **Consuming must not cost the consumer anything:** tests, presets and test-only dependencies
   are built only when minipsd is the top-level project (`PROJECT_IS_TOP_LEVEL`).
 - **SBOM fragment:** the build produces an SPDX 2.3 document for minipsd itself (single
-  package, no dependencies, PURL `pkg:github/ShadobaDev/minipsd@x.y.z`, SHA-256 of
-  `minipsd.h`), installed to `share/doc/minipsd/` and exposed to CMake consumers as the target
-  property `MINIPSD_SBOM_FILE` on `minipsd::minipsd`. A property rather than a variable, because
+  package, no dependencies, PURL `pkg:github/ShadobaDev/minipsd@x.y.z`, every header listed with
+  its SHA-1 and SHA-256, and the package verification code derived from them), installed to
+  `share/doc/minipsd/` and exposed to CMake consumers as the target property
+  `MINIPSD_SBOM_FILE` on `minipsd::minipsd`. A property rather than a variable, because
   it reads the same for `add_subdirectory`, FetchContent and `find_package`.
 - **Installed layout** (everything is architecture-independent, so nothing goes to `lib/`):
-  `include/minipsd.h`, `share/cmake/minipsd/`, `share/pkgconfig/minipsd.pc`,
+  `include/minipsd.h`, `include/minipsd/`, `share/cmake/minipsd/`, `share/pkgconfig/minipsd.pc`,
   `share/doc/minipsd/` (licence, SBOM). The package version file accepts the same MINOR only
   (`SameMinorVersion`: pre-1.0, a breaking change bumps the MINOR).
 - **Releases are git tags `X.Y.Z`** (bare semver, no `v` prefix); a GitHub release attaches
-  `minipsd.h` and its `.sha256` so raw-copy users can verify the file.
+  `include/` joined into one `minipsd.h` (by `tools/amalgamate.cmake`) and its `.sha256`, for
+  raw-copy users who prefer a single file.
 
 ## Extensibility rules
 

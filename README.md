@@ -5,9 +5,10 @@
 [![Release](https://img.shields.io/github/v/release/ShadobaDev/minipsd)](https://github.com/ShadobaDev/minipsd/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/ShadobaDev/minipsd)](LICENSE.MIT)
 
-> A single-header, dependency-free C99 library that writes layered Photoshop (PSD) files.
+> A header-only, dependency-free C99 library that writes layered Photoshop (PSD) files.
 
-- **One header**, stb style. C99, also compiles as C++.
+- **Header-only**, stb style: `minipsd.h` is the whole API; its implementation (`minipsd/`)
+  compiles in one source file. C99, also compiles as C++.
 - **Stateless:** describe the document in a struct, get the file. No handles, no global state.
 - **Streams through a callback**, so the output can go to memory, a file, a pipe or a socket.
 - **Small allocations only:** layer pixels are read in place, never copied.
@@ -21,7 +22,8 @@ Procreate open as layered documents.
 # Status
 
 **release: 0.1.0**
-The header is [include/minipsd.h](include/minipsd.h);
+The API is [include/minipsd.h](include/minipsd.h); the implementation is in
+[include/minipsd/](include/minipsd/).
 
 ## Example
 
@@ -52,7 +54,7 @@ The full contract is in [docs/SPECIFICATION.md](docs/SPECIFICATION.md).
 
 ## Adding it to a project
 
-Copy `include/minipsd.h`, or use CMake (FetchContent, git submodule, `find_package`),
+Copy the `include/` directory, or use CMake (FetchContent, git submodule, `find_package`),
 pkg-config, an archive or a `.deb`; see [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Configuration
@@ -73,7 +75,10 @@ Define before the implementation include:
 | [docs/SPECIFICATION.md](docs/SPECIFICATION.md) | the contract: API, file contents, guarantees, PSD primer |
 | [docs/CODING_STYLE_C.md](docs/CODING_STYLE_C.md) | C rules: language, naming, comments |
 | [docs/CODING_STYLE_CPP.md](docs/CODING_STYLE_CPP.md) | C++ rules (tests, the planned wrapper) |
-| [docs/TODO.md](docs/TODO.md) | roadmap and open decisions |
+| [docs/CODE-ARCH.md](docs/CODE-ARCH.md) | the target architecture: modules, I/O model, reader |
+| [docs/USE-CASES.md](docs/USE-CASES.md) | what users may want from the reader and the writer |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | the order of work, step by step |
+| [docs/TODO.md](docs/TODO.md) | releases, distribution, open decisions |
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | changes between releases |
 | [docs/CHEATSHEET.md](docs/CHEATSHEET.md) | build and test commands |
 | [docs/GITHUB-RELEASE.md](docs/GITHUB-RELEASE.md) | how a release is cut |
