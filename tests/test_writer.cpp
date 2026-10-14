@@ -180,9 +180,9 @@ TEST(MinipsdWriterTest, RefusesBeforeWritingAnything)
     std::size_t size = 0;
     ASSERT_EQ(minipsd_writer_workspace_size(&d, &size), MINIPSD_OK);
     Bytes workspace(size);
-    minipsd_writer w;
+    minipsd_writer *w = nullptr;
     EXPECT_EQ(minipsd_writer_init(&w, &d, workspace.data(), size), MINIPSD_ERR_SIZE) << "init sizes it too";
-    EXPECT_EQ(minipsd_writer_total(&w), 0u) << "no size for a refused document";
+    EXPECT_EQ(w, nullptr) << "no writer for a refused document";
 
     EXPECT_TRUE(out.empty()) << "nothing is written for a refused document";
 }
@@ -216,12 +216,17 @@ TEST(MinipsdWriterTest, PullWriterRefusesWhatItCannotUse)
     EXPECT_EQ(minipsd_writer_workspace_size(&d, nullptr), MINIPSD_ERR_ARG);
     ASSERT_EQ(minipsd_writer_workspace_size(&d, &size), MINIPSD_OK);
     Bytes workspace(size);
-    minipsd_writer w;
-    EXPECT_EQ(minipsd_writer_init(nullptr, &d, workspace.data(), size), MINIPSD_ERR_ARG) << "no writer";
+    minipsd_writer *w = nullptr;
+    EXPECT_EQ(minipsd_writer_init(nullptr, &d, workspace.data(), size), MINIPSD_ERR_ARG) << "nowhere to put the writer";
     EXPECT_EQ(minipsd_writer_init(&w, &d, nullptr, size), MINIPSD_ERR_ARG) << "no workspace";
     EXPECT_EQ(minipsd_writer_init(&w, &d, workspace.data(), size - 1), MINIPSD_ERR_ARG) << "one byte short";
     EXPECT_EQ(minipsd_writer_init(&w, nullptr, workspace.data(), size), MINIPSD_ERR_ARG) << "no document";
+    EXPECT_EQ(w, nullptr) << "no writer after a failed init";
     EXPECT_EQ(minipsd_writer_total(nullptr), 0u);
+
+    ASSERT_EQ(minipsd_writer_init(&w, &d, workspace.data(), size), MINIPSD_OK);
+    EXPECT_GE(static_cast<void *>(w), static_cast<void *>(workspace.data()));
+    EXPECT_LT(static_cast<void *>(w), static_cast<void *>(workspace.data() + size)) << "the writer lives in the workspace";
 
     d.width = 0;
     EXPECT_EQ(minipsd_writer_workspace_size(&d, &size), minipsd_doc_check(&d)) << "the document check comes first";

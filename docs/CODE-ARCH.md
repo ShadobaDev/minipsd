@@ -58,6 +58,8 @@ The rules apply to `include/` only. Tests and examples may use anything.
 | `float` / `double` arithmetic without libm calls | global or `static` mutable state |
 | `<stdlib.h>` only behind the 0.1-compatible `minipsd_write` (see [Writer](#writer)) | allocation anywhere else |
 
+- **Objects with state are opaque** (the writer, later the reader): `minipsd.h` declares the
+  type only, and `init` builds the object inside the caller's workspace.
 - **Public structs carry data only:**
   - fixed-width integers, `size_t`, `double`, `const` pointers to bytes, and nested structs of
     the same;
@@ -109,8 +111,8 @@ tools/
 |---|---|---|---|
 | Version, linkage, return codes | `minipsd_bytes { const uint8_t *data; size_t size; }` | `minipsd_error_string`; new codes, added never renumbered: `MINIPSD_MORE = 1` (positive: not an error, call again), `MINIPSD_ERR_FORMAT = -6`, `MINIPSD_ERR_UNSUPPORTED = -7` | `base.h` |
 | Document | `minipsd_doc`, `minipsd_layer` (unchanged from 0.1) | `minipsd_doc_check(doc)`: the validation `minipsd_write` does today, now callable on its own | `writer.h` today; its own file if the reader shares it |
-| Writer | `minipsd_writer` (cursor state, fields private) | `minipsd_writer_workspace_size`, `_init`, `_total`, `_fill`; `minipsd_write` | `writer.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
-| Reader | `minipsd_reader`, `minipsd_info`, `minipsd_layer_view` | `minipsd_reader_init`, `_next_layer`, `minipsd_decode_layer`, `minipsd_decode_composite`, `minipsd_layer_name` | `reader.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
+| Writer | `minipsd_writer` (opaque, built in the workspace) | `minipsd_writer_workspace_size`, `_init`, `_total`, `_fill`; `minipsd_write` | `writer.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
+| Reader | `minipsd_reader` (opaque, like the writer), `minipsd_info`, `minipsd_layer_view` | `minipsd_reader_init`, `_next_layer`, `minipsd_decode_layer`, `minipsd_decode_composite`, `minipsd_layer_name` | `reader.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
 
 Rules for the split:
 
@@ -161,7 +163,7 @@ bytes as the caller has room for.
 
 ```c
 int      minipsd_writer_workspace_size(const minipsd_doc *doc, size_t *size);
-int      minipsd_writer_init (minipsd_writer *w, const minipsd_doc *doc, void *workspace, size_t size);
+int      minipsd_writer_init (minipsd_writer **w, const minipsd_doc *doc, void *workspace, size_t size);
 uint64_t minipsd_writer_total(const minipsd_writer *w);              /* the file size, known after init */
 int      minipsd_writer_fill (minipsd_writer *w, void *buf, size_t cap, size_t *produced);
                              /* MINIPSD_MORE: call again; MINIPSD_OK: the file is complete */
@@ -171,7 +173,13 @@ int      minipsd_writer_fill (minipsd_writer *w, void *buf, size_t cap, size_t *
   compressed size and every composite row's size. So `total` is exact before the first byte,
   which a buffer target or a `Content-Length` header needs. All validation happens here too,
   so `fill` cannot fail on the document.
+- **The writer is opaque and lives in the workspace.** `minipsd.h` declares only
+  `typedef struct minipsd_writer minipsd_writer;`; the struct is defined in `minipsd/writer.h`,
+  and `init` builds it at the aligned start of the workspace and returns a pointer to it. So the
+  workspace is the writer's whole memory, nothing is allocated, and a change to the writer's
+  fields is not a change to `minipsd.h`, the contract.
 - **The workspace holds:**
+  - the writer itself;
   - the per-channel size table (`layer_count * 4` values);
   - the composite row sizes (`4 * height` values);
   - one composite row (`width * 4` bytes);
@@ -214,6 +222,17 @@ int minipsd_layer_name       (const minipsd_layer_view *layer, char *utf8, size_
 - **`minipsd_layer_view`:** bounds, opacity, flags, blend key, and two name views (Pascal and
   `luni`, raw). It also holds each channel's id and compressed data as a `minipsd_bytes` view
   into the caller's buffer.
+- **Memory**, planned on the writer's pattern; it moves into the spec's
+  [Memory and ownership](SPECIFICATION.md#memory-and-ownership) table when the reader lands:
+
+  | Memory | Owner | Notes |
+  |---|---|---|
+  | the file's bytes (the blob) | caller; borrowed, never copied | read in, `mmap`ed or received; must stay valid while views point into it |
+  | reader workspace | caller; lent to the reader | the opaque `minipsd_reader` and its state (section offsets, the layer cursor, later an index for `R5`); small; heap, stack or static |
+  | `minipsd_info`, `minipsd_layer_view` | caller | fixed size, stack; their `minipsd_bytes` fields point into the blob |
+  | decoded pixels | caller | the target descriptor (`X2`) says where; one layer at a time (`R6`) or all of them (`R7`) |
+  | a whole `minipsd_doc` (`R7`) | caller | stage 5: sizes first, then the caller's buffers or allocator; never a copy kept by the reader |
+
 - **Forward iteration, no table.** Layer records have variable length, so `next_layer` walks
   them in order. It adds up the channel lengths as it goes, so each view already points at its
   pixel data and needs no second pass and no storage.

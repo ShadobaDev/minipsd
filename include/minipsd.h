@@ -218,25 +218,18 @@ MINIPSDDEF int minipsd_write(const minipsd_doc *doc, minipsd_write_fn fn, void *
 /**
  * \brief The pull writer: produces the file into the caller's buffers, at the caller's pace.
  *
- * Every field is private: set them through minipsd_writer_init and read them through the
- * functions.  The struct is declared here so a caller can place it anywhere, the stack included.
- * It points into the workspace and at the document, both borrowed: they must stay valid, and the
- * document unchanged, for as long as the writer is used.
+ * Opaque: minipsd_writer_init builds it inside the caller's workspace and hands back a pointer,
+ * so nothing is allocated and the workspace is the writer's whole memory.  The workspace and the
+ * document are borrowed: they must stay valid, and the document unchanged, for as long as the
+ * writer is used.
  */
-typedef struct minipsd_writer {
-    const minipsd_doc *doc;             /*!< Private. */
-    uint64_t          *channel_sizes;   /*!< Private: layer_count * 4, in the workspace.  */
-    uint16_t          *composite_sizes; /*!< Private: 4 * height (RLE), in the workspace. */
-    uint8_t           *composite_row;   /*!< Private: width * 4, in the workspace.        */
-    uint64_t           content, info;   /*!< Private: the layer info's length, unpadded and padded. */
-    uint64_t           total;           /*!< Private: see minipsd_writer_total.          */
-} minipsd_writer;
+typedef struct minipsd_writer minipsd_writer;
 
 /**
  * \brief How many bytes of workspace minipsd_writer_init needs for a document.
  *
- * The size covers the per-channel size table, the composite's row sizes and one composite row,
- * plus slack for aligning them: any pointer will do as the workspace.
+ * The size covers the writer itself, the per-channel size table, the composite's row sizes and
+ * one composite row, plus slack for aligning them: any pointer will do as the workspace.
  *
  * \param doc  The document to write.
  * \param size Receives the size in bytes.
@@ -250,7 +243,7 @@ MINIPSDDEF int minipsd_writer_workspace_size(const minipsd_doc *doc, size_t *siz
  * Every layer channel and every composite row is compressed once here to learn its size, so the
  * file's size is known before its first byte (minipsd_writer_total).  Nothing is allocated.
  *
- * \param w         The writer to prepare.
+ * \param w         Receives the writer, built at the start of workspace; NULL on failure.
  * \param doc       The document to write; borrowed for as long as the writer is used.
  * \param workspace At least minipsd_writer_workspace_size bytes, any alignment; borrowed likewise.
  * \param size      The size of workspace in bytes.
@@ -260,13 +253,13 @@ MINIPSDDEF int minipsd_writer_workspace_size(const minipsd_doc *doc, size_t *siz
  * \retval MINIPSD_ERR_SIZE As minipsd_doc_check, or the compressed layers do not fit a 32-bit
  *                          section length.
  */
-MINIPSDDEF int minipsd_writer_init(minipsd_writer *w, const minipsd_doc *doc, void *workspace, size_t size);
+MINIPSDDEF int minipsd_writer_init(minipsd_writer **w, const minipsd_doc *doc, void *workspace, size_t size);
 
 /**
  * \brief The size of the whole file in bytes, known once minipsd_writer_init succeeded.
  *
- * \param w A writer prepared by minipsd_writer_init.
- * \return The file size; 0 when w is NULL or its init failed.
+ * \param w A writer from minipsd_writer_init.
+ * \return The file size; 0 when w is NULL.
  */
 MINIPSDDEF uint64_t minipsd_writer_total(const minipsd_writer *w);
 

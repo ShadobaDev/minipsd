@@ -199,24 +199,36 @@ static int mpsd__measure_layers(const minipsd_doc *d, uint64_t *sizes, uint64_t 
     return 4 + *info + 4 > MPSD__MAX_SECTION ? MINIPSD_ERR_SIZE : MINIPSD_OK;
 }
 
-/* --- the pull writer: the caller's workspace --- */
+/* --- the pull writer: everything in the caller's workspace --- */
 
-#define MPSD__ALIGN 8u   /* the workspace starts with the uint64_t size table */
+struct minipsd_writer {
+    const minipsd_doc *doc;
+    uint64_t          *channel_sizes;     /* layer_count * 4, PSD order       */
+    uint16_t          *composite_sizes;   /* 4 * height, channel-major (RLE)  */
+    uint8_t           *composite_row;     /* width * 4                        */
+    uint64_t           content, info;     /* the layer info's length, unpadded and padded */
+    uint64_t           total;             /* the file size                    */
+};
 
-/* Lays the workspace out for w (when w is set) and returns the bytes it takes, alignment slack
-   included: size table, composite row sizes (RLE only), one composite row. */
-static size_t mpsd__writer_layout(minipsd_writer *w, const minipsd_doc *d, void *workspace)
+#define MPSD__ALIGN 8u   /* the writer and the uint64_t size table */
+
+/* Lays the workspace out and returns the bytes it takes, alignment slack included: the writer,
+   the size table, the composite row sizes (RLE only), one composite row.  With a workspace, the
+   writer is built at its aligned start and returned through *w. */
+static size_t mpsd__writer_layout(const minipsd_doc *d, void *workspace, minipsd_writer **w)
 {
+    const size_t self  = mpsd__pad(sizeof(minipsd_writer), MPSD__ALIGN);
     const size_t sizes = d->layer_count * 4 * sizeof(uint64_t);
     const size_t rows  = d->compression == MINIPSD_RAW ? 0 : (size_t)d->height * 4 * sizeof(uint16_t);
-    if (w) {
+    if (workspace) {
         uint8_t *p = (uint8_t *)workspace;
         p += (MPSD__ALIGN - (uintptr_t)p % MPSD__ALIGN) % MPSD__ALIGN;
-        w->channel_sizes   = (uint64_t *)p;
-        w->composite_sizes = (uint16_t *)(p + sizes);
-        w->composite_row   = p + sizes + rows;
+        *w = (minipsd_writer *)p;
+        (*w)->channel_sizes   = (uint64_t *)(p + self);
+        (*w)->composite_sizes = (uint16_t *)(p + self + sizes);
+        (*w)->composite_row   = p + self + sizes + rows;
     }
-    return MPSD__ALIGN - 1 + sizes + rows + (size_t)d->width * 4;
+    return MPSD__ALIGN - 1 + self + sizes + rows + (size_t)d->width * 4;
 }
 
 MINIPSDDEF int minipsd_writer_workspace_size(const minipsd_doc *d, size_t *size)
@@ -224,21 +236,24 @@ MINIPSDDEF int minipsd_writer_workspace_size(const minipsd_doc *d, size_t *size)
     const int rc = d ? minipsd_doc_check(d) : MINIPSD_ERR_ARG;
     if (rc != MINIPSD_OK) return rc;
     if (!size) return MINIPSD_ERR_ARG;
-    *size = mpsd__writer_layout(NULL, d, NULL);
+    *size = mpsd__writer_layout(d, NULL, NULL);
     return MINIPSD_OK;
 }
 
-MINIPSDDEF int minipsd_writer_init(minipsd_writer *w, const minipsd_doc *d, void *workspace, size_t size)
+MINIPSDDEF int minipsd_writer_init(minipsd_writer **out, const minipsd_doc *d, void *workspace, size_t size)
 {
+    minipsd_writer *w = NULL;
     mpsd__composite comp;
     uint64_t        total;
     uint32_t        y;
-    int             k, rc = d ? minipsd_doc_check(d) : MINIPSD_ERR_ARG;
+    int             k, rc;
+    if (!out) return MINIPSD_ERR_ARG;
+    *out = NULL;
+    rc = d ? minipsd_doc_check(d) : MINIPSD_ERR_ARG;
     if (rc != MINIPSD_OK) return rc;
-    if (!w || !workspace || size < mpsd__writer_layout(NULL, d, NULL)) return MINIPSD_ERR_ARG;
-    mpsd__writer_layout(w, d, workspace);
-    w->doc   = d;
-    w->total = 0;
+    if (!workspace || size < mpsd__writer_layout(d, NULL, NULL)) return MINIPSD_ERR_ARG;
+    mpsd__writer_layout(d, workspace, &w);
+    w->doc = d;
     rc = mpsd__measure_layers(d, w->channel_sizes, &w->content, &w->info);
     if (rc != MINIPSD_OK) return rc;
 
@@ -258,6 +273,7 @@ MINIPSDDEF int minipsd_writer_init(minipsd_writer *w, const minipsd_doc *d, void
         }
     }
     w->total = total;
+    *out = w;
     return MINIPSD_OK;
 }
 

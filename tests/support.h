@@ -241,9 +241,10 @@ std::uint64_t pullTotal(const minipsd_doc &d, std::size_t offset = 0)
     std::size_t size = 0;
     EXPECT_EQ(minipsd_writer_workspace_size(&d, &size), MINIPSD_OK);
     Bytes workspace(size + offset);
-    minipsd_writer w;
+    minipsd_writer *w = nullptr;
     EXPECT_EQ(minipsd_writer_init(&w, &d, workspace.data() + offset, size), MINIPSD_OK);
-    return minipsd_writer_total(&w);
+    EXPECT_NE(w, nullptr);
+    return minipsd_writer_total(w);
 }
 
 } // namespace

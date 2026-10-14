@@ -29,14 +29,14 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size);
 
 int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
 {
-    uint8_t       px[3 * 2 * 4];
-    minipsd_layer layers[2];
-    minipsd_doc    doc;
-    minipsd_writer w;
-    uint8_t        workspace[256];
-    smoke_buf      b;
-    size_t         i, need;
-    int            rc;
+    uint8_t         px[3 * 2 * 4];
+    minipsd_layer   layers[2];
+    minipsd_doc     doc;
+    minipsd_writer *w;
+    uint8_t         workspace[256];
+    smoke_buf       b;
+    size_t          i, need;
+    int             rc;
 
     for (i = 0; i < sizeof px; ++i) px[i] = (uint8_t)(i * 17);
     layers[0].name = "Template"; layers[0].rgba = px;   layers[0].opacity = 255; layers[0].hidden = 0;
@@ -57,7 +57,7 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
     /* The pull writer, from a stack workspace: it knows the size before writing. */
     if (minipsd_writer_workspace_size(&doc, &need) != MINIPSD_OK || need > sizeof workspace
         || minipsd_writer_init(&w, &doc, workspace, need) != MINIPSD_OK
-        || minipsd_writer_total(&w) != b.size)
+        || minipsd_writer_total(w) != b.size)
         return -101;
     return MINIPSD_OK;
 }
