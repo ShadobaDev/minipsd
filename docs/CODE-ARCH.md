@@ -72,16 +72,20 @@ The rules apply to `include/` only. Tests and examples may use anything.
 
 ## Files and modules
 
+**`include/minipsd.h` is the whole public API**: every type, constant, macro and function
+declaration, with its documentation, in sections (version and linkage, return codes, document,
+writer, and later reader). It is the one file a user reads. Everything under `include/minipsd/`
+is implementation: it comes in only under `MINIPSD_IMPLEMENTATION` and promises nothing.
+
 A module is one C "class": a struct plus the functions whose first parameter is a pointer to
-it. Public modules sit in `include/minipsd/`. Internal ones sit in `include/minipsd/detail/`,
-hold only `static` `mpsd__` functions, and promise nothing.
+it. Its declarations are a section of `minipsd.h`; its implementation is a file in
+`include/minipsd/`, and the internal helpers it shares sit in `include/minipsd/detail/`.
 
 ```
 include/
-  minipsd.h                    umbrella: includes every public module (today's include keeps working)
+  minipsd.h                    the public API; under MINIPSD_IMPLEMENTATION it includes the files below
   minipsd/
-    base.h                     version, linkage, return codes, limits, minipsd_bytes
-    document.h                 the document model and its validation
+    base.h                     return-code texts
     writer.h                   the encoder (pull), plus the 0.1-compatible minipsd_write (push)
     reader.h                   the decoder (later stage)
     detail/
@@ -98,34 +102,36 @@ tests/
   test_<module>.cpp            one file per module; detail modules are tested directly
   fuzz/                        libFuzzer target for the reader (later stage)
 tools/
-  amalgamate.cmake             builds the single-header release file
+  amalgamate.cmake             joins include/ into one file, a release artifact
 ```
 
-| Module | Struct | Functions (sketch) | Depends on |
+| Module (section of `minipsd.h`) | Struct | Functions (sketch) | Implementation |
 |---|---|---|---|
-| `base.h` | `minipsd_bytes { const uint8_t *data; size_t size; }` | `minipsd_error_string`; new codes, added never renumbered: `MINIPSD_MORE = 1` (positive: not an error, call again), `MINIPSD_ERR_FORMAT = -6`, `MINIPSD_ERR_UNSUPPORTED = -7` | — |
-| `document.h` | `minipsd_doc`, `minipsd_layer` (unchanged from 0.1) | `minipsd_doc_check(doc)`: the validation `minipsd_write` does today, now callable on its own | `base.h` |
-| `writer.h` | `minipsd_writer` (cursor state, fields private) | `minipsd_writer_workspace_size`, `_init`, `_total`, `_fill`; `minipsd_write` | `document.h`, detail: `bytes`, `utf`, `packbits`, `composite` |
-| `reader.h` | `minipsd_reader`, `minipsd_info`, `minipsd_layer_view` | `minipsd_reader_init`, `_next_layer`, `minipsd_decode_layer`, `minipsd_decode_composite`, `minipsd_layer_name` | `base.h`, detail: `bytes`, `utf`, `packbits`, `composite` |
+| Version, linkage, return codes | `minipsd_bytes { const uint8_t *data; size_t size; }` | `minipsd_error_string`; new codes, added never renumbered: `MINIPSD_MORE = 1` (positive: not an error, call again), `MINIPSD_ERR_FORMAT = -6`, `MINIPSD_ERR_UNSUPPORTED = -7` | `base.h` |
+| Document | `minipsd_doc`, `minipsd_layer` (unchanged from 0.1) | `minipsd_doc_check(doc)`: the validation `minipsd_write` does today, now callable on its own | `writer.h` today; its own file if the reader shares it |
+| Writer | `minipsd_writer` (cursor state, fields private) | `minipsd_writer_workspace_size`, `_init`, `_total`, `_fill`; `minipsd_write` | `writer.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
+| Reader | `minipsd_reader`, `minipsd_info`, `minipsd_layer_view` | `minipsd_reader_init`, `_next_layer`, `minipsd_decode_layer`, `minipsd_decode_composite`, `minipsd_layer_name` | `reader.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
 
 Rules for the split:
 
-- **Each header includes what it uses**, so `#include "minipsd/writer.h"` alone compiles.
+- **A public declaration lives only in `minipsd.h`.** Adding, changing or removing anything
+  there is an API change and is judged by the semver rules; a change under `minipsd/` is not.
+  `grep MINIPSDDEF include/minipsd.h` lists every function.
+- **`minipsd.h` needs nothing before it**, and including it a second time after
+  `MINIPSD_IMPLEMENTATION` adds the implementation in that file.
 - **One implementation define for the whole library.**
   - `MINIPSD_IMPLEMENTATION` is defined once, as today.
-  - Each header guards its implementation block with its own `MPSD__<MODULE>_DONE`, so
-    including several modules in that file builds each one once.
+  - Each implementation file is guarded by its own `MPSD__<MODULE>_DONE`, so it is built once
+    however often `minipsd.h` is included.
   - `MINIPSD_STATIC` keeps working unchanged.
-- **No unused internals.**
-  - A detail header is included only by modules that use every function in it. A `static`
-    function that a translation unit does not use is a warning, and warnings are errors.
-  - When a helper is needed by only one direction, it lives in that direction's detail header,
-    or in the module itself.
+- **No unused internals.** The full implementation, compiled with extern linkage, leaves no
+  `static` function unused: that is a warning, and warnings are errors.
+- **Optional subsystems hide behind macros in `minipsd.h`**, the way `MINIPSD_NO_STDIO` does.
 - **Promotion is additive.** `packbits` and `composite` stay internal until a consumer needs
-  them. Making one public means adding a `minipsd_` declaration, a PATCH change, never a
+  them. Making one public means adding a declaration to `minipsd.h`, a PATCH change, never a
   rename of anything existing.
 - **Implementation sections follow the order of the PSD file** they write or read, as
-  [CODING_STYLE_C.md](CODING_STYLE_C.md) already requires; that rule now applies per module.
+  [CODING_STYLE_C.md](CODING_STYLE_C.md) already requires; that rule now applies per file.
 
 ## I/O scenarios
 
@@ -234,9 +240,9 @@ Each planned feature, and where it lands. All of them follow the
 [extensibility rules](SPECIFICATION.md#extensibility-rules): a new field goes at the end of its
 struct, and zero keeps the previous output. So each one is a PATCH addition unless noted.
 
-| Feature | `document.h` | `writer.h` | `reader.h` | detail | Notes |
+| Feature | Document (in `minipsd.h`) | `writer.h` | `reader.h` | detail | Notes |
 |---|---|---|---|---|---|
-| **Module split** | — | — | — | all | no API or byte change; first stage |
+| **Module split** | — | — | — | all | no API or byte change; first stage; the API stays in `minipsd.h` |
 | **Pull writer + workspace** | `minipsd_doc_check` | `minipsd_writer_*` | — | `bytes` | `minipsd_write` rebuilt on top, same bytes |
 | **`minipsd_write_file` to `examples/`** | — | removed | — | — | the only **breaking** item: 0.2.0 |
 | **Reader, own subset** | — | — | new | `bytes`, `utf`, `packbits`, `composite` (un-matte) | 8-bit RGB, full-canvas or empty layers |
@@ -306,3 +312,6 @@ Taken at review, 2026-10-14.
    full-canvas layers. Everything else returns `MINIPSD_ERR_UNSUPPORTED`.
 5. **Module names:** `base`, `document`, `writer`, `reader`, and `detail/` for the internal
    ones. After stage 1 the public names are contract.
+6. **`minipsd.h` holds the whole public API** (2026-10-14, revising 5): types, constants and
+   every declaration, so a user reads one file. `include/minipsd/` holds only implementation,
+   so "document" became a section of `minipsd.h` rather than a file.

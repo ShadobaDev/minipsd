@@ -1,70 +1,13 @@
 /**
  * \file
- * \brief The writer: a document to PSD bytes, through a callback or into a file.
- *
- * Part of minipsd; include minipsd.h for the whole library and its documentation.
+ * \brief Implementation: the writer, a document to PSD bytes, through a callback or into a file.
+ *        Included by minipsd.h under MINIPSD_IMPLEMENTATION; the declarations are in minipsd.h.
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
  */
 
-#include "base.h"
-#include "document.h"
-
-#ifndef MINIPSD_WRITER_H
-#define MINIPSD_WRITER_H
-
-/**
- * \brief Receives the file's bytes, in order.
- *
- * \param user The pointer given to minipsd_write.
- * \param data The next bytes of the file.
- * \param size How many bytes data holds; never 0.
- * \return Non-zero on success, 0 to abort the write.
- */
-typedef int (*minipsd_write_fn)(void *user, const void *data, size_t size);
-
-/**
- * \brief Writes a document as PSD through a callback.
- *
- * The callback receives the whole file front to back and is never asked to seek.  After it
- * returns 0 it is not called again.  The same document always produces the same bytes.
- *
- * \param doc  The document to write.
- * \param fn   Receives the bytes.
- * \param user Passed to fn unchanged.
- * \return MINIPSD_OK or an error code.
- *
- * \retval MINIPSD_OK        The whole file went to fn.
- * \retval MINIPSD_ERR_ARG   doc or fn is NULL, there are no layers, dpi is outside (0, 65536), or
- *                           icc_size is set without icc.  Nothing was written.
- * \retval MINIPSD_ERR_SIZE  A side is 0 or above MINIPSD_MAX_SIDE, or the layers or the ICC
- *                           profile do not fit a 32-bit section length.  Nothing was written.
- * \retval MINIPSD_ERR_ALLOC An allocation failed.  Nothing was written.
- * \retval MINIPSD_ERR_WRITE fn returned 0; the output is incomplete.
- */
-MINIPSDDEF int minipsd_write(const minipsd_doc *doc, minipsd_write_fn fn, void *user);
-#ifndef MINIPSD_NO_STDIO
-/**
- * \brief Writes a document as PSD to a file, replacing it if it exists.
- *
- * \param doc  The document to write.
- * \param path The file path, UTF-8 on every platform (Windows included).
- * \return MINIPSD_OK or an error code; see minipsd_write.
- *
- * \retval MINIPSD_ERR_ARG  As for minipsd_write, or path is NULL.
- * \retval MINIPSD_ERR_OPEN The file could not be opened or closed.
- *
- * \note A failure after the file was opened leaves the partial file in place.
- */
-MINIPSDDEF int minipsd_write_file(const minipsd_doc *doc, const char *path);
-#endif
-
-#endif /* MINIPSD_WRITER_H */
-
-/* ============================================================================================== */
-
-#if defined(MINIPSD_IMPLEMENTATION) && !defined(MPSD__WRITER_DONE)
+#ifndef MPSD__WRITER_DONE
 #define MPSD__WRITER_DONE
 
 #ifndef MINIPSD_NO_STDIO
@@ -354,4 +297,4 @@ MINIPSDDEF int minipsd_write_file(const minipsd_doc *doc, const char *path)
 }
 #endif /* MINIPSD_NO_STDIO */
 
-#endif /* MINIPSD_IMPLEMENTATION */
+#endif /* MPSD__WRITER_DONE */

@@ -1,17 +1,17 @@
 cmake_minimum_required(VERSION 3.21)   # PROJECT_IS_TOP_LEVEL
 
 # ---------------------------------------------------------------------------
-# Version: read from the headers, the only files a raw-copy user has, so the headers, the CMake
+# Version: read from minipsd.h, which a raw-copy user always has, so the header, the CMake
 # package, minipsd.pc and the SBOM fragment can never disagree.
 # ---------------------------------------------------------------------------
-set(_minipsd_base   "${CMAKE_CURRENT_LIST_DIR}/include/minipsd/base.h")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_minipsd_base}")
-file(STRINGS "${_minipsd_base}" _minipsd_version_lines
+set(_minipsd_header "${CMAKE_CURRENT_LIST_DIR}/include/minipsd.h")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_minipsd_header}")
+file(STRINGS "${_minipsd_header}" _minipsd_version_lines
      REGEX "^#define MINIPSD_VERSION_(MAJOR|MINOR|PATCH) +[0-9]+$")
 set(_minipsd_version "")
 foreach(_part MAJOR MINOR PATCH)
     if(NOT _minipsd_version_lines MATCHES "MINIPSD_VERSION_${_part} +([0-9]+)")
-        message(FATAL_ERROR "minipsd/base.h does not define MINIPSD_VERSION_${_part}")
+        message(FATAL_ERROR "minipsd.h does not define MINIPSD_VERSION_${_part}")
     endif()
     list(APPEND _minipsd_version "${CMAKE_MATCH_1}")
 endforeach()

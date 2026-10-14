@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief Internal: PackBits run-length encoding over a strided source.  Included by implementations
+ * \brief Internal: PackBits run-length encoding over a strided source.  Included by the writer
  *        only.
  *
  * SPDX-License-Identifier: MIT

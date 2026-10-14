@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief Internal: the output sink and big-endian integers.  Included by implementations only.
+ * \brief Internal: the output sink and big-endian integers.  Included by the writer only.
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>

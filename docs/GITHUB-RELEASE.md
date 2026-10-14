@@ -7,8 +7,8 @@ Pushing the tag starts the [`Release`](../.github/workflows/release.yml) workflo
 
 1. the full [`CI`](../.github/workflows/ci.yml) on every toolchain, including the `psd-tools`
    round trip;
-2. a check that the tag equals the `MINIPSD_VERSION_*` macros in `include/minipsd/base.h` and
-   that `docs/CHANGELOG.md` has a section for that version;
+2. a check that the tag equals the `MINIPSD_VERSION_*` macros in `include/minipsd.h` and that
+   `docs/CHANGELOG.md` has a section for that version;
 3. `minipsd.h` as a single file: `include/` joined by `tools/amalgamate.cmake`;
 4. a build-provenance attestation for that file;
 5. a GitHub Release with `minipsd.h` and `minipsd.h.sha256`, its notes taken from the changelog
@@ -19,7 +19,7 @@ assets are for users who prefer one file to copying `include/`.
 
 ## 0. Pre-flight
 
-- `MINIPSD_VERSION_MAJOR/MINOR/PATCH` in `include/minipsd/base.h` are the version you are releasing.
+- `MINIPSD_VERSION_MAJOR/MINOR/PATCH` in `include/minipsd.h` are the version you are releasing.
   (CMake reads its version from the header, so there is no second place to update.)
 - `docs/CHANGELOG.md` has `## [X.Y.Z] — YYYY-MM-DD` with the user-facing changes.
 - Everything is committed and pushed to `master`, and CI is green there.

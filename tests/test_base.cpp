@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief Tests for minipsd/base.h, included alone: the version and the return-code texts.
+ * \brief Tests for minipsd/base.h: the version and the return-code texts.
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
@@ -8,7 +8,7 @@
 
 #define MINIPSD_STATIC
 #define MINIPSD_IMPLEMENTATION
-#include "minipsd/base.h"
+#include "minipsd.h"
 
 #include <gtest/gtest.h>
 

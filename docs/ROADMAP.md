@@ -29,7 +29,7 @@ The order of work from 0.1.0 to the design in [CODE-ARCH.md](CODE-ARCH.md). Case
 | Stage | Result | Released in |
 |---|---|---|
 | [0. Baseline](#0-baseline) | design accepted, byte output frozen by a test | — |
-| [1. Module split](#1-module-split) | the header becomes modules; nothing else changes | 0.2.0, at S3.4 |
+| [1. Module split](#1-module-split) | the API stays in `minipsd.h`, the implementation becomes modules | 0.2.0, at S3.4 |
 | [2. Pull writer](#2-pull-writer) | non-blocking, heap-free writing | 0.2.0, at S3.4 |
 | [3. I/O out of the core](#3-io-out-of-the-core) | stdio leaves the library; examples instead | **0.2.0**, at S3.4 (breaking) |
 | [4. Reader](#4-reader) | buffer to structure, for minipsd's own subset | the next release, at S4.9 |
@@ -78,7 +78,12 @@ See [Files and modules](CODE-ARCH.md#files-and-modules).
       too, and the release workflow attaches it as an artifact
       ([Decisions](CODE-ARCH.md#decisions), 3).
       *Done when:* both builds give the golden bytes.
-- [ ] **S1.6** Docs:
+- [x] **S1.6** The whole public API in `include/minipsd.h`; `include/minipsd/` holds only the
+      implementation ([Decisions](CODE-ARCH.md#decisions), 6). `document.h` is gone: it had no
+      implementation.
+      *Done when:* golden test unchanged, `minipsd.h` compiles alone and then with its
+      implementation in the same file, with no internal function unused.
+- [ ] **S1.7** Docs:
       - [SPECIFICATION.md](SPECIFICATION.md): Form, Distribution and SBOM;
       - [CODING_STYLE_C.md](CODING_STYLE_C.md): the multi-header layout, section order per
         module;

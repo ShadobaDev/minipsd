@@ -47,7 +47,7 @@ function(_mpsd_inline path out)
     set(${out} "${_result}" PARENT_SCOPE)
 endfunction()
 
-file(STRINGS "${_root}/include/minipsd/base.h" _version REGEX "^#define MINIPSD_VERSION_(MAJOR|MINOR|PATCH) ")
+file(STRINGS "${_root}/include/minipsd.h" _version REGEX "^#define MINIPSD_VERSION_(MAJOR|MINOR|PATCH) ")
 string(REGEX REPLACE "[^;]*MAJOR +([0-9]+);[^;]*MINOR +([0-9]+);[^;]*PATCH +([0-9]+)" "\\1.\\2.\\3" _version "${_version}")
 
 _mpsd_inline("${_root}/include/minipsd.h" _body)

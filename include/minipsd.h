@@ -2,6 +2,14 @@
  * \file
  * \brief A small, dependency-free Photoshop (PSD) writer.  Header-only, C99, also valid C++.
  *
+ * This file is the whole public API: every type, constant and function a caller can use.  The
+ * implementation lives in minipsd/ and comes in only with MINIPSD_IMPLEMENTATION; copy the whole
+ * include/ directory.  Sections:
+ * - Version and linkage
+ * - Return codes
+ * - Document
+ * - Writer
+ *
  * \par Usage
  * In exactly one C or C++ file:
  * \code
@@ -49,13 +57,6 @@
  * one row of the composite (width * 4 bytes), and on Windows the UTF-16 copy of
  * minipsd_write_file's path.  Layer pixels are read in place, never copied.
  *
- * \par Files
- * This file includes every module; each also works included alone:
- * - minipsd/base.h: version, linkage, return codes, minipsd_error_string;
- * - minipsd/document.h: minipsd_doc and minipsd_layer;
- * - minipsd/writer.h: minipsd_write and minipsd_write_file.
- * Internal code lives in minipsd/detail/.  Copy the whole include/ directory.
- *
  * \par Project
  * https://github.com/ShadobaDev/minipsd
  *
@@ -63,9 +64,157 @@
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
  */
 
+#ifndef MINIPSD_H
+#define MINIPSD_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+/* --- Version and linkage ------------------------------------------------------------------- */
+
+/**
+ * \brief The version of minipsd, MAJOR.MINOR.PATCH.
+ *
+ * The single source of the project version: CMakeLists.txt reads these three lines.
+ */
+#define MINIPSD_VERSION_MAJOR 0
+#define MINIPSD_VERSION_MINOR 1
+#define MINIPSD_VERSION_PATCH 0
+
+#define MPSD__STR(x)  #x
+#define MPSD__XSTR(x) MPSD__STR(x)
+/** \brief The version as a string literal, e.g. "0.1.0". */
+#define MINIPSD_VERSION_STRING \
+    MPSD__XSTR(MINIPSD_VERSION_MAJOR) "." MPSD__XSTR(MINIPSD_VERSION_MINOR) "." MPSD__XSTR(MINIPSD_VERSION_PATCH)
+
+/** \brief Linkage of every public function: static under MINIPSD_STATIC, otherwise extern (C). */
+#ifdef MINIPSD_STATIC
+#  define MINIPSDDEF static
+#elif defined(__cplusplus)
+#  define MINIPSDDEF extern "C"
+#else
+#  define MINIPSDDEF extern
+#endif
+
+/* --- Return codes -------------------------------------------------------------------------- */
+
+/** \brief Return codes: MINIPSD_OK, or one of the negative errors. */
+enum {
+    MINIPSD_OK          =  0, /*!< Success.                                                   */
+    MINIPSD_ERR_ARG     = -1, /*!< A NULL document, no layers, or a dpi outside (0, 65536).    */
+    MINIPSD_ERR_SIZE    = -2, /*!< A side is 0 or above MINIPSD_MAX_SIDE, or the document is too
+                                   large for PSD's 32-bit section lengths (about 4 GiB).      */
+    MINIPSD_ERR_WRITE   = -3, /*!< The write callback reported a failure.                      */
+    MINIPSD_ERR_ALLOC   = -4, /*!< MINIPSD_MALLOC returned NULL.                               */
+    MINIPSD_ERR_OPEN    = -5  /*!< minipsd_write_file could not open (or close) the file.      */
+};
+
+/**
+ * \brief A short English description of a return code.
+ *
+ * \param code A value returned by a minipsd function.
+ * \return A static string; "unknown error" for codes minipsd does not return.
+ */
+MINIPSDDEF const char *minipsd_error_string(int code);
+
+/* --- Document ------------------------------------------------------------------------------ */
+
+/** \brief The largest width or height PSD allows, in pixels. */
+#define MINIPSD_MAX_SIDE 30000
+
+/** \brief Channel compression.  Zero is RLE, so a zero-initialised document gets the compact one. */
+enum {
+    MINIPSD_RLE = 0, /*!< PackBits run-length encoding. */
+    MINIPSD_RAW = 1  /*!< Uncompressed.                 */
+};
+
+/**
+ * \brief One layer of a document.
+ *
+ * Every pointer is borrowed: it must stay valid for the duration of the write call, and minipsd
+ * never frees or copies what it points to.
+ */
+typedef struct minipsd_layer {
+    const char    *name;    /*!< UTF-8; NULL means "".                                            */
+    const uint8_t *rgba;    /*!< width * height * 4 bytes, rows top down, straight (not premultiplied)
+                                 alpha; NULL means an empty layer.                                */
+    uint8_t        opacity; /*!< 255 is opaque, 0 is fully transparent.                            */
+    uint8_t        hidden;  /*!< Non-zero: the layer starts hidden (and stays out of the composite). */
+} minipsd_layer;
+
+/**
+ * \brief A whole document: canvas, resolution, layers and options.
+ *
+ * Zero-initialise it and set the fields you need; zero compression selects RLE.  Pointers are
+ * borrowed for the duration of the write call.
+ */
+typedef struct minipsd_doc {
+    uint32_t             width, height;  /*!< 1 .. MINIPSD_MAX_SIDE.                        */
+    double               dpi;            /*!< Above 0, below 65536; recorded, not resampled. */
+    const minipsd_layer *layers;         /*!< Bottom first.                                  */
+    size_t               layer_count;    /*!< >= 1.                                          */
+    const uint8_t       *icc;            /*!< Optional ICC profile; NULL means none (sRGB).  */
+    size_t               icc_size;       /*!< Size of icc in bytes; 0 when icc is NULL.      */
+    int                  compression;    /*!< MINIPSD_RLE or MINIPSD_RAW.                    */
+} minipsd_doc;
+
+/* --- Writer -------------------------------------------------------------------------------- */
+
+/**
+ * \brief Receives the file's bytes, in order.
+ *
+ * \param user The pointer given to minipsd_write.
+ * \param data The next bytes of the file.
+ * \param size How many bytes data holds; never 0.
+ * \return Non-zero on success, 0 to abort the write.
+ */
+typedef int (*minipsd_write_fn)(void *user, const void *data, size_t size);
+
+/**
+ * \brief Writes a document as PSD through a callback.
+ *
+ * The callback receives the whole file front to back and is never asked to seek.  After it
+ * returns 0 it is not called again.  The same document always produces the same bytes.
+ *
+ * \param doc  The document to write.
+ * \param fn   Receives the bytes.
+ * \param user Passed to fn unchanged.
+ * \return MINIPSD_OK or an error code.
+ *
+ * \retval MINIPSD_OK        The whole file went to fn.
+ * \retval MINIPSD_ERR_ARG   doc or fn is NULL, there are no layers, dpi is outside (0, 65536), or
+ *                           icc_size is set without icc.  Nothing was written.
+ * \retval MINIPSD_ERR_SIZE  A side is 0 or above MINIPSD_MAX_SIDE, or the layers or the ICC
+ *                           profile do not fit a 32-bit section length.  Nothing was written.
+ * \retval MINIPSD_ERR_ALLOC An allocation failed.  Nothing was written.
+ * \retval MINIPSD_ERR_WRITE fn returned 0; the output is incomplete.
+ */
+MINIPSDDEF int minipsd_write(const minipsd_doc *doc, minipsd_write_fn fn, void *user);
+
+#ifndef MINIPSD_NO_STDIO
+/**
+ * \brief Writes a document as PSD to a file, replacing it if it exists.
+ *
+ * \param doc  The document to write.
+ * \param path The file path, UTF-8 on every platform (Windows included).
+ * \return MINIPSD_OK or an error code; see minipsd_write.
+ *
+ * \retval MINIPSD_ERR_ARG  As for minipsd_write, or path is NULL.
+ * \retval MINIPSD_ERR_OPEN The file could not be opened or closed.
+ *
+ * \note A failure after the file was opened leaves the partial file in place.
+ */
+MINIPSDDEF int minipsd_write_file(const minipsd_doc *doc, const char *path);
+#endif
+
+#endif /* MINIPSD_H */
+
+/* ============================================================================================== */
+
+#ifdef MINIPSD_IMPLEMENTATION
 #include "minipsd/base.h"
-#include "minipsd/document.h"
 #include "minipsd/writer.h"
+#endif
 
 /*
 --------------------------------------------------------------------------------------------------

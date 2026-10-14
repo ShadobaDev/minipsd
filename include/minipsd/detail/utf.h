@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief Internal: UTF-8 to UTF-16, for layer names and Windows paths.  Included by implementations
+ * \brief Internal: UTF-8 to UTF-16, for layer names and Windows paths.  Included by the writer
  *        only.
  *
  * SPDX-License-Identifier: MIT

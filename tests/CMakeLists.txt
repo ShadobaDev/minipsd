@@ -4,9 +4,9 @@
 #   minipsd-tests      GoogleTest, one test_<module>.cpp per module: the writer read back field
 #                      by field, the internal modules tested directly; built as C99 + C++20;
 #                      plus allocation failures and the golden bytes of 0.1.0
-#   minipsd-tests-amalgamated  the same tests (but base) against the single-file minipsd.h
-#   minipsd-cxx17     compile-only: the header and its implementation as C++17
-#   minipsd-module-*   compile-only: each public module alone, with its implementation, as C
+#   minipsd-tests-amalgamated  the same tests against the single-file minipsd.h
+#   minipsd-cxx17      compile-only: the header and its implementation as C++17
+#   minipsd-include-check  compile-only: minipsd.h alone, then its implementation, as C
 #   consumer-<mode>    a tiny project using minipsd each supported way (see consumer/)
 # ---------------------------------------------------------------------------
 
@@ -31,8 +31,9 @@ else()
     set(MINIPSD_WARNINGS -Wall -Wextra -Wpedantic -Werror)
 endif()
 
-# Every test file but test_base.cpp includes minipsd.h, so it also runs against the amalgamated file.
+# Every test file includes only minipsd.h, so each also runs against the amalgamated file.
 set(_minipsd_test_sources
+    test_base.cpp
     test_bytes.cpp
     test_utf.cpp
     test_packbits.cpp
@@ -43,7 +44,7 @@ set(_minipsd_test_sources
     test_golden.cpp          # the bytes of 0.1.0, by SHA-256, for a fixed set of documents
 )
 # Each test file has its own static copy of the library and uses only part of it; whether the
-# library leaves a function unused is checked by the minipsd-module-* targets below instead.
+# library leaves a function unused is checked by minipsd-include-check below instead.
 if(MSVC)
     set(_minipsd_test_only_warnings /wd4505)
 else()
@@ -64,7 +65,7 @@ function(minipsd_add_test_executable target)
     endif()
 endfunction()
 
-minipsd_add_test_executable(minipsd-tests test_base.cpp ${_minipsd_test_sources})
+minipsd_add_test_executable(minipsd-tests ${_minipsd_test_sources})
 target_link_libraries(minipsd-tests PRIVATE minipsd::minipsd)
 gtest_discover_tests(minipsd-tests)
 
@@ -87,14 +88,11 @@ target_link_libraries(minipsd-cxx17 PRIVATE minipsd::minipsd)
 target_compile_options(minipsd-cxx17 PRIVATE ${MINIPSD_WARNINGS})
 set_target_properties(minipsd-cxx17 PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 
-# Each public module compiles alone, implementation included, with no internal function unused.
-foreach(_module base document writer)
-    add_library(minipsd-module-${_module} OBJECT module_check.c)
-    target_link_libraries(minipsd-module-${_module} PRIVATE minipsd::minipsd)
-    target_compile_definitions(minipsd-module-${_module} PRIVATE MINIPSD_CHECK_HEADER="minipsd/${_module}.h")
-    target_compile_options(minipsd-module-${_module} PRIVATE ${MINIPSD_WARNINGS})
-    set_target_properties(minipsd-module-${_module} PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
-endforeach()
+# minipsd.h compiles alone, and its implementation leaves no internal function unused.
+add_library(minipsd-include-check OBJECT include_check.c)
+target_link_libraries(minipsd-include-check PRIVATE minipsd::minipsd)
+target_compile_options(minipsd-include-check PRIVATE ${MINIPSD_WARNINGS})
+set_target_properties(minipsd-include-check PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 
 # clang-tidy (the linux-tidy preset) on our own targets only, not on a fetched GoogleTest.
 # Checks and options come from .clang-tidy at the repository root.

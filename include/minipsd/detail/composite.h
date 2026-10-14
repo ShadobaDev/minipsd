@@ -1,7 +1,7 @@
 /**
  * \file
  * \brief Internal: the composite, the layers blended "over" and matted against white, one row at a
- *        time.  Included by implementations only.
+ *        time.  Included by the writer only.
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
