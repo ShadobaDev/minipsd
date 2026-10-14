@@ -52,7 +52,7 @@ std::string sha256(const Bytes &msg)
 
     for (std::size_t off = 0; off < m.size(); off += 64) {
         std::uint32_t w[64];
-        for (int i = 0; i < 16; ++i)
+        for (std::size_t i = 0; i < 16; ++i)
             w[i] = std::uint32_t(m[off + i * 4]) << 24 | std::uint32_t(m[off + i * 4 + 1]) << 16
                  | std::uint32_t(m[off + i * 4 + 2]) << 8 | m[off + i * 4 + 3];
         for (int i = 16; i < 64; ++i)

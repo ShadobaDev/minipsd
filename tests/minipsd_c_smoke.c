@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief Compiles minipsd.h as C and writes a small document, so test_minipsd.cpp can check the
+ * \brief Compiles minipsd.h as C and writes a small document, so test_writer.cpp can check the
  *        C build produces the same bytes as the C++ one.
  *
  * SPDX-License-Identifier: MIT

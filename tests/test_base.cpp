@@ -1,0 +1,31 @@
+/**
+ * \file
+ * \brief Tests for minipsd/base.h, included alone: the version and the return-code texts.
+ *
+ * SPDX-License-Identifier: MIT
+ * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
+ */
+
+#define MINIPSD_STATIC
+#define MINIPSD_IMPLEMENTATION
+#include "minipsd/base.h"
+
+#include <gtest/gtest.h>
+
+#include <string>
+
+TEST(MinipsdBaseTest, VersionStringSpellsTheThreeNumbers)
+{
+    EXPECT_EQ(std::string(MINIPSD_VERSION_STRING), std::to_string(MINIPSD_VERSION_MAJOR) + "." +
+                                                   std::to_string(MINIPSD_VERSION_MINOR) + "." +
+                                                   std::to_string(MINIPSD_VERSION_PATCH));
+}
+
+TEST(MinipsdBaseTest, EveryReturnCodeHasItsOwnText)
+{
+    EXPECT_STREQ(minipsd_error_string(MINIPSD_ERR_SIZE),
+                 "too large for PSD: a side outside 1..30000, or a section above 4 GiB");
+    EXPECT_STREQ(minipsd_error_string(-100), "unknown error");
+    for (int code : {MINIPSD_OK, MINIPSD_ERR_ARG, MINIPSD_ERR_WRITE, MINIPSD_ERR_ALLOC, MINIPSD_ERR_OPEN})
+        EXPECT_STRNE(minipsd_error_string(code), "unknown error") << "every return code has its own text: " << code;
+}

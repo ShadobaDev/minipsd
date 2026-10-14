@@ -1,5 +1,5 @@
 # A minimal consumer of minipsd, configured once per way of bringing it in (MODE):
-#   copy          the header copied into this project
+#   copy          the headers (include/) copied into this project
 #   subdirectory  add_subdirectory of the source tree (git submodule)
 #   fetchcontent  FetchContent_MakeAvailable
 #   package       find_package of an install
@@ -12,7 +12,7 @@ set(MODE "" CACHE STRING "How minipsd is brought in")
 set(_lib minipsd::minipsd)
 
 if(MODE STREQUAL "copy")
-    configure_file("${MINIPSD_SOURCE_DIR}/include/minipsd.h" vendor/minipsd.h COPYONLY)
+    file(COPY "${MINIPSD_SOURCE_DIR}/include/" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/vendor")
     add_library(vendored-minipsd INTERFACE)
     target_include_directories(vendored-minipsd INTERFACE "${CMAKE_CURRENT_BINARY_DIR}/vendor")
     set(_lib vendored-minipsd)

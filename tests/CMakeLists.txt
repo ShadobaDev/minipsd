@@ -1,9 +1,11 @@
 # ---------------------------------------------------------------------------
 # minipsd tests
 #
-#   minipsd-tests      GoogleTest: the writer, read back field by field, built as C99 + C++20;
+#   minipsd-tests      GoogleTest, one test_<module>.cpp per module: the writer read back field
+#                      by field, the internal modules tested directly; built as C99 + C++20;
 #                      plus allocation failures and the golden bytes of 0.1.0
 #   minipsd-cxx17      compile-only: the header and its implementation as C++17
+#   minipsd-module-*   compile-only: each public module alone, with its implementation, as C
 #   consumer-<mode>    a tiny project using minipsd each supported way (see consumer/)
 # ---------------------------------------------------------------------------
 
@@ -29,13 +31,25 @@ else()
 endif()
 
 add_executable(minipsd-tests
-    test_minipsd.cpp
+    test_base.cpp
+    test_bytes.cpp
+    test_utf.cpp
+    test_packbits.cpp
+    test_composite.cpp
+    test_writer.cpp
     minipsd_c_smoke.c        # minipsd.h compiled as C, compared byte for byte with the C++ build
     test_alloc_failure.cpp   # minipsd.h with an allocator that fails on demand
     test_golden.cpp          # the bytes of 0.1.0, by SHA-256, for a fixed set of documents
 )
 target_link_libraries(minipsd-tests PRIVATE minipsd::minipsd GTest::gtest GTest::gtest_main)
-target_compile_options(minipsd-tests PRIVATE ${MINIPSD_WARNINGS})
+# Each test file has its own static copy of the library and uses only part of it; whether the
+# library leaves a function unused is checked by the minipsd-module-* targets below instead.
+if(MSVC)
+    set(_minipsd_test_only_warnings /wd4505)
+else()
+    set(_minipsd_test_only_warnings -Wno-unused-function)
+endif()
+target_compile_options(minipsd-tests PRIVATE ${MINIPSD_WARNINGS} ${_minipsd_test_only_warnings})
 set_target_properties(minipsd-tests PROPERTIES
     C_STANDARD   99 C_STANDARD_REQUIRED   ON C_EXTENSIONS   OFF
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF   # the tests use std::u8string
@@ -51,6 +65,15 @@ add_library(minipsd-cxx17 OBJECT cxx17_check.cpp)
 target_link_libraries(minipsd-cxx17 PRIVATE minipsd::minipsd)
 target_compile_options(minipsd-cxx17 PRIVATE ${MINIPSD_WARNINGS})
 set_target_properties(minipsd-cxx17 PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+
+# Each public module compiles alone, implementation included, with no internal function unused.
+foreach(_module base document writer)
+    add_library(minipsd-module-${_module} OBJECT module_check.c)
+    target_link_libraries(minipsd-module-${_module} PRIVATE minipsd::minipsd)
+    target_compile_definitions(minipsd-module-${_module} PRIVATE MINIPSD_CHECK_HEADER="minipsd/${_module}.h")
+    target_compile_options(minipsd-module-${_module} PRIVATE ${MINIPSD_WARNINGS})
+    set_target_properties(minipsd-module-${_module} PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+endforeach()
 
 # clang-tidy (the linux-tidy preset) on our own targets only, not on a fetched GoogleTest.
 # Checks and options come from .clang-tidy at the repository root.

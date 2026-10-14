@@ -59,14 +59,14 @@ The order of work from 0.1.0 to the design in [CODE-ARCH.md](CODE-ARCH.md). Case
 No API change, no byte change. Code moves verbatim.
 See [Files and modules](CODE-ARCH.md#files-and-modules).
 
-- [ ] **S1.1** `include/minipsd/base.h` and `document.h`; `include/minipsd.h` becomes the
+- [x] **S1.1** `include/minipsd/base.h` and `document.h`; `include/minipsd.h` becomes the
       umbrella. The per-module `MPSD__<MODULE>_DONE` guards are added.
       *Done when:* the existing tests pass unchanged, through the umbrella and through each
       module included alone.
-- [ ] **S1.2** `detail/bytes.h`, `detail/utf.h`, `detail/packbits.h`, `detail/composite.h`, and
+- [x] **S1.2** `detail/bytes.h`, `detail/utf.h`, `detail/packbits.h`, `detail/composite.h`, and
       `writer.h` holding `minipsd_write` and (still) `minipsd_write_file`.
       *Done when:* golden test unchanged, and no unused-function warning in any one-module build.
-- [ ] **S1.3** Tests split into `test_<module>.cpp`. The existing tests move; no parallel copies.
+- [x] **S1.3** Tests split into `test_<module>.cpp`. The existing tests move; no parallel copies.
       Detail modules are tested directly.
       *Done when:* coverage per module is 100 % lines and at least 95 % branches.
 - [ ] **S1.4** CMake and packaging:
