@@ -22,6 +22,9 @@ The order of work from 0.1.0 to the design in [CODE-ARCH.md](CODE-ARCH.md). Case
   After that, stages 5 and 6 are released in batches, when there is enough to ship and the
   maintainer decides. Version numbers follow the semver rules in [TODO.md](TODO.md): pre-1.0, a break
   bumps the MINOR and an addition bumps the PATCH.
+- **Docs follow the API.** A step that adds or changes a public function or buffer also updates
+  [MANUAL.md](MANUAL.md) and the spec's
+  [Memory and ownership](SPECIFICATION.md#memory-and-ownership) table.
 - **Design steps** (marked *design*) change only `docs/`. They exist where
   [USE-CASES.md](USE-CASES.md) raised a question that [CODE-ARCH.md](CODE-ARCH.md) does not yet
   answer.
@@ -107,7 +110,8 @@ No byte change. See [Writer](CODE-ARCH.md#writer).
       `<stdlib.h>`. Serves `W2`.
       *Done when:* golden test unchanged, and `test_alloc_failure.cpp` still fails each
       allocation in turn.
-- [ ] **S2.5** Docs: the spec's API section; the allocation list in the header comment.
+- [ ] **S2.5** Docs: the spec's API section; the allocation list in the header comment;
+      [MANUAL.md](MANUAL.md), its writing chapters.
 
 ## 3. I/O out of the core
 
@@ -121,7 +125,8 @@ The only breaking stage. See [Decisions](CODE-ARCH.md#decisions), 1-2.
 - [ ] **S3.2** `minipsd_write_file` removed. `MINIPSD_NO_STDIO` accepted with no effect;
       `MINIPSD_ERR_OPEN` stays defined. Its tests move to the examples (`/dev/full` included).
 - [ ] **S3.3** Docs: spec (API, Consumer requirements 5), [INSTALL.md](INSTALL.md), `README.md`
-      usage, [CHANGELOG.md](CHANGELOG.md) with the migration line.
+      usage, [MANUAL.md](MANUAL.md) (code taken from `examples/`), [CHANGELOG.md](CHANGELOG.md)
+      with the migration line.
 - [ ] **S3.4** Release **0.2.0** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md). Then bump the vcpkg
       and Conan recipes in `temp/packaging/` and move Platemaker to 0.2.0 (in its own
       repository).

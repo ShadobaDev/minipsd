@@ -72,6 +72,7 @@ Define before the implementation include:
 | Document | Contents |
 |---|---|
 | [docs/INSTALL.md](docs/INSTALL.md) | every way of adding minipsd to a project, SBOM |
+| [docs/MANUAL.md](docs/MANUAL.md) | how to use it: memory, writing, return codes (skeleton) |
 | [docs/SPECIFICATION.md](docs/SPECIFICATION.md) | the contract: API, file contents, guarantees, PSD primer |
 | [docs/CODING_STYLE_C.md](docs/CODING_STYLE_C.md) | C rules: language, naming, comments |
 | [docs/CODING_STYLE_CPP.md](docs/CODING_STYLE_CPP.md) | C++ rules (tests, the planned wrapper) |

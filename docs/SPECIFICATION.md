@@ -10,6 +10,7 @@ planned work to [TODO.md](TODO.md).
 | [PSD in five minutes](#psd-in-five-minutes) | the parts of the file format minipsd touches |
 | [Form](#form) | header layout, language, configuration macros |
 | [API](#api) | types, functions, defaults, error codes |
+| [Memory and ownership](#memory-and-ownership) | whose each buffer is, its size, lifetime and where it may live |
 | [What goes into the file](#what-goes-into-the-file) | the exact PSD subset written |
 | [Consumer requirements](#consumer-requirements) | guarantees Platemaker depends on |
 | [Verification](#verification) | how a format change is proven correct |
@@ -119,6 +120,30 @@ const char *minipsd_error_string(int code);
 | `MINIPSD_ERR_ALLOC` | -4 | `MINIPSD_MALLOC` returned NULL |
 | `MINIPSD_ERR_OPEN` | -5 | `minipsd_write_file` could not open or close the file |
 
+## Memory and ownership
+
+minipsd owns nothing the caller passes in, never copies a document, and allocates only inside
+`minipsd_write` and `minipsd_write_file`, freeing it before they return. Everything else is the
+caller's memory:
+
+| Memory | Owner | Size | Must stay valid | May live in |
+|---|---|---|---|---|
+| `minipsd_doc`, the `minipsd_layer` array | caller; borrowed | `sizeof` each; the array has `layer_count` entries | for the call (`minipsd_write`); from `minipsd_writer_init` for as long as the writer is used | stack, static or heap |
+| layer pixels (`rgba`), names, ICC profile | caller; borrowed, read in place, never copied | `width * height * 4` bytes per layer | as the document | wherever the application keeps them |
+| pull-writer workspace | caller; lent to the writer | `minipsd_writer_workspace_size`: the writer, the per-channel size table (`layer_count * 4 * 8` bytes), the composite's row sizes (`4 * height * 2` bytes, RLE only), one composite row (`width * 4` bytes), alignment slack | for as long as the writer is used | heap; or stack / static sized for the largest document, since the size grows only with the layer count, width and height |
+| `minipsd_writer` | lives at the start of the workspace; opaque | part of the workspace size | as the workspace | the caller keeps only the pointer |
+| the file's bytes, `minipsd_write` | the callback | pieces of any size, in order | the callback copies what it keeps before returning | the callback decides |
+| inside `minipsd_write` | minipsd, through `MINIPSD_MALLOC` / `MINIPSD_FREE` | the size table and one composite row, as above | the call | heap |
+| inside `minipsd_write_file` (Windows) | minipsd, as above | the UTF-16 copy of the path | the call | heap |
+
+- **The document is read-only and frozen while in use.** The pull writer sizes everything in
+  `minipsd_writer_init`; a document changed afterwards would no longer match the sizes already
+  recorded.
+- **Nothing to release.** The library holds no memory between calls: the writer ends with its
+  workspace, which the caller may free or reuse for another document (if large enough).
+- **No global or static mutable state.** Writers in separate threads never interact; one workspace
+  serves one writer at a time.
+
 ## What goes into the file
 
 - PSD version 1, 8 bits per channel, RGB, 4 channels (R, G, B, transparency).
@@ -142,9 +167,7 @@ const char *minipsd_error_string(int code);
 - **Compression:** PackBits RLE (runs from 3 bytes, packets up to 128 bytes) or raw.
   Row byte counts are computed in a separate sizing pass, so output streams forward through the
   callback and never seeks back.
-- **Allocations:** the per-channel compressed-size table (`layer_count * 4` numbers), one
-  composite row (`width * 4` bytes) and, on Windows, the UTF-16 copy of the path.
-  Layer pixels are read in place, never copied.
+- **Allocations:** see [Memory and ownership](#memory-and-ownership).
 - **Limits** (all checked before anything is written):
   - each side 1 .. 30 000 px, otherwise `MINIPSD_ERR_SIZE`;
   - 1 .. 32 767 layers, otherwise `MINIPSD_ERR_ARG`;
