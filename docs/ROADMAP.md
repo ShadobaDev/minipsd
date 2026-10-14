@@ -69,7 +69,7 @@ See [Files and modules](CODE-ARCH.md#files-and-modules).
 - [x] **S1.3** Tests split into `test_<module>.cpp`. The existing tests move; no parallel copies.
       Detail modules are tested directly.
       *Done when:* coverage per module is 100 % lines and at least 95 % branches.
-- [ ] **S1.4** CMake and packaging:
+- [x] **S1.4** CMake and packaging:
       - install `include/minipsd/`;
       - the SBOM fragment lists every header with its SHA-256;
       - the consumer tests cover a raw copy of the `include/` directory;

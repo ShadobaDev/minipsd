@@ -4,7 +4,6 @@ cmake_minimum_required(VERSION 3.21)   # PROJECT_IS_TOP_LEVEL
 # Version: read from the headers, the only files a raw-copy user has, so the headers, the CMake
 # package, minipsd.pc and the SBOM fragment can never disagree.
 # ---------------------------------------------------------------------------
-set(_minipsd_header "${CMAKE_CURRENT_LIST_DIR}/include/minipsd.h")
 set(_minipsd_base   "${CMAKE_CURRENT_LIST_DIR}/include/minipsd/base.h")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_minipsd_base}")
 file(STRINGS "${_minipsd_base}" _minipsd_version_lines
@@ -21,7 +20,7 @@ list(JOIN _minipsd_version "." _minipsd_version)
 # LANGUAGES NONE: a header-only library costs a consumer nothing, not even a compiler check.
 project(minipsd
     VERSION      ${_minipsd_version}
-    DESCRIPTION  "Single-header, dependency-free C99 writer of layered Photoshop (PSD) files"
+    DESCRIPTION  "Header-only, dependency-free C99 writer of layered Photoshop (PSD) files"
     HOMEPAGE_URL "https://github.com/ShadobaDev/minipsd"
     LANGUAGES    NONE
 )
@@ -51,7 +50,50 @@ target_include_directories(minipsd INTERFACE
 # add_subdirectory, FetchContent and find_package (a variable would not survive
 # FetchContent_MakeAvailable's function scope). Its timestamp honours SOURCE_DATE_EPOCH.
 # ---------------------------------------------------------------------------
-file(SHA256 "${_minipsd_header}" MINIPSD_HEADER_SHA256)
+# Every header is listed with its checksums; SPDX requires SHA-1 per file and derives the package
+# verification code from those (sorted, concatenated, hashed again).
+file(GLOB_RECURSE _minipsd_headers RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/include"
+     CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h")
+list(SORT _minipsd_headers)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_minipsd_headers}")
+set(_minipsd_sbom_file [=[
+
+    {
+      "SPDXID": "SPDXRef-File-@_minipsd_id@",
+      "fileName": "./include/@_minipsd_rel@",
+      "checksums": [
+        { "algorithm": "SHA1", "checksumValue": "@_minipsd_sha1@" },
+        { "algorithm": "SHA256", "checksumValue": "@_minipsd_sha256@" }
+      ],
+      "licenseConcluded": "MIT",
+      "licenseInfoInFiles": [ "MIT" ],
+      "copyrightText": "Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>"
+    }]=])
+set(_minipsd_sbom_contains [=[
+
+    {
+      "spdxElementId": "SPDXRef-Package-minipsd",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-File-@_minipsd_id@"
+    }]=])
+set(_minipsd_files "")
+set(_minipsd_contains "")
+set(_minipsd_sha1s "")
+foreach(_minipsd_rel IN LISTS _minipsd_headers)
+    string(REGEX REPLACE "[^A-Za-z0-9.-]" "-" _minipsd_id "${_minipsd_rel}")
+    file(SHA1   "${CMAKE_CURRENT_SOURCE_DIR}/include/${_minipsd_rel}" _minipsd_sha1)
+    file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/include/${_minipsd_rel}" _minipsd_sha256)
+    list(APPEND _minipsd_sha1s "${_minipsd_sha1}")
+    string(CONFIGURE "${_minipsd_sbom_file}" _minipsd_entry @ONLY)
+    list(APPEND _minipsd_files "${_minipsd_entry}")
+    string(CONFIGURE "${_minipsd_sbom_contains}" _minipsd_entry @ONLY)
+    list(APPEND _minipsd_contains "${_minipsd_entry}")
+endforeach()
+list(JOIN _minipsd_files "," MINIPSD_SBOM_FILES)
+list(JOIN _minipsd_contains "," MINIPSD_SBOM_CONTAINS)
+list(SORT _minipsd_sha1s)
+list(JOIN _minipsd_sha1s "" _minipsd_sha1s)
+string(SHA1 MINIPSD_SBOM_VERIFICATION "${_minipsd_sha1s}")
 string(TIMESTAMP MINIPSD_SBOM_CREATED "%Y-%m-%dT%H:%M:%SZ" UTC)
 configure_file(cmake/minipsd.spdx.json.in "${CMAKE_CURRENT_BINARY_DIR}/minipsd.spdx.json" @ONLY)
 set_target_properties(minipsd PROPERTIES MINIPSD_SBOM_FILE "${CMAKE_CURRENT_BINARY_DIR}/minipsd.spdx.json")
