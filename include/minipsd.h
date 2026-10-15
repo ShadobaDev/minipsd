@@ -10,6 +10,7 @@
  * - Workspace
  * - Document
  * - Writer
+ * - Reader (so far: the file's description, its resources and its layer records; no pixels yet)
  *
  * \par Usage
  * In exactly one C or C++ file:
@@ -120,8 +121,14 @@ enum {
                                    large for PSD's 32-bit section lengths (about 4 GiB).      */
     MINIPSD_ERR_WRITE   = -3, /*!< The write callback reported a failure.                      */
     MINIPSD_ERR_ALLOC   = -4, /*!< MINIPSD_MALLOC returned NULL.                               */
-    MINIPSD_ERR_OPEN    = -5  /*!< Not returned by minipsd; kept for the caller's own file
+    MINIPSD_ERR_OPEN    = -5, /*!< Not returned by minipsd; kept for the caller's own file
                                    code (examples/): a file not opened or closed.             */
+    MINIPSD_ERR_FORMAT  = -6, /*!< Reader: the bytes are not a well-formed PSD.                */
+    MINIPSD_ERR_UNSUPPORTED = -7, /*!< Reader: a valid PSD outside what minipsd reads (so far a
+                                       PSB; pixels other than 8-bit RGB once decoding lands).     */
+    MINIPSD_ERR_SHORT   = -8, /*!< Reader: the buffer ends inside data the call needs; the
+                                   file may be fine.  minipsd_reader_needed says how much more.  */
+    MINIPSD_ERR_LIMIT   = -9  /*!< Reader: a value is over a limit the caller set.             */
 };
 
 /**
@@ -135,7 +142,7 @@ MINIPSDDEF const char *minipsd_error_string(int code);
 /* --- Workspace ----------------------------------------------------------------------------- */
 
 /**
- * \brief Caller memory lent to a minipsd object (the writer; later the reader).
+ * \brief Caller memory lent to a minipsd object (the writer, the reader).
  *
  * Its size depends on the document, so it has no layout of its own: the object's
  * *_workspace_size function says how many bytes it needs, and its init function lays the object
@@ -308,6 +315,206 @@ MINIPSDDEF uint64_t minipsd_writer_total(const minipsd_writer *w);
  */
 MINIPSDDEF int minipsd_writer_fill(minipsd_writer *w, void *buf, size_t cap, size_t *produced);
 
+/* --- Reader -------------------------------------------------------------------------------- */
+
+/**
+ * \brief A read-only run of bytes inside a buffer the caller owns.
+ *
+ * Every view the reader hands out points into the buffer given to minipsd_reader_init, and is valid
+ * for as long as that buffer is unchanged.  Nothing is copied.
+ */
+typedef struct minipsd_bytes {
+    const uint8_t *data; /*!< The first byte; NULL for a view that does not exist.  */
+    size_t         size; /*!< How many bytes.                                       */
+} minipsd_bytes;
+
+/**
+ * \brief What the reader refuses to look at.  Zero fields keep the format's own limits.
+ *
+ * Fields are only ever added at the end, and zero keeps the previous behaviour.
+ */
+typedef struct minipsd_limits {
+    uint32_t max_side;   /*!< Largest width or height; 0 is MINIPSD_MAX_SIDE.  */
+    uint32_t max_layers; /*!< Most layers in a file; 0 is 32767, the format's cap. */
+} minipsd_limits;
+
+/**
+ * \brief What a file says about itself, read by minipsd_reader_init.
+ *
+ * Any PSD of version 1 is described, whatever its colour mode or depth; it is the decoding that
+ * is limited to 8-bit RGB.
+ */
+typedef struct minipsd_info {
+    uint32_t      width, height;       /*!< In pixels.                                                 */
+    uint16_t      channels;            /*!< Channels of the composite, as stored.                      */
+    uint16_t      depth;               /*!< Bits per channel: 1, 8, 16 or 32.                          */
+    uint16_t      color_mode;          /*!< As stored: 0 bitmap, 1 grey, 2 indexed, 3 RGB, 4 CMYK,
+                                            7 multichannel, 8 duotone, 9 Lab.                          */
+    double        dpi;                 /*!< Horizontal pixels per inch; 0 without a resolution resource. */
+    minipsd_bytes icc;                 /*!< The ICC profile; size 0 when the file has none.            */
+    size_t        layer_count;         /*!< Layers in the file.                                        */
+    int           composite_has_alpha; /*!< Non-zero: the composite's first extra channel is transparency
+                                            (the file's layer count is negative).                      */
+} minipsd_info;
+
+/** \brief One image resource: a numbered block of the file, such as 1036, the embedded thumbnail. */
+typedef struct minipsd_resource {
+    uint16_t      id;   /*!< The resource's number.               */
+    minipsd_bytes data; /*!< Its bytes, without the padding.      */
+} minipsd_resource;
+
+/** \brief One tagged block of a layer's additional information ('luni', 'lsct', 'tySh', ...). */
+typedef struct minipsd_block {
+    char          key[5]; /*!< The four-character key, then a NUL.  */
+    minipsd_bytes data;   /*!< The block's bytes.                   */
+} minipsd_block;
+
+/** \brief The index of a colour channel in minipsd_layer_view.channel. */
+enum {
+    MINIPSD_CH_R = 0, /*!< Red.                                */
+    MINIPSD_CH_G = 1, /*!< Green.                              */
+    MINIPSD_CH_B = 2, /*!< Blue.                               */
+    MINIPSD_CH_A = 3  /*!< Transparency (the channel with id -1). */
+};
+
+/**
+ * \brief One layer record, as minipsd_reader_next_layer reads it.
+ *
+ * All views point into the buffer of the reader.
+ */
+typedef struct minipsd_layer_view {
+    int32_t       top, left, bottom, right; /*!< The layer's rectangle on the canvas; all zero for an
+                                                 empty layer.                                          */
+    uint8_t       opacity;                  /*!< 255 is opaque.                                        */
+    uint8_t       hidden;                   /*!< Non-zero: the layer is hidden.                        */
+    char          blend[5];                 /*!< The blend mode's four-character key ("norm"), then a NUL. */
+    minipsd_bytes name_pascal;              /*!< The legacy name, raw bytes (non-ASCII characters are
+                                                 whatever code page the writer used).                  */
+    minipsd_bytes name_unicode;             /*!< The 'luni' name, raw UTF-16BE; data is NULL when the
+                                                 record has none.  minipsd_layer_name converts.        */
+    minipsd_bytes extra;                    /*!< All the layer's additional-information blocks, walked
+                                                 with minipsd_layer_next_block.                        */
+    minipsd_bytes channel[4];               /*!< Red, green, blue, transparency (MINIPSD_CH_*): the
+                                                 channel's stored data, its compression marker first.
+                                                 size 0: the layer has no such channel.  data NULL with
+                                                 a size: the channel exists but the buffer ends before
+                                                 it (a prefix of the file).                            */
+    uint16_t      other_channels;           /*!< Channels the reader does not read (masks, ...).       */
+} minipsd_layer_view;
+
+/**
+ * \brief The reader: walks a PSD held in memory and hands out views of it.
+ *
+ * Opaque, like the writer: minipsd_reader_init builds it inside the caller's workspace.  The buffer
+ * and the workspace are borrowed for as long as the reader is used.
+ */
+typedef struct minipsd_reader minipsd_reader;
+
+/**
+ * \brief How many bytes of workspace minipsd_reader_init needs.
+ *
+ * The size does not depend on the file, so it can be asked before the first byte is read.
+ *
+ * \param size Receives the size in bytes.
+ * \return MINIPSD_OK, or MINIPSD_ERR_ARG when size is NULL.
+ */
+MINIPSDDEF int minipsd_reader_workspace_size(size_t *size);
+
+/**
+ * \brief Starts reading a PSD: its header, its image resources and the number of layers.
+ *
+ * Needs the bytes up to the layer count, resources included (so a whole ICC profile and a
+ * thumbnail), and nothing after.  A buffer that ends sooner gives MINIPSD_ERR_SHORT: read more and
+ * call again, on the same workspace; minipsd_reader_needed says how much.  Nothing is allocated or
+ * copied, and calling init again restarts every iteration.
+ *
+ * \param r              Receives the reader, built inside workspace; set on MINIPSD_OK and on
+ *                       MINIPSD_ERR_SHORT, NULL otherwise.
+ * \param data           The file, or a prefix of it; NULL only with size 0.
+ * \param size           How many bytes data holds.
+ * \param workspace      At least minipsd_reader_workspace_size bytes, any alignment.
+ * \param workspace_size The size of workspace in bytes.
+ * \param limits         What to refuse; NULL keeps the format's own limits.
+ * \param info           Receives the file's description on MINIPSD_OK.
+ * \return MINIPSD_OK or an error code.
+ *
+ * \retval MINIPSD_ERR_ARG         r, info or workspace is NULL, data is NULL with a size, or
+ *                                 workspace_size is too small.
+ * \retval MINIPSD_ERR_SHORT       The buffer ends too soon.
+ * \retval MINIPSD_ERR_FORMAT      Not a PSD, or malformed.  Four wrong bytes at the start are enough.
+ * \retval MINIPSD_ERR_UNSUPPORTED A PSB (version 2).
+ * \retval MINIPSD_ERR_LIMIT       A side or the layer count is over limits.
+ */
+MINIPSDDEF int minipsd_reader_init(minipsd_reader **r, const void *data, size_t size, minipsd_workspace *workspace,
+                                   size_t workspace_size, const minipsd_limits *limits, minipsd_info *info);
+
+/**
+ * \brief The least buffer size with which the call that returned MINIPSD_ERR_SHORT can go further.
+ *
+ * Exact for the next step only: a section's length is read before the section, so the answer can
+ * grow as more of the file arrives.  Read at least that many bytes (from the start of the file) and
+ * repeat the call.
+ *
+ * \param r A reader, or the one minipsd_reader_init set before returning MINIPSD_ERR_SHORT.
+ * \return The size in bytes; 0 when r is NULL.
+ */
+MINIPSDDEF uint64_t minipsd_reader_needed(const minipsd_reader *r);
+
+/**
+ * \brief The next image resource, in file order.
+ *
+ * \param r   A reader from minipsd_reader_init.
+ * \param res Receives the resource.
+ * \return MINIPSD_MORE when a resource was written to res; MINIPSD_OK when there are no more
+ *         (res is untouched); or MINIPSD_ERR_ARG when r (never initialised) or res is NULL.
+ */
+MINIPSDDEF int minipsd_reader_next_resource(minipsd_reader *r, minipsd_resource *res);
+
+/**
+ * \brief The next layer record, bottom layer first.
+ *
+ * The first call walks every record once to find where the channel data begins, so for the names
+ * of a file read in parts it needs the whole record section.  A layer whose channel data lies past
+ * the end of the buffer is still returned; its channel view says so (see minipsd_layer_view).
+ *
+ * \param r     A reader from minipsd_reader_init.
+ * \param layer Receives the record.
+ * \return MINIPSD_MORE when a layer was written to layer; MINIPSD_OK when there are no more;
+ *         or an error code.
+ *
+ * \retval MINIPSD_ERR_ARG    r (never initialised) or layer is NULL.
+ * \retval MINIPSD_ERR_SHORT  The buffer ends inside the records; the reader stays where it was.
+ * \retval MINIPSD_ERR_FORMAT The records are malformed.
+ */
+MINIPSDDEF int minipsd_reader_next_layer(minipsd_reader *r, minipsd_layer_view *layer);
+
+/**
+ * \brief A layer's name as UTF-8.
+ *
+ * The 'luni' name when the record has one; otherwise the legacy name, read as Latin-1.  An
+ * unpaired surrogate in 'luni' becomes U+FFFD: a name is for display, so it is not an error.  A
+ * U+0000 ends the name, since some writers count a terminating NUL in 'luni'.
+ *
+ * \param layer  A record from minipsd_reader_next_layer.
+ * \param utf8   Receives the name and a terminating NUL; may be NULL when cap is 0.
+ * \param cap    The size of utf8 in bytes.
+ * \param needed Receives the bytes the name takes with its NUL; may be NULL.
+ * \return MINIPSD_OK when it fits; MINIPSD_MORE when cap is too small (utf8 is then empty);
+ *         or MINIPSD_ERR_ARG when layer is NULL or utf8 is NULL with cap above 0.
+ */
+MINIPSDDEF int minipsd_layer_name(const minipsd_layer_view *layer, char *utf8, size_t cap, size_t *needed);
+
+/**
+ * \brief The next additional-information block of a layer, in record order.
+ *
+ * \param layer A record from minipsd_reader_next_layer.
+ * \param pos   The caller's cursor: start at 0; moved past the block returned.
+ * \param block Receives the block.
+ * \return MINIPSD_MORE when a block was written to block; MINIPSD_OK at the end;
+ *         MINIPSD_ERR_FORMAT for a malformed block; MINIPSD_ERR_ARG for a NULL argument.
+ */
+MINIPSDDEF int minipsd_layer_next_block(const minipsd_layer_view *layer, size_t *pos, minipsd_block *block);
+
 #endif /* MINIPSD_H */
 
 /* ============================================================================================== */
@@ -315,6 +522,7 @@ MINIPSDDEF int minipsd_writer_fill(minipsd_writer *w, void *buf, size_t cap, siz
 #ifdef MINIPSD_IMPLEMENTATION
 #include "minipsd/base.h"
 #include "minipsd/writer.h"
+#include "minipsd/reader.h"
 #endif
 
 /*

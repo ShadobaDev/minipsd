@@ -249,8 +249,6 @@ struct minipsd_writer {
 
 #define MPSD__NO_ROW 0xFFFFFFFFu
 
-#define MPSD__ALIGN 8u   /* the writer and the uint64_t size table */
-
 /* Lays the workspace out and returns the bytes it takes, alignment slack included: the writer,
    the size table, the composite row sizes (RLE only), one composite row.  With a workspace, the
    writer is built at its aligned start and returned through *w. */

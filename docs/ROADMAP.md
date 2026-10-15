@@ -137,7 +137,7 @@ The only breaking stage. See [Decisions](CODE-ARCH.md#decisions), 1-2.
 
 Additive. See [Reader](CODE-ARCH.md#reader).
 
-- [ ] **S4.1** *design.* Bring into [CODE-ARCH.md](CODE-ARCH.md#reader):
+- [x] **S4.1** *design.* Bring into [CODE-ARCH.md](CODE-ARCH.md#reader):
       - the pixel target descriptor (`X2`): per channel a pointer, a pixel step and a row
         step;
       - pixel conventions (`X3`);
@@ -147,11 +147,11 @@ Additive. See [Reader](CODE-ARCH.md#reader).
       - decoding a range of rows (`R4`).
       Decide whether the writer's layer source uses the same descriptor.
       *Done when:* reviewed.
-- [ ] **S4.2** `minipsd_reader_init`:
+- [x] **S4.2** `minipsd_reader_init`:
       - header and section lengths;
       - resources: dpi, the ICC profile, every other resource as a raw view (`R2`);
       - on a prefix, how many bytes are needed (`R1`).
-- [ ] **S4.3** `minipsd_reader_next_layer` and `minipsd_layer_name`:
+- [x] **S4.3** `minipsd_reader_next_layer` and `minipsd_layer_name`:
       - records, channel views, both names;
       - unknown additional-info blocks as raw views (`R10`).
       Serves `R6`.

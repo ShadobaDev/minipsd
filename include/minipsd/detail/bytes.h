@@ -1,6 +1,7 @@
 /**
  * \file
- * \brief Internal: the output sink and big-endian integers.  Included by the writer only.
+ * \brief Internal: the output sink, and big-endian integers in both directions.  Included by the
+ *        writer and the reader.
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
@@ -35,5 +36,13 @@ static void mpsd__u32(mpsd__sink *s, uint32_t v)
 static void mpsd__zeros(mpsd__sink *s, size_t n) { while (n--) mpsd__u8(s, 0); }
 
 static size_t mpsd__pad(size_t n, size_t to) { return (n + to - 1) / to * to; }
+
+/* The alignment the writer and the reader give their own state inside a caller's workspace. */
+#define MPSD__ALIGN 8u
+
+/* --- input: big-endian integers out of a buffer --- */
+
+static uint32_t mpsd__get16(const uint8_t *p) { return ((uint32_t)p[0] << 8) | p[1]; }
+static uint32_t mpsd__get32(const uint8_t *p) { return (mpsd__get16(p) << 16) | mpsd__get16(p + 2); }
 
 #endif /* MPSD__BYTES_DONE */

@@ -53,3 +53,20 @@ TEST(MinipsdBytesTest, PadRoundsUpToAMultiple)
     EXPECT_EQ(mpsd__pad(4, 4), 4u);
     EXPECT_EQ(mpsd__pad(5, 2), 6u);
 }
+
+TEST(MinipsdBytesTest, IntegersAreReadBackBigEndian)
+{
+    const std::uint8_t b[] = {0x12, 0x34, 0x89, 0xAB, 0xCD, 0xEF};
+    EXPECT_EQ(mpsd__get16(b), 0x1234u);
+    EXPECT_EQ(mpsd__get32(b + 2), 0x89ABCDEFu);
+    const std::uint8_t high[] = {0xFF, 0xFF, 0xFF, 0xFF};
+    EXPECT_EQ(mpsd__get32(high), 0xFFFFFFFFu) << "no sign extension";
+    EXPECT_EQ(mpsd__get16(high), 0xFFFFu);
+
+    Bytes out;
+    mpsd__sink s = {collect, &out, 0, 0};
+    mpsd__u32(&s, 0xDEADBEEF);
+    mpsd__u16(&s, 0xCAFE);
+    EXPECT_EQ(mpsd__get32(out.data()), 0xDEADBEEFu) << "what the writer puts, the reader gets";
+    EXPECT_EQ(mpsd__get16(out.data() + 4), 0xCAFEu);
+}

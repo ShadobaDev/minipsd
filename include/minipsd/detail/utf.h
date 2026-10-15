@@ -1,6 +1,7 @@
 /**
  * \file
- * \brief Internal: UTF-8 to UTF-16, for layer names.  Included by the writer only.
+ * \brief Internal: UTF-8 to UTF-16 (the writer) and UTF-16BE to UTF-8 (the reader), for layer
+ *        names.
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
@@ -8,6 +9,8 @@
 
 #ifndef MPSD__UTF_DONE
 #define MPSD__UTF_DONE
+
+#include "bytes.h"
 
 /* Decodes one UTF-8 code point; malformed input yields U+FFFD and moves on by one byte. */
 static uint32_t mpsd__utf8(const unsigned char **p)
@@ -43,6 +46,39 @@ static size_t mpsd__utf16(const char *utf8, void (*unit)(void *, unsigned), void
             ++n;
         }
     }
+    return n;
+}
+
+/* Decodes one code point of UTF-16BE from [*p, end), which holds at least two bytes; an unpaired
+   surrogate yields U+FFFD. */
+static uint32_t mpsd__utf16be(const uint8_t **p, const uint8_t *end)
+{
+    const uint32_t hi = mpsd__get16(*p);
+    *p += 2;
+    if (hi < 0xD800 || hi > 0xDFFF) return hi;
+    if (hi < 0xDC00 && end - *p >= 2) {
+        const uint32_t lo = mpsd__get16(*p);
+        if (lo >= 0xDC00 && lo <= 0xDFFF) {
+            *p += 2;
+            return 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
+        }
+    }
+    return 0xFFFD;
+}
+
+/* Encodes one code point (at most 0x10FFFF, no surrogates) as UTF-8 into out, or only counts when
+   out is NULL; returns the bytes it takes. */
+static size_t mpsd__put_utf8(uint8_t *out, uint32_t cp)
+{
+    uint8_t b[4];
+    size_t  n, i;
+    if (cp < 0x80)         { b[0] = (uint8_t)cp; n = 1; }
+    else if (cp < 0x800)   { b[0] = (uint8_t)(0xC0 | (cp >> 6));  b[1] = (uint8_t)(0x80 | (cp & 0x3F)); n = 2; }
+    else if (cp < 0x10000) { b[0] = (uint8_t)(0xE0 | (cp >> 12)); b[1] = (uint8_t)(0x80 | ((cp >> 6) & 0x3F));
+                             b[2] = (uint8_t)(0x80 | (cp & 0x3F)); n = 3; }
+    else                   { b[0] = (uint8_t)(0xF0 | (cp >> 18)); b[1] = (uint8_t)(0x80 | ((cp >> 12) & 0x3F));
+                             b[2] = (uint8_t)(0x80 | ((cp >> 6) & 0x3F)); b[3] = (uint8_t)(0x80 | (cp & 0x3F)); n = 4; }
+    if (out) for (i = 0; i < n; ++i) out[i] = b[i];
     return n;
 }
 

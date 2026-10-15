@@ -96,14 +96,29 @@ The declarations, with every parameter and return code, are in
 | `minipsd_writer_total(w)` | the file size, known before the first byte |
 | `minipsd_writer_fill(w, buf, cap, &produced)` | the next bytes, into the caller's buffer: `MINIPSD_MORE` until `MINIPSD_OK` |
 | `minipsd_write(doc, fn, user)` | the whole file through a callback, on a workspace from `MINIPSD_MALLOC`; absent under `MINIPSD_NO_MALLOC` |
+| `minipsd_reader_workspace_size(&size)` | the reader's workspace: fixed, known before the file |
+| `minipsd_reader_init(&r, data, size, workspace, workspace_size, limits, &info)` | the file's description and its resources, from the whole file or a prefix of it |
+| `minipsd_reader_needed(r)` | after `MINIPSD_ERR_SHORT`: the least buffer size with which the call goes further |
+| `minipsd_reader_next_resource(r, &res)` | the image resources in file order, each a raw view: `MINIPSD_MORE` per resource, then `MINIPSD_OK` |
+| `minipsd_reader_next_layer(r, &layer)` | the layer records, bottom first, with views of their channel data: `MINIPSD_MORE` per layer, then `MINIPSD_OK` |
+| `minipsd_layer_name(layer, utf8, cap, &needed)` | a layer's name as UTF-8 (`luni`, else the legacy name as Latin-1) |
+| `minipsd_layer_next_block(layer, &pos, &block)` | a layer's additional-information blocks, each a raw view |
 | `minipsd_error_string(code)` | a short English text for a return code |
+
+The reader describes any version-1 PSD, whatever its colour mode or depth; it does not decode
+pixels yet ([ROADMAP.md](ROADMAP.md), stage 4).
 
 | Type | What it is |
 |---|---|
 | `minipsd_doc`, `minipsd_layer` | the document: canvas, dpi, layers bottom first, ICC profile, compression |
-| `minipsd_workspace` | `void`: caller memory lent to the writer, sized by `minipsd_writer_workspace_size` |
+| `minipsd_workspace` | `void`: caller memory lent to the writer or the reader, sized by its `*_workspace_size` function |
 | `minipsd_writer` | opaque; built by `minipsd_writer_init` inside the workspace |
 | `minipsd_write_fn` | the callback of `minipsd_write`: non-zero to go on, 0 to abort |
+| `minipsd_reader` | opaque; built by `minipsd_reader_init` inside the workspace |
+| `minipsd_limits` | what the reader refuses: largest side, most layers; zero fields keep the format's caps |
+| `minipsd_info` | what the file says about itself: size, depth, colour mode, dpi, ICC profile, layer count |
+| `minipsd_bytes` | a read-only view into the caller's buffer |
+| `minipsd_resource`, `minipsd_layer_view`, `minipsd_block` | an image resource, a layer record, an additional-information block, as views |
 
 **Defaults and field meanings**
 - A zero-initialised document selects RLE (`MINIPSD_RLE = 0`).
@@ -116,12 +131,16 @@ The declarations, with every parameter and return code, are in
 | Code | Value | Meaning |
 |---|---|---|
 | `MINIPSD_OK` | 0 | success |
-| `MINIPSD_MORE` | 1 | not an error: `minipsd_writer_fill` has more bytes, call again |
+| `MINIPSD_MORE` | 1 | not an error: `minipsd_writer_fill` has more bytes, an iterator produced an item, or a name needs more room; call again |
 | `MINIPSD_ERR_ARG` | -1 | NULL document or callback, no layers, ICC size without data, or a dpi that 16.16 fixed point cannot hold (see below) |
 | `MINIPSD_ERR_SIZE` | -2 | a side is 0 or above `MINIPSD_MAX_SIDE`, or a section is longer than its 32-bit length field allows (see below) |
 | `MINIPSD_ERR_WRITE` | -3 | the callback returned 0 |
 | `MINIPSD_ERR_ALLOC` | -4 | `MINIPSD_MALLOC` returned NULL |
 | `MINIPSD_ERR_OPEN` | -5 | not returned by minipsd; reserved for the caller's file code (`examples/write_file.c`) |
+| `MINIPSD_ERR_FORMAT` | -6 | reader: not a well-formed PSD |
+| `MINIPSD_ERR_UNSUPPORTED` | -7 | reader: a valid PSD outside what minipsd reads (a PSB, version 2) |
+| `MINIPSD_ERR_SHORT` | -8 | reader: the buffer ends inside data the call needs; read more, `minipsd_reader_needed` says how much |
+| `MINIPSD_ERR_LIMIT` | -9 | reader: a side or the layer count is over `minipsd_limits` |
 
 ## Memory and ownership
 
@@ -133,19 +152,24 @@ caller's memory:
 |---|---|---|---|---|
 | `minipsd_doc`, `minipsd_layer[]` | caller; borrowed | `sizeof`; `layer_count` layers | the call; for the pull writer, from init for as long as the writer is used | stack, static, heap |
 | raw document data: layer pixels (`rgba`), names, ICC profile | caller; borrowed, read in place, never copied | `width * height * 4` bytes per layer | as `minipsd_doc` | wherever the application keeps it |
-| `minipsd_workspace` | caller; lent to the writer | `minipsd_writer_workspace_size()` | for as long as the writer is used | heap; stack or static sized for the largest document |
+| `minipsd_workspace` of the writer | caller; lent to the writer | `minipsd_writer_workspace_size()` | for as long as the writer is used | heap; stack or static sized for the largest document |
 | `minipsd_writer` | inside `minipsd_workspace`; opaque | part of the workspace | as the workspace | the caller keeps only the pointer |
 | raw PSD bytes | passed to the callback of `minipsd_write()` | pieces of up to 4 KiB, in order | the callback copies what it keeps | the callback decides |
 | output buffer, `buf` of `minipsd_writer_fill()` | caller | any `cap`, 1 included; a few rows (64 KiB) keeps re-encoding negligible | the call | stack, static or heap |
 | `minipsd_write()` internals | minipsd: the workspace through `MINIPSD_MALLOC` / `MINIPSD_FREE`, a 4 KiB chunk on the stack | `minipsd_writer_workspace_size()` | the call | heap and stack |
+| the PSD to read (`data` of `minipsd_reader_init()`) | caller; borrowed, read in place, never copied | the file, or a prefix of it | for as long as the reader or any view from it is used, unchanged | wherever it was read, mapped or received |
+| `minipsd_workspace` of the reader | caller; lent to the reader | `minipsd_reader_workspace_size()`, the same for every file | for as long as the reader is used | stack, static or heap |
+| `minipsd_reader` | inside its workspace; opaque | part of the workspace | as the workspace | the caller keeps only the pointer |
+| `minipsd_info`, `minipsd_resource`, `minipsd_layer_view`, `minipsd_block` | caller; filled by the reader | `sizeof` | their views point into the PSD: valid as the PSD | stack |
+| layer name, `utf8` of `minipsd_layer_name()` | caller | `needed` bytes, the NUL included | the call | stack, static or heap |
 
 - **The document is read-only and frozen while in use.** The pull writer sizes everything in
   `minipsd_writer_init`; a document changed afterwards would no longer match the sizes already
   recorded.
 - **Nothing to release.** The library holds no memory between calls: the writer ends with its
   workspace, which the caller may free or reuse for another document (if large enough).
-- **No global or static mutable state.** Writers in separate threads never interact; one workspace
-  serves one writer at a time.
+- **No global or static mutable state.** Writers and readers in separate threads never interact;
+  one workspace serves one writer or reader at a time.
 
 ## What goes into the file
 

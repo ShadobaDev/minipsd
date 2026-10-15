@@ -54,6 +54,7 @@ set(_minipsd_test_sources
     test_packbits.cpp
     test_composite.cpp
     test_writer.cpp
+    test_reader.cpp
     minipsd_c_smoke.c        # minipsd.h compiled as C, compared byte for byte with the C++ build
     test_alloc_failure.cpp   # minipsd.h with an allocator that fails on demand
     test_golden.cpp          # the bytes of 0.1.0, by SHA-256, for a fixed set of documents

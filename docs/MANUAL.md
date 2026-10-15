@@ -135,7 +135,36 @@ The whole program, an `O_NONBLOCK` pipe driven by `poll` with its reading end in
 
 ## Reading
 
-*Not available yet* ([ROADMAP.md](ROADMAP.md), stage 4).
+*So far the reader describes a file; decoding pixels comes next* ([ROADMAP.md](ROADMAP.md),
+stage 4). It works on bytes you already hold, never copies them, and allocates nothing: its
+workspace has a fixed size, so it can live on the stack.
+
+```c
+uint8_t            ws[256];   /* at least minipsd_reader_workspace_size(), the same for every file */
+minipsd_reader    *r;
+minipsd_info       info;
+minipsd_layer_view layer;
+char               name[256];
+int                rc;
+
+rc = minipsd_reader_init(&r, psd, psd_size, ws, sizeof ws, NULL, &info);   /* NULL: the format's limits */
+if (rc < 0) return rc;
+/* info: width, height, depth, colour mode, dpi, the ICC profile, the layer count */
+while ((rc = minipsd_reader_next_layer(r, &layer)) == MINIPSD_MORE)
+    if (minipsd_layer_name(&layer, name, sizeof name, NULL) == MINIPSD_OK) puts(name);
+```
+
+Everything the reader returns points into `psd`, which must stay where it is, unchanged, while
+any of it is used.
+
+**A prefix is enough to describe a file.** `minipsd_reader_init` needs the bytes up to the layer
+count only. Given less, it returns `MINIPSD_ERR_SHORT`, and `minipsd_reader_needed` says how
+long the buffer must be for the next step; read that much and call `init` again. Layer names need
+the whole records section; a layer whose pixel data is not in the buffer yet still comes back,
+with that channel's view `data == NULL`.
+
+**Untrusted files.** Every length is checked; a malformed file is `MINIPSD_ERR_FORMAT`. Pass a
+`minipsd_limits` to refuse large sides or many layers early (`MINIPSD_ERR_LIMIT`).
 
 ## Return codes
 

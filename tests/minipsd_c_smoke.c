@@ -65,5 +65,33 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
     } while (rc == MINIPSD_MORE);
     if (rc != MINIPSD_OK || pulled != b.size || memcmp(again, b.data, b.size) != 0)
         return -102;
+
+    /* The reader, over the bytes just written: the file, its resources, its layers and their blocks. */
+    {
+        minipsd_reader    *rd;
+        minipsd_info       info;
+        minipsd_resource   res;
+        minipsd_layer_view lv;
+        minipsd_block      blk;
+        uint8_t            rws[256];
+        char               name[16];
+        size_t             rneed, pos = 0, resources = 0, blocks = 0;
+
+        if (minipsd_reader_workspace_size(&rneed) != MINIPSD_OK || rneed > sizeof rws
+            || minipsd_reader_init(&rd, b.data, b.size, rws, rneed, NULL, &info) != MINIPSD_OK
+            || info.width != 3 || info.height != 2 || info.layer_count != 2 || minipsd_reader_needed(rd) != 0)
+            return -103;
+        while (minipsd_reader_next_resource(rd, &res) == MINIPSD_MORE) ++resources;
+        if (resources != 1)
+            return -104;
+        if (minipsd_reader_next_layer(rd, &lv) != MINIPSD_MORE
+            || minipsd_layer_name(&lv, name, sizeof name, &rneed) != MINIPSD_OK
+            || rneed != 9 || memcmp(name, "Template", 9) != 0 || lv.channel[MINIPSD_CH_R].size == 0)
+            return -105;
+        while (minipsd_layer_next_block(&lv, &pos, &blk) == MINIPSD_MORE) ++blocks;
+        if (blocks != 1 || minipsd_reader_next_layer(rd, &lv) != MINIPSD_MORE
+            || minipsd_reader_next_layer(rd, &lv) != MINIPSD_OK)
+            return -106;
+    }
     return MINIPSD_OK;
 }

@@ -25,7 +25,8 @@ TEST(MinipsdBaseTest, OnlyErrorsAreNegative)
 {
     EXPECT_EQ(MINIPSD_OK, 0);
     EXPECT_GT(MINIPSD_MORE, 0) << "rc < 0 is the failure test for every function";
-    for (int code : {MINIPSD_ERR_ARG, MINIPSD_ERR_SIZE, MINIPSD_ERR_WRITE, MINIPSD_ERR_ALLOC, MINIPSD_ERR_OPEN})
+    for (int code : {MINIPSD_ERR_ARG, MINIPSD_ERR_SIZE, MINIPSD_ERR_WRITE, MINIPSD_ERR_ALLOC, MINIPSD_ERR_OPEN,
+                     MINIPSD_ERR_FORMAT, MINIPSD_ERR_UNSUPPORTED, MINIPSD_ERR_SHORT, MINIPSD_ERR_LIMIT})
         EXPECT_LT(code, 0);
 }
 
@@ -34,6 +35,7 @@ TEST(MinipsdBaseTest, EveryReturnCodeHasItsOwnText)
     EXPECT_STREQ(minipsd_error_string(MINIPSD_ERR_SIZE),
                  "too large for PSD: a side outside 1..30000, or a section above 4 GiB");
     EXPECT_STREQ(minipsd_error_string(-100), "unknown error");
-    for (int code : {MINIPSD_OK, MINIPSD_MORE, MINIPSD_ERR_ARG, MINIPSD_ERR_WRITE, MINIPSD_ERR_ALLOC, MINIPSD_ERR_OPEN})
+    for (int code : {MINIPSD_OK, MINIPSD_MORE, MINIPSD_ERR_ARG, MINIPSD_ERR_WRITE, MINIPSD_ERR_ALLOC, MINIPSD_ERR_OPEN,
+                     MINIPSD_ERR_FORMAT, MINIPSD_ERR_UNSUPPORTED, MINIPSD_ERR_SHORT, MINIPSD_ERR_LIMIT})
         EXPECT_STRNE(minipsd_error_string(code), "unknown error") << "every return code has its own text: " << code;
 }

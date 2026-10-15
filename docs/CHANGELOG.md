@@ -5,6 +5,16 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
 
 ## [Unreleased]
 
+### Added
+- The reader, first part: `minipsd_reader_init` describes a PSD held in memory (size, depth,
+  colour mode, dpi, ICC profile, layer count), from the whole file or a prefix
+  (`MINIPSD_ERR_SHORT` with `minipsd_reader_needed`); `minipsd_reader_next_resource`,
+  `minipsd_reader_next_layer`, `minipsd_layer_name` and `minipsd_layer_next_block` walk its
+  resources, layer records and their blocks as views, with no allocation and no copy. Pixels are
+  not decoded yet.
+- Return codes `MINIPSD_ERR_FORMAT`, `MINIPSD_ERR_UNSUPPORTED`, `MINIPSD_ERR_SHORT`,
+  `MINIPSD_ERR_LIMIT`, and `minipsd_limits`.
+
 ## [0.2.0] — 2026-10-15
 
 **Breaking:** `minipsd_write_file` is gone; minipsd does no I/O of its own. To migrate, copy
