@@ -112,10 +112,10 @@ tools/
 
 | Module (section of `minipsd.h`) | Struct | Functions (sketch) | Implementation |
 |---|---|---|---|
-| Version, linkage, return codes | `minipsd_bytes { const uint8_t *data; size_t size; }` | `minipsd_error_string`; new codes, added never renumbered: `MINIPSD_MORE = 1` (positive: not an error, call again), `MINIPSD_ERR_FORMAT = -6`, `MINIPSD_ERR_UNSUPPORTED = -7` | `base.h` |
+| Version, linkage, return codes | `minipsd_bytes { const uint8_t *data; size_t size; }` | `minipsd_error_string`; new codes, added never renumbered: `MINIPSD_MORE = 1` (positive: not an error, call again), `MINIPSD_ERR_FORMAT = -6`, `MINIPSD_ERR_UNSUPPORTED = -7`, `MINIPSD_ERR_SHORT = -8`, `MINIPSD_ERR_LIMIT = -9` | `base.h` |
 | Document | `minipsd_doc`, `minipsd_layer` (unchanged from 0.1) | `minipsd_doc_check(doc)`: the validation `minipsd_write` does today, now callable on its own | `writer.h` today; its own file if the reader shares it |
 | Writer | `minipsd_writer` (opaque, built in the workspace) | `minipsd_writer_workspace_size`, `_init`, `_total`, `_fill`; `minipsd_write` | `writer.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
-| Reader | `minipsd_reader` (opaque, like the writer), `minipsd_info`, `minipsd_layer_view` | `minipsd_reader_init`, `_next_layer`, `minipsd_decode_layer`, `minipsd_decode_composite`, `minipsd_layer_name` | `reader.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
+| Reader | `minipsd_reader` (opaque, like the writer), `minipsd_info`, `minipsd_resource`, `minipsd_layer_view`, `minipsd_target` (of `minipsd_plane`), `minipsd_decode_opts`, `minipsd_limits` | `minipsd_reader_workspace_size`, `_init`, `_needed`, `_next_resource`, `_next_layer`, `minipsd_layer_name`, `minipsd_decode_layer`, `minipsd_decode_composite`, `minipsd_target_rgba` | `reader.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
 
 Rules for the split:
 
@@ -217,26 +217,180 @@ The decoder parses a buffer in place. It allocates nothing and copies nothing ex
 it decodes into caller buffers.
 
 ```c
-int minipsd_reader_init      (minipsd_reader *r, const void *data, size_t size, minipsd_info *info);
-int minipsd_reader_next_layer(minipsd_reader *r, minipsd_layer_view *layer);   /* MINIPSD_MORE / MINIPSD_OK at the end */
-int minipsd_decode_layer     (const minipsd_reader *r, const minipsd_layer_view *layer,
-                              uint8_t *rgba, size_t row_stride);
-int minipsd_decode_composite (const minipsd_reader *r, uint8_t *rgba, size_t row_stride);   /* white matte removed */
-int minipsd_layer_name       (const minipsd_layer_view *layer, char *utf8, size_t cap, size_t *needed);
+int    minipsd_reader_workspace_size(size_t *size);
+int    minipsd_reader_init (minipsd_reader **r, const void *data, size_t size,
+                            minipsd_workspace *workspace, size_t workspace_size,
+                            const minipsd_limits *limits,          /* NULL: the defaults */
+                            minipsd_info *info);
+size_t minipsd_reader_needed(const minipsd_reader *r);             /* after MINIPSD_ERR_SHORT */
+
+int minipsd_reader_next_resource(minipsd_reader *r, minipsd_resource   *res);    /* MORE: got one; OK: no more */
+int minipsd_reader_next_layer   (minipsd_reader *r, minipsd_layer_view *layer);  /* MORE: got one; OK: no more */
+int minipsd_layer_name          (const minipsd_layer_view *layer, char *utf8, size_t cap, size_t *needed);
+int minipsd_layer_next_block    (const minipsd_layer_view *layer, size_t *pos, minipsd_block *block);  /* MORE / OK */
+
+int minipsd_decode_layer    (const minipsd_reader *r, const minipsd_layer_view *layer,
+                             const minipsd_target *target, const minipsd_decode_opts *opts);
+int minipsd_decode_composite(const minipsd_reader *r,
+                             const minipsd_target *target, const minipsd_decode_opts *opts);
+
+void minipsd_target_rgba(minipsd_target *t, uint8_t *rgba, size_t row_stride);  /* the common case */
 ```
 
-- **`minipsd_info`:** version, size, depth, colour mode, channel count, dpi, the ICC profile as
-  a `minipsd_bytes` view, the layer count, and whether the composite carries transparency.
-- **`minipsd_layer_view`:** bounds, opacity, flags, blend key, and two name views (Pascal and
-  `luni`, raw). It also holds each channel's id and compressed data as a `minipsd_bytes` view
-  into the caller's buffer.
+The reader follows the writer's pattern: opaque, built by `init` inside a caller workspace, which
+never grows with the file (the optional index for `R5` is a separate, later call with its own
+workspace). Every pointer below is a borrowed view into the blob or the caller's memory.
+
+### Data the reader returns
+
+- **`minipsd_info`** (`init` fills it; fixed size, on the caller's stack):
+  - `width`, `height`, `depth`, `color_mode`, `channels`, as stored;
+  - `dpi` (`0` when the file has no resolution resource) and `icc` as a `minipsd_bytes`
+    (`size == 0` when absent);
+  - `layer_count`;
+  - `composite_has_alpha`: the file's layer count is negative, so the composite's first extra
+    channel is transparency.
+- **`minipsd_resource`** (`R2`, `R10`): `{ uint16_t id; minipsd_bytes data; }`. The reader
+  decodes 1005 (into `dpi`) and 1039 (into `icc`) and still lists them. Every other resource,
+  thumbnail 1036 included, is only a raw view. There is no find-by-id: resources are few, and the
+  caller loops over `next_resource`.
+- **`minipsd_layer_view`** (`next_layer` fills it; layers come in file order, bottom first, as
+  in `minipsd_doc`):
+  - the record's rectangle, opacity, hidden flag and four-character blend key;
+  - two raw name views, the Pascal string and the `luni` UTF-16BE block (empty when absent);
+  - the colour channels R, G, B and A, each as a `minipsd_bytes` view of its compressed data
+    (an absent one has `data == NULL`);
+  - `other_channels`, the number of channels not read (masks, extra channels), so a caller knows
+    something was left out; they become views when layer masks land;
+  - the record's additional-info region as one `minipsd_bytes` view, walked with
+    `minipsd_layer_next_block(layer, &pos, &block)`, where `pos` is the caller's cursor (start at
+    0) and `block` is `{ key, bytes }`. The reader decodes `luni` itself and lists it too; every
+    other block is only a raw view (`R10`).
+- **`minipsd_layer_name`** converts to UTF-8. It uses `luni` when present and otherwise the Pascal
+  string, taken as Latin-1. An unpaired surrogate becomes U+FFFD: a name is for display, so it is
+  not an error. It always sets `*needed` (with the terminating NUL) and returns `MINIPSD_MORE`
+  when `cap` is too small.
+
+### The pixel target (`X2`)
+
+The caller describes where pixels go; the library never allocates for them.
+
+```c
+typedef struct minipsd_plane {
+    uint8_t  *data;        /* sample (0, 0) of this channel; NULL: do not write it */
+    ptrdiff_t pixel_step;  /* bytes from a sample to its right neighbour */
+    ptrdiff_t row_step;    /* bytes from a row to the next; may be negative (bottom-up) */
+} minipsd_plane;
+
+typedef struct minipsd_target { minipsd_plane channel[4]; } minipsd_target;   /* R, G, B, A */
+```
+
+- **One shape covers every layout.**
+  - Interleaved RGBA: the four `data` pointers are one byte apart, `pixel_step` is 4.
+    `minipsd_target_rgba` fills exactly this.
+  - BGRA: swap two pointers. Planar: four buffers, `pixel_step` 1.
+  - A sub-rectangle of a bigger canvas: offset `data`; the width and height come from the layer
+    or the band, never from the target.
+- **A `NULL` plane is skipped.** So a caller that wants RGB only, or one channel, leaves the
+  others `NULL`. If the file has no alpha and the target has an `A` plane, it is filled with 255.
+- **The caller guarantees the memory**: the library cannot see the size of a buffer, so it writes
+  `width * rows` samples per non-`NULL` plane and nothing else. `info`, the layer view and the
+  band tell the caller how big that is before it allocates.
+- **Samples are one byte (depth 8) for now.** A depth field goes at the end of `minipsd_target`
+  with the 16-bit stage; zero keeps 8.
+
+### Pixel conventions (`X3`)
+
+- **Straight (not premultiplied) alpha.** It is what `minipsd_layer.rgba` takes, so a decoded
+  layer can be written back unchanged (`E4`). A caller that wants premultiplied does the
+  multiplication; a flag can be added later without breaking anything.
+- **A layer is decoded as stored.** Its opacity and hidden flag stay in the view and are not
+  applied to the pixels, as on the writer side. A layer without an alpha channel decodes as
+  opaque.
+- **The composite is un-matted by default.** The file stores it matted against white
+  (`c*a + 255*(1-a)`); the reader inverts that, `c = 255 - (255 - s) * 255 / a` clamped to
+  0..255, and `0` where `a == 0`. This gives the straight-alpha image the writer took in, within
+  one level of rounding (see the spec's Verification). `keep_matte` returns it as stored.
+  Un-matting reads each pixel's alpha back from the target, so the target must have an `A` plane
+  (otherwise `MINIPSD_ERR_ARG`) unless `keep_matte` is set or the file has no composite alpha.
+- **Channel order is the target's business.** The library's own order is R, G, B, A.
+
+### Decode options and row bands (`R3`, `R4`)
+
+```c
+typedef struct minipsd_decode_opts {
+    uint32_t y_first, y_count;  /* rows to decode; y_count 0: from y_first to the end */
+    int      keep_matte;        /* composite only: do not remove the white matte */
+} minipsd_decode_opts;           /* NULL opts: the whole image, un-matted */
+```
+
+- **The target describes the band, not the canvas**: its row 0 receives row `y_first`. So a
+  caller processing a huge canvas in strips reuses one small buffer.
+- **How a row is reached.** Raw data is addressed directly. For RLE, the row-count table is
+  summed up to `y_first`, which reads two bytes per skipped row, with no allocation. For a
+  composite that sum runs over every row of the channels before it. Strips therefore cost
+  `O(height)` reads per call. That is cheap next to decoding, and the optional index (`R5`,
+  later) removes it if a caller needs.
+- A band outside the image is `MINIPSD_ERR_ARG`.
+
+### Limits (`X4`) and errors (`X7`)
+
+```c
+typedef struct minipsd_limits {
+    uint32_t max_side;           /* 0: MINIPSD_MAX_SIDE */
+    uint32_t max_layers;         /* 0: 32767, the format's own cap */
+    uint64_t max_decoded_bytes;  /* per decode call; 0: no limit beyond the other two */
+} minipsd_limits;                /* nesting depth goes at the end with layer groups */
+```
+
+- **Always checked; the defaults are the format's own caps**, so with `NULL` the reader accepts
+  every valid file and an untrusted-upload service tightens the three fields (`R8`). The limits
+  are tested where each quantity first becomes known: sides and layer count in `init`, a layer's
+  area in `next_layer`, the bytes of one call before `decode_*` writes anything.
+- **New return codes**, added after `MINIPSD_ERR_UNSUPPORTED = -7`, never renumbered:
+
+  | Code | Value | Meaning | Caller's reply |
+  |---|---|---|---|
+  | `MINIPSD_ERR_SHORT` | -8 | the blob ends inside data the call needs; the file may be fine | read more (see below) |
+  | `MINIPSD_ERR_LIMIT` | -9 | a value is over a limit; the file is not known to be bad | refuse, or raise the limit |
+  | `MINIPSD_ERR_FORMAT` | -6 | malformed | reject the file |
+  | `MINIPSD_ERR_UNSUPPORTED` | -7 | valid, outside the supported subset | reject, or use another tool |
+
+  Bad arguments stay `MINIPSD_ERR_ARG`. The reader allocates nothing, so it has no
+  `MINIPSD_ERR_ALLOC`.
+- **What the target holds after an error.** `ARG`, `LIMIT` and `SHORT` are decided before the
+  first sample is written, so the target is untouched. `FORMAT` found mid-stream (a bad RLE row)
+  leaves it unspecified.
+
+### Reading from a prefix (`R1`)
+
+`init` needs only the bytes up to the layer count: the header, the colour-mode data, the
+image resources (so the whole ICC profile and any thumbnail) and the first fields of the layer
+section. If the blob ends sooner, it returns `MINIPSD_ERR_SHORT`, and the reader it built still
+answers `minipsd_reader_needed`: the exact least length that lets the same call go further.
+
+```c
+while ((rc = minipsd_reader_init(&r, buf, have, ws, ws_size, NULL, &info)) == MINIPSD_ERR_SHORT)
+    have = read_more(&buf, minipsd_reader_needed(r));   /* grows to at least `needed` */
+```
+
+- **The count is exact for the next step, not for the whole file**: the section lengths that
+  fix the next step are inside the bytes already read, so a file manager reads a few steps at
+  most, then has everything `info` needs.
+- `next_layer` works on the same terms, and needs the whole records section for the names;
+  `decode_*` needs that layer's channel bytes (or the band's rows) and says so with `SHORT`.
+- **A longer prefix means calling `init` again** on the same workspace; layer iteration then
+  starts from the first layer. Every earlier view is valid only if the buffer did not move.
+
+### Layout and memory
+
 - **Memory**, planned on the writer's pattern; it moves into the spec's
   [Memory and ownership](SPECIFICATION.md#memory-and-ownership) table when the reader lands:
 
   | Memory | Owner | Notes |
   |---|---|---|
   | the file's bytes (the blob) | caller; borrowed, never copied | read in, `mmap`ed or received; must stay valid while views point into it |
-  | `minipsd_workspace` | caller; lent to the reader | the opaque `minipsd_reader` and its state (section offsets, the layer cursor, later an index for `R5`); small; heap, stack or static |
+  | `minipsd_workspace` | caller; lent to the reader | the opaque `minipsd_reader` and its state (section offsets, the resource and layer cursors); a fixed small size; heap, stack or static. The index for `R5` is a later call with its own workspace |
   | `minipsd_info`, `minipsd_layer_view` | caller | fixed size, stack; their `minipsd_bytes` fields point into the blob |
   | decoded pixels | caller | the target descriptor (`X2`) says where; one layer at a time (`R6`) or all of them (`R7`) |
   | a whole `minipsd_doc` (`R7`) | caller | stage 5: sizes first, then the caller's buffers or allocator; never a copy kept by the reader |
@@ -260,6 +414,34 @@ int minipsd_layer_name       (const minipsd_layer_view *layer, char *utf8, size_
   apart from the record/data split, but it would need buffering inside the library that
   contradicts [Dependency rules](#dependency-rules). It is added only if a real consumer needs
   it.
+
+### Points for the S4.1 review
+
+Each is proposed above; the alternative is what the review may choose instead.
+
+1. **The writer's layer source does not share the descriptor.** `minipsd_layer.rgba` stays. A
+   strided or row-by-row source (`W6`, `W7`) would be a field added at the end of
+   `minipsd_layer` with the same shape but `const` pointers, with `rgba` as the default when it
+   is zero. One type for both directions would need a cast, because the reader writes through
+   the pointers and the writer only reads. *Alternative:* a shared type with `const` removed.
+2. **Short input is an error with a count** (`ERR_SHORT` plus `minipsd_reader_needed`), not
+   `MINIPSD_MORE`. `MORE` already means "a layer was produced, call again" in `next_layer`, and
+   "the blob is too short" must not be mistaken for it.
+3. **Limits default to the format's own caps**, so `X4`'s "on by default" means the checks
+   always run, but only a caller that sets a limit gets a stricter reader. *Alternative:* a
+   stricter built-in default (for instance a decoded-bytes cap), which would reject some valid
+   files out of the box.
+4. **Un-matting needs an `A` plane in the target.** The alternative is a width-sized scratch row
+   in the workspace, which makes the workspace depend on the file and `init` run before it can
+   be sized.
+5. **One `minipsd_decode_opts` for both band and matte**, `NULL` for the defaults, instead of
+   extra parameters on each decode call. New options go at its end.
+6. **Resources are iterated, not looked up by id.** A `find_resource` is a few lines on top
+   if a caller wants it.
+7. **A Pascal-only name is read as Latin-1.** Old Mac files use other code pages; the reader
+   makes no guess, and the raw view is there for a caller that knows better.
+8. **Layer views carry R, G, B and A only**, with a count of the channels left out. Masks join
+   when the layer-mask feature does.
 
 ## Features through the modules
 
