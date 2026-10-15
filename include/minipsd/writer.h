@@ -10,19 +10,20 @@
 #ifndef MPSD__WRITER_DONE
 #define MPSD__WRITER_DONE
 
-#ifndef MINIPSD_NO_STDIO
-#  include <stdio.h>
-#  ifdef _WIN32
-#    include <wchar.h>
+#ifndef MINIPSD_NO_MALLOC
+#  if !defined(MINIPSD_MALLOC) || !defined(MINIPSD_FREE)
+#    include <stdlib.h>
+#    undef  MINIPSD_MALLOC
+#    undef  MINIPSD_FREE
+#    define MINIPSD_MALLOC(size) malloc(size)
+#    define MINIPSD_FREE(ptr)    free(ptr)
 #  endif
-#endif
-
-#if !defined(MINIPSD_MALLOC) || !defined(MINIPSD_FREE)
-#  include <stdlib.h>
-#  undef  MINIPSD_MALLOC
-#  undef  MINIPSD_FREE
-#  define MINIPSD_MALLOC(size) malloc(size)
-#  define MINIPSD_FREE(ptr)    free(ptr)
+#  ifndef MINIPSD_NO_STDIO
+#    include <stdio.h>
+#    ifdef _WIN32
+#      include <wchar.h>
+#    endif
+#  endif
 #endif
 
 #include "detail/bytes.h"
@@ -92,21 +93,8 @@ static void mpsd__layer_extra(mpsd__sink *s, const char *name)
 
 /* --- the layer section --- */
 
-/* A layer channel's data: its compression, then (RLE) the row byte counts, then the rows. */
-static void mpsd__layer_channel(mpsd__sink *s, const minipsd_doc *d, const minipsd_layer *l, int channel)
-{
-    uint32_t y;
-    const int rle = d->compression != MINIPSD_RAW;
-    mpsd__u16(s, rle ? 1 : 0);
-    if (!l->rgba) return;                     /* an empty layer has no rows */
-    if (rle)
-        for (y = 0; y < d->height; ++y)
-            mpsd__u16(s, (unsigned)mpsd__row_size(d, l->rgba + (size_t)y * d->width * 4, channel));
-    for (y = 0; y < d->height; ++y)
-        mpsd__row(s, d, l->rgba + (size_t)y * d->width * 4, channel);
-}
-
-/* What mpsd__layer_channel will write, without compressing anything twice. */
+/* What a layer channel's data takes: its compression, then (RLE) the row byte counts, then the
+   rows. */
 static uint64_t mpsd__layer_channel_size(const minipsd_doc *d, const minipsd_layer *l, int channel)
 {
     uint64_t size = 2;
@@ -179,8 +167,7 @@ static uint64_t mpsd__resources_size(const minipsd_doc *d)
    goes in the records ahead of the data, so each is compressed once here to learn it. */
 static int mpsd__measure_layers(const minipsd_doc *d, uint64_t *sizes, uint64_t *content, uint64_t *info)
 {
-    size_t i;
-    int    k;
+    size_t i, k;
     *content = 2;                                                  /* the layer count */
     for (i = 0; i < d->layer_count; ++i) {
         *content += 16 + 2 + 4 * 6 + 8 + 4 + 4 + mpsd__layer_extra_size(d->layers[i].name);
@@ -467,49 +454,32 @@ MINIPSDDEF int minipsd_writer_fill(minipsd_writer *w, void *buf, size_t cap, siz
     return w->piece == MPSD__DONE ? MINIPSD_OK : MINIPSD_MORE;
 }
 
-/* --- the push writer --- */
+#ifndef MINIPSD_NO_MALLOC
+
+/* --- the push writer: the pull writer driven to the end on an allocated workspace --- */
+
+#define MPSD__CHUNK 4096   /* bytes per callback; on the stack */
 
 MINIPSDDEF int minipsd_write(const minipsd_doc *d, minipsd_write_fn fn, void *user)
 {
-    mpsd__sink      s = { fn, user, 0, 0 };
-    mpsd__composite comp;
-    uint64_t       *sizes;
-    uint8_t        *row;
-    uint64_t        info, content;
-    uint32_t        y;
-    size_t          i;
-    int             k, rc = d ? minipsd_doc_check(d) : MINIPSD_ERR_ARG;   /* d spelled out for static analysers */
+    minipsd_writer *w;
+    void           *workspace;
+    uint8_t         chunk[MPSD__CHUNK];
+    size_t          size = 0, n;
+    int             rc = d ? minipsd_writer_workspace_size(d, &size) : MINIPSD_ERR_ARG;   /* d spelled out for static analysers */
     if (rc != MINIPSD_OK) return rc;
     if (!fn) return MINIPSD_ERR_ARG;
-
-    sizes = (uint64_t *)MINIPSD_MALLOC(d->layer_count * 4 * sizeof(uint64_t));
-    if (!sizes) return MINIPSD_ERR_ALLOC;
-    rc = mpsd__measure_layers(d, sizes, &content, &info);
-    if (rc != MINIPSD_OK) { MINIPSD_FREE(sizes); return rc; }
-    row = (uint8_t *)MINIPSD_MALLOC((size_t)d->width * 4);
-    if (!row) { MINIPSD_FREE(sizes); return MINIPSD_ERR_ALLOC; }
-    mpsd__composite_init(&comp, d, row);
-
-    mpsd__head(&s, d, info);
-    for (i = 0; i < d->layer_count; ++i)
-        mpsd__layer_record(&s, d, &d->layers[i], sizes + i * 4);
-    for (i = 0; i < d->layer_count; ++i)
-        for (k = 0; k < 4; ++k)
-            mpsd__layer_channel(&s, d, &d->layers[i], mpsd__channel_of[k]);
-    mpsd__tail(&s, d, content, info);
-
-    /* The composite: R, G, B, then its transparency (RGBA offsets 0..3), each channel's rows in turn. */
-    if (d->compression != MINIPSD_RAW)
-        for (k = 0; k < 4; ++k)
-            for (y = 0; y < d->height; ++y)
-                mpsd__u16(&s, (unsigned)mpsd__row_size(d, mpsd__composite_row(&comp, y), k));
-    for (k = 0; k < 4; ++k)
-        for (y = 0; y < d->height && !s.failed; ++y)
-            mpsd__row(&s, d, mpsd__composite_row(&comp, y), k);
-
-    MINIPSD_FREE(row);
-    MINIPSD_FREE(sizes);
-    return s.failed ? MINIPSD_ERR_WRITE : MINIPSD_OK;
+    workspace = MINIPSD_MALLOC(size);
+    if (!workspace) return MINIPSD_ERR_ALLOC;
+    rc = minipsd_writer_init(&w, d, workspace, size);
+    if (rc == MINIPSD_OK) {
+        do {   /* never n == 0: the call that produces the last byte already returns MINIPSD_OK */
+            rc = minipsd_writer_fill(w, chunk, sizeof chunk, &n);
+            if (!fn(user, chunk, n)) rc = MINIPSD_ERR_WRITE;
+        } while (rc == MINIPSD_MORE);
+    }
+    MINIPSD_FREE(workspace);
+    return rc;
 }
 
 /* --- to a file --- */
@@ -559,5 +529,6 @@ MINIPSDDEF int minipsd_write_file(const minipsd_doc *doc, const char *path)
     return rc;
 }
 #endif /* MINIPSD_NO_STDIO */
+#endif /* MINIPSD_NO_MALLOC */
 
 #endif /* MPSD__WRITER_DONE */

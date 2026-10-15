@@ -7,6 +7,7 @@
 #   minipsd-tests-amalgamated  the same tests against the single-file minipsd.h
 #   minipsd-cxx17      compile-only: the header and its implementation as C++17
 #   minipsd-include-check  compile-only: minipsd.h alone, then its implementation, as C
+#   minipsd-no-malloc-check  compile-only: the build with MINIPSD_NO_MALLOC, as C
 #   consumer-<mode>    a tiny project using minipsd each supported way (see consumer/)
 # ---------------------------------------------------------------------------
 
@@ -29,6 +30,18 @@ if(MSVC)
     set(MINIPSD_WARNINGS /W4 /WX /permissive-)
 else()
     set(MINIPSD_WARNINGS -Wall -Wextra -Wpedantic -Werror)
+    # C, which here is the library itself, is held to more.  Not C++: the header must stay valid
+    # C, whose casts -Wold-style-cast and -Wuseless-cast reject.  gcc only: -Wcast-align, because
+    # clang's ignores the platform and flags the workspace layout, which aligns its own pointers;
+    # and two warnings clang does not have.
+    foreach(_flag -Wconversion -Wsign-conversion -Wshadow -Wcast-qual -Wundef -Wdouble-promotion
+                  -Wnull-dereference -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes
+                  -Wold-style-definition)
+        list(APPEND MINIPSD_WARNINGS "$<$<COMPILE_LANGUAGE:C>:${_flag}>")
+    endforeach()
+    foreach(_flag -Wcast-align -Wduplicated-cond -Wlogical-op)
+        list(APPEND MINIPSD_WARNINGS "$<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:GNU>>:${_flag}>")
+    endforeach()
 endif()
 
 # Every test file includes only minipsd.h, so each also runs against the amalgamated file.
@@ -89,11 +102,15 @@ target_link_libraries(minipsd-cxx17 PRIVATE minipsd::minipsd)
 target_compile_options(minipsd-cxx17 PRIVATE ${MINIPSD_WARNINGS})
 set_target_properties(minipsd-cxx17 PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 
-# minipsd.h compiles alone, and its implementation leaves no internal function unused.
-add_library(minipsd-include-check OBJECT include_check.c)
-target_link_libraries(minipsd-include-check PRIVATE minipsd::minipsd)
-target_compile_options(minipsd-include-check PRIVATE ${MINIPSD_WARNINGS})
-set_target_properties(minipsd-include-check PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+# minipsd.h compiles alone, and its implementation leaves no internal function unused; the same
+# for the build without allocation, which must not even include <stdlib.h>.
+foreach(_check include no-malloc)
+    string(REPLACE "-" "_" _source "${_check}_check.c")
+    add_library(minipsd-${_check}-check OBJECT ${_source})
+    target_link_libraries(minipsd-${_check}-check PRIVATE minipsd::minipsd)
+    target_compile_options(minipsd-${_check}-check PRIVATE ${MINIPSD_WARNINGS})
+    set_target_properties(minipsd-${_check}-check PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+endforeach()
 
 # clang-tidy (the linux-tidy preset) on our own targets only, not on a fetched GoogleTest.
 # Checks and options come from .clang-tidy at the repository root.

@@ -298,9 +298,9 @@ TEST(MinipsdWriterTest, PullWriterRefusesWhatItCannotUse)
 
 TEST(MinipsdWriterTest, WriteFailureIsReported)
 {
-    const Bytes px = testImage(4, 4);
+    const Bytes px = testImage(128, 64);   // several 4 KiB callbacks
     const minipsd_layer layer{"L", px.data(), 255, 0};
-    const minipsd_doc d = docOf(4, 4, &layer, 1);
+    const minipsd_doc d = docOf(128, 64, &layer, 1);
     struct Calls { int made, failAt; };
     const auto failing = [](void *user, const void *, size_t) -> int {
         auto *c = static_cast<Calls *>(user);
@@ -308,9 +308,10 @@ TEST(MinipsdWriterTest, WriteFailureIsReported)
     };
     Calls all{0, 0};   // never fails
     ASSERT_EQ(minipsd_write(&d, failing, &all), MINIPSD_OK);
+    ASSERT_GE(all.made, 3);
 
-    // Early in the header, and in the last channel of the composite with rows still to come.
-    for (int failAt : {2, all.made - 3}) {
+    // The first piece, one in the middle, and the last.
+    for (int failAt : {1, 2, all.made}) {
         Calls c{0, failAt};
         EXPECT_EQ(minipsd_write(&d, failing, &c), MINIPSD_ERR_WRITE) << "failing call " << failAt;
         EXPECT_EQ(c.made, failAt) << "the writer stops calling back after the first failure";

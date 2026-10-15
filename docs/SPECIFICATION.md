@@ -65,7 +65,11 @@ real readers win (see [Verification](#verification)).
 - **No dependencies** beyond the C standard library.
 - **Source is pure ASCII.**
 - **Warning-free** under MSVC `/W4 /WX /permissive-` and gcc/clang
-  `-Wall -Wextra -Wpedantic -Werror`, compiled both as C and as C++.
+  `-Wall -Wextra -Wpedantic -Werror`, compiled both as C and as C++. As C, also under
+  `-Wconversion -Wsign-conversion -Wshadow -Wcast-qual -Wundef -Wdouble-promotion
+  -Wnull-dereference -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes -Wold-style-definition`,
+  and with gcc `-Wcast-align -Wduplicated-cond -Wlogical-op` (the list is in
+  `tests/CMakeLists.txt`).
 - Configuration macros (define before the implementation include):
 
 | Macro | Effect |
@@ -73,35 +77,30 @@ real readers win (see [Verification](#verification)).
 | `MINIPSD_STATIC` | every function is `static`, nothing is exported |
 | `MINIPSD_MALLOC` / `MINIPSD_FREE` | replace `malloc` / `free` (define both) |
 | `MINIPSD_NO_STDIO` | omit `minipsd_write_file` and `<stdio.h>` |
+| `MINIPSD_NO_MALLOC` | omit every allocation: `minipsd_write`, `minipsd_write_file`, `<stdlib.h>` and `<stdio.h>`; the pull writer stays |
 
 ## API
 
-```c
-typedef struct minipsd_layer {
-    const char    *name;     /* UTF-8; NULL means ""                               */
-    const uint8_t *rgba;     /* width*height*4, rows top-down, straight alpha;
-                                NULL means an empty layer                          */
-    uint8_t        opacity;  /* 255 opaque, 0 fully transparent                    */
-    uint8_t        hidden;   /* non-zero: hidden, and excluded from the composite  */
-} minipsd_layer;
+The declarations, with every parameter and return code, are in
+[minipsd.h](../include/minipsd.h); this section says what each part is for.
 
-typedef struct minipsd_doc {
-    uint32_t             width, height;  /* 1 .. MINIPSD_MAX_SIDE                  */
-    double               dpi;            /* (0, 65536); recorded, not resampled    */
-    const minipsd_layer *layers;         /* bottom first                           */
-    size_t               layer_count;    /* >= 1                                   */
-    const uint8_t       *icc;            /* optional ICC profile; NULL means sRGB  */
-    size_t               icc_size;
-    int                  compression;    /* MINIPSD_RLE (0) or MINIPSD_RAW (1)     */
-} minipsd_doc;
+| Function | For |
+|---|---|
+| `minipsd_doc_check(doc)` | validating a document without writing it |
+| `minipsd_writer_workspace_size(doc, &size)` | the workspace the pull writer needs for this document |
+| `minipsd_writer_init(&w, doc, workspace, size)` | building the writer inside the workspace and running the sizing pass; nothing is allocated |
+| `minipsd_writer_total(w)` | the file size, known before the first byte |
+| `minipsd_writer_fill(w, buf, cap, &produced)` | the next bytes, into the caller's buffer: `MINIPSD_MORE` until `MINIPSD_OK` |
+| `minipsd_write(doc, fn, user)` | the whole file through a callback, on a workspace from `MINIPSD_MALLOC`; absent under `MINIPSD_NO_MALLOC` |
+| `minipsd_write_file(doc, path)` | the whole file to a UTF-8 path; absent under `MINIPSD_NO_STDIO` or `MINIPSD_NO_MALLOC` |
+| `minipsd_error_string(code)` | a short English text for a return code |
 
-/* Receives the bytes in order. Returns non-zero on success, 0 to abort. */
-typedef int (*minipsd_write_fn)(void *user, const void *data, size_t size);
-
-int         minipsd_write(const minipsd_doc *doc, minipsd_write_fn fn, void *user);
-int         minipsd_write_file(const minipsd_doc *doc, const char *path); /* UTF-8 path */
-const char *minipsd_error_string(int code);
-```
+| Type | What it is |
+|---|---|
+| `minipsd_doc`, `minipsd_layer` | the document: canvas, dpi, layers bottom first, ICC profile, compression |
+| `minipsd_workspace` | `void`: caller memory lent to the writer, sized by `minipsd_writer_workspace_size` |
+| `minipsd_writer` | opaque; built by `minipsd_writer_init` inside the workspace |
+| `minipsd_write_fn` | the callback of `minipsd_write`: non-zero to go on, 0 to abort |
 
 **Defaults and field meanings**
 - A zero-initialised document selects RLE (`MINIPSD_RLE = 0`).
@@ -109,11 +108,12 @@ const char *minipsd_error_string(int code);
 - `rgba = NULL` is an empty layer; `name = NULL` is an empty name.
 - Layers are listed bottom first.
 
-**Return codes**
+**Return codes**: errors are negative, so `rc < 0` is the failure test for every function.
 
 | Code | Value | Meaning |
 |---|---|---|
 | `MINIPSD_OK` | 0 | success |
+| `MINIPSD_MORE` | 1 | not an error: `minipsd_writer_fill` has more bytes, call again |
 | `MINIPSD_ERR_ARG` | -1 | NULL document or callback, no layers, ICC size without data, or a dpi that 16.16 fixed point cannot hold (see below) |
 | `MINIPSD_ERR_SIZE` | -2 | a side is 0 or above `MINIPSD_MAX_SIDE`, or a section is longer than its 32-bit length field allows (see below) |
 | `MINIPSD_ERR_WRITE` | -3 | the callback returned 0 |
@@ -132,9 +132,9 @@ caller's memory:
 | raw document data: layer pixels (`rgba`), names, ICC profile | caller; borrowed, read in place, never copied | `width * height * 4` bytes per layer | as `minipsd_doc` | wherever the application keeps it |
 | `minipsd_workspace` | caller; lent to the writer | `minipsd_writer_workspace_size()` | for as long as the writer is used | heap; stack or static sized for the largest document |
 | `minipsd_writer` | inside `minipsd_workspace`; opaque | part of the workspace | as the workspace | the caller keeps only the pointer |
-| raw PSD bytes | passed to the callback of `minipsd_write()` | pieces of any size, in order | the callback copies what it keeps | the callback decides |
+| raw PSD bytes | passed to the callback of `minipsd_write()` | pieces of up to 4 KiB, in order | the callback copies what it keeps | the callback decides |
 | output buffer, `buf` of `minipsd_writer_fill()` | caller | any `cap`, 1 included; a few rows (64 KiB) keeps re-encoding negligible | the call | stack, static or heap |
-| `minipsd_write()` internals | minipsd, `MINIPSD_MALLOC` / `MINIPSD_FREE` | the workspace's tables and one row | the call | heap |
+| `minipsd_write()` internals | minipsd: the workspace through `MINIPSD_MALLOC` / `MINIPSD_FREE`, a 4 KiB chunk on the stack | `minipsd_writer_workspace_size()` | the call | heap and stack |
 | UTF-16 path, `minipsd_write_file()` on Windows | minipsd, as above | the converted path | the call | heap |
 
 - **The document is read-only and frozen while in use.** The pull writer sizes everything in

@@ -41,7 +41,7 @@ static const uint8_t *mpsd__composite_row(mpsd__composite *c, uint32_t y)
             const float sa = src[x * 4 + 3] / 255.0f * (l->opacity / 255.0f);
             const float da = o[3] / 255.0f;
             const float oa = sa + da * (1.0f - sa);
-            int k;
+            unsigned k;
             if (oa <= 0.0f) continue;
             for (k = 0; k < 3; ++k)
                 o[k] = (uint8_t)((src[x * 4 + k] * sa + o[k] * da * (1.0f - sa)) / oa + 0.5f);

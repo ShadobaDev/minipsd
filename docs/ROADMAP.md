@@ -106,11 +106,11 @@ No byte change. See [Writer](CODE-ARCH.md#writer).
 - [x] **S2.3** `minipsd_writer_fill`: the cursor state machine. Serves `W3`, `W5`.
       *Done when:* the golden bytes come out with any `cap` (1, 7, random, the exact total), and
       through a fake non-blocking target that accepts 0 to k bytes per round.
-- [ ] **S2.4** `minipsd_write` rebuilt on `init` and `fill`; `MINIPSD_NO_MALLOC` removes it and
+- [x] **S2.4** `minipsd_write` rebuilt on `init` and `fill`; `MINIPSD_NO_MALLOC` removes it and
       `<stdlib.h>`. Serves `W2`.
       *Done when:* golden test unchanged, and `test_alloc_failure.cpp` still fails each
       allocation in turn.
-- [ ] **S2.5** Docs: the spec's API section; the allocation list in the header comment;
+- [x] **S2.5** Docs: the spec's API section; the allocation list in the header comment;
       [MANUAL.md](MANUAL.md), its writing chapters.
 
 ## 3. I/O out of the core

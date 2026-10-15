@@ -34,7 +34,9 @@
  * - \c MINIPSD_STATIC: make every function static (private to that file);
  * - \c MINIPSD_MALLOC / \c MINIPSD_FREE: replace malloc / free (define both);
  * - \c MINIPSD_NO_STDIO: leave out minipsd_write_file (and <stdio.h>) when bytes only go to a
- *   callback.
+ *   callback;
+ * - \c MINIPSD_NO_MALLOC: leave out every allocation: minipsd_write and minipsd_write_file go
+ *   (and <stdlib.h>, <stdio.h>); the pull writer, on the caller's memory, stays.
  *
  * \par What it writes
  * An 8-bit RGB document (PSD version 1) with a transparency channel:
@@ -53,10 +55,12 @@
  * PSD caps each side at 30000 px; larger documents are refused (MINIPSD_ERR_SIZE).
  *
  * \par Output
- * Bytes go to a callback in order, never seeking back, so a pipe or a socket works as well as a
- * file.  Allocations are small: each layer channel's compressed size (layer_count * 4 numbers),
- * one row of the composite (width * 4 bytes), and on Windows the UTF-16 copy of
- * minipsd_write_file's path.  Layer pixels are read in place, never copied.
+ * Bytes come out in order, never seeking back, so a pipe or a socket works as well as a file:
+ * pulled by the caller into its own buffer (minipsd_writer_fill), or pushed to a callback
+ * (minipsd_write).  The pull writer allocates nothing; its workspace, from the caller, holds a
+ * size table (layer_count * 4 numbers), the composite's row sizes and one composite row.
+ * minipsd_write allocates that workspace once, and on Windows minipsd_write_file a UTF-16 copy of
+ * its path.  Layer pixels are read in place, never copied.
  *
  * \par Project
  * https://github.com/ShadobaDev/minipsd
@@ -207,11 +211,13 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *doc);
  */
 typedef int (*minipsd_write_fn)(void *user, const void *data, size_t size);
 
+#ifndef MINIPSD_NO_MALLOC
 /**
  * \brief Writes a document as PSD through a callback.
  *
- * The callback receives the whole file front to back and is never asked to seek.  After it
- * returns 0 it is not called again.  The same document always produces the same bytes.
+ * The callback receives the whole file front to back, in pieces of up to 4 KiB, and is never
+ * asked to seek.  After it returns 0 it is not called again.  The same document always produces
+ * the same bytes.  This is the pull writer driven to the end on a workspace from MINIPSD_MALLOC.
  *
  * \param doc  The document to write.
  * \param fn   Receives the bytes.
@@ -227,6 +233,7 @@ typedef int (*minipsd_write_fn)(void *user, const void *data, size_t size);
  * \retval MINIPSD_ERR_WRITE fn returned 0; the output is incomplete.
  */
 MINIPSDDEF int minipsd_write(const minipsd_doc *doc, minipsd_write_fn fn, void *user);
+#endif
 
 /**
  * \brief The pull writer: produces the file into the caller's buffers, at the caller's pace.
@@ -298,7 +305,7 @@ MINIPSDDEF uint64_t minipsd_writer_total(const minipsd_writer *w);
  */
 MINIPSDDEF int minipsd_writer_fill(minipsd_writer *w, void *buf, size_t cap, size_t *produced);
 
-#ifndef MINIPSD_NO_STDIO
+#if !defined(MINIPSD_NO_STDIO) && !defined(MINIPSD_NO_MALLOC)
 /**
  * \brief Writes a document as PSD to a file, replacing it if it exists.
  *

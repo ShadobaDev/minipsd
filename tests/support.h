@@ -267,6 +267,7 @@ Bytes pull(const minipsd_doc &d, std::size_t cap)
         std::size_t n = 0;
         rc = minipsd_writer_fill(w, buf.data(), c, &n);
         if (rc == MINIPSD_MORE && n != c) { ADD_FAILURE() << "a call that is not the last fills buf"; break; }
+        if (rc == MINIPSD_OK) { EXPECT_GT(n, 0u) << "the call that finishes produces the last byte"; }
         out.insert(out.end(), buf.begin(), buf.begin() + static_cast<std::ptrdiff_t>(n));
     }
     EXPECT_EQ(rc, MINIPSD_OK);

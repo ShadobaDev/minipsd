@@ -12,7 +12,10 @@ repository is in [This project](#this-project) at the end. C++ code follows
 - **Standard library only.** No compiler extensions without a portable fallback.
 - **Pure ASCII source.** Non-ASCII text in strings or comments is escaped or spelled in ASCII.
 - **Warning-free** under MSVC `/W4 /WX /permissive-` and gcc/clang
-  `-Wall -Wextra -Wpedantic -Werror`, as C and (for headers) as C++.
+  `-Wall -Wextra -Wpedantic -Werror`, as C and (for headers) as C++. C is also held to the
+  conversion, shadowing, cast and prototype warnings (`-Wconversion -Wsign-conversion -Wshadow
+  -Wcast-qual ...`; each project lists its set). Not C++: a header that is also valid C needs
+  C-style casts, which `-Wold-style-cast` and `-Wuseless-cast` reject.
 - **Fixed-width integers** (`uint8_t`, `uint32_t`, ...) for anything with a defined size on disk
   or on the wire; `size_t` for in-memory sizes. Compute sizes that can overflow in `uint64_t` and
   check them before narrowing.

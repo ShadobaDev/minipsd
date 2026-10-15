@@ -55,7 +55,10 @@ target_include_directories(minipsd INTERFACE
 file(GLOB_RECURSE _minipsd_headers RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/include"
      CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h")
 list(SORT _minipsd_headers)
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_minipsd_headers}")
+# Absolute paths: relative ones would be taken from the source root, where no header is, and an
+# edited header would refresh neither the checksums here nor tests/'s single-file header.
+list(TRANSFORM _minipsd_headers PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/include/" OUTPUT_VARIABLE _minipsd_header_paths)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_minipsd_header_paths}")
 set(_minipsd_sbom_file [=[
 
     {

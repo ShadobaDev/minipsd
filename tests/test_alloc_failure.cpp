@@ -43,15 +43,12 @@ TEST(MinipsdAllocTest, EachFailedAllocationIsReported)
         return 1;
     };
 
-    // Two allocations: the channel sizes, then the composite row.  Fail each in turn.
-    for (int succeed : {0, 1}) {
-        g_allocs_left = succeed;
-        size = 0;
-        EXPECT_EQ(minipsd_write(&d, count, &size), MINIPSD_ERR_ALLOC) << succeed << " allocations succeed";
-        EXPECT_EQ(size, 0u) << "nothing is written when memory runs out";
-    }
-    g_allocs_left = 2;
+    // One allocation: the pull writer's workspace.  Fail it.
+    g_allocs_left = 0;
+    EXPECT_EQ(minipsd_write(&d, count, &size), MINIPSD_ERR_ALLOC);
+    EXPECT_EQ(size, 0u) << "nothing is written when memory runs out";
+    g_allocs_left = 1;
     const int rc = minipsd_write(&d, count, &size);
-    EXPECT_EQ(rc, MINIPSD_OK) << "two allocations are all a write needs: " << minipsd_error_string(rc);
+    EXPECT_EQ(rc, MINIPSD_OK) << "one allocation is all a write needs: " << minipsd_error_string(rc);
     g_allocs_left = -1;
 }
