@@ -1,8 +1,7 @@
 /**
  * \file
  * \brief minipsd.h built with an allocator that fails on demand, so every MINIPSD_ERR_ALLOC path
- *        runs (its own translation unit: MINIPSD_MALLOC must be set before the implementation),
- *        and with MINIPSD_NO_STDIO.
+ *        runs (its own translation unit: MINIPSD_MALLOC must be set before the implementation).
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
@@ -23,7 +22,6 @@ void *failingMalloc(std::size_t size)
 }   // namespace
 
 #define MINIPSD_STATIC
-#define MINIPSD_NO_STDIO   // also checks the build without minipsd_write_file
 #define MINIPSD_MALLOC(size) failingMalloc(size)
 #define MINIPSD_FREE(ptr)    std::free(ptr)
 #define MINIPSD_IMPLEMENTATION

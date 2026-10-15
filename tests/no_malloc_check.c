@@ -16,11 +16,9 @@
 #  error "MINIPSD_NO_MALLOC still includes <stdlib.h>"
 #endif
 #ifdef EOF
-#  error "MINIPSD_NO_MALLOC still includes <stdio.h>"
+#  error "minipsd includes <stdio.h>"
 #endif
 
 /* The names are free: a declaration in minipsd.h would conflict with these. */
 int minipsd_write(void);
 int minipsd_write(void) { return 0; }
-int minipsd_write_file(void);
-int minipsd_write_file(void) { return 0; }

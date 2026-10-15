@@ -117,14 +117,16 @@ No byte change. See [Writer](CODE-ARCH.md#writer).
 
 The only breaking stage. See [Decisions](CODE-ARCH.md#decisions), 1-2.
 
-- [ ] **S3.1** `examples/`, built and run as ctest tests in CI, never installed:
-      - `write_file.c`: today's `minipsd_write_file`, UTF-8 paths on Windows included;
+- [x] **S3.1** `examples/`, built and run as ctest tests in CI, never installed:
+      - `write_file.c`: what `minipsd_write_file` does, rebuilt in user code on
+        `minipsd_write` and `fopen` (`_wfopen` for UTF-8 paths on Windows), the replacement
+        S3.2 points to;
       - `write_memory.c`: an exact buffer from `minipsd_writer_total`;
       - `write_nonblocking.c`: an `O_NONBLOCK` pipe with `poll`, POSIX only.
       *Done when:* each example's output matches the golden bytes.
-- [ ] **S3.2** `minipsd_write_file` removed. `MINIPSD_NO_STDIO` accepted with no effect;
+- [x] **S3.2** `minipsd_write_file` removed. `MINIPSD_NO_STDIO` accepted with no effect;
       `MINIPSD_ERR_OPEN` stays defined. Its tests move to the examples (`/dev/full` included).
-- [ ] **S3.3** Docs: spec (API, Consumer requirements 5), [INSTALL.md](INSTALL.md), `README.md`
+- [x] **S3.3** Docs: spec (API, Consumer requirements 5), [INSTALL.md](INSTALL.md), `README.md`
       usage, [MANUAL.md](MANUAL.md) (code taken from `examples/`), [CHANGELOG.md](CHANGELOG.md)
       with the migration line.
 - [ ] **S3.4** Release **0.2.0** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md). Then bump the vcpkg

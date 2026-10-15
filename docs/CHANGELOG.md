@@ -5,6 +5,11 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
 
 ## [Unreleased]
 
+**Breaking:** `minipsd_write_file` is gone; minipsd does no I/O of its own. To migrate, copy
+`write_file` from [examples/write_file.c](../examples/write_file.c) (UTF-8 paths on Windows
+included) or pass your own callback to `minipsd_write`. `MINIPSD_NO_STDIO` is still accepted and
+does nothing; `MINIPSD_ERR_OPEN` keeps its value.
+
 ### Added
 - `minipsd_doc_check`: validates a document without writing it.
 - `MINIPSD_MORE` (positive, not an error): errors stay negative, so `rc < 0` tests for failure.
@@ -13,7 +18,12 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   file size before the first byte; `minipsd_writer_fill` then produces the file into the caller's
   buffer, any size at a time, never waiting.
 - `MINIPSD_NO_MALLOC`: a build without any allocation, and without `<stdlib.h>`; the pull
-  writer stays, `minipsd_write` and `minipsd_write_file` go.
+  writer stays, `minipsd_write` goes.
+- `examples/`: complete programs writing to a file, to a buffer and to a non-blocking pipe,
+  built and run by CI.
+
+### Removed
+- `minipsd_write_file`, and with it every `<stdio.h>` include: see the migration note above.
 
 ### Changed
 - `minipsd_write` is the pull writer driven to the end: it allocates once (the workspace) instead

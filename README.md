@@ -37,11 +37,19 @@ minipsd_layer layers[2] = {
 };
 minipsd_doc doc = { width, height, 300.0, layers, 2, NULL, 0, MINIPSD_RLE };
 
-int rc = minipsd_write_file(&doc, "template.psd");
+static int to_file(void *user, const void *data, size_t size)   /* or to memory, a socket, ... */
+{
+    return fwrite(data, 1, size, (FILE *)user) == size;
+}
+
+int rc = minipsd_write(&doc, to_file, f);
 if (rc != MINIPSD_OK) puts(minipsd_error_string(rc));
 ```
 
-To keep the bytes in memory instead, call `minipsd_write(&doc, callback, user)`.
+minipsd does no I/O itself: bytes go to your callback, or into your buffer through the pull
+writer (`minipsd_writer_*`, no allocation, non-blocking targets included). Complete programs
+for a file (UTF-8 paths on Windows), a buffer and a non-blocking pipe are in
+[examples/](examples/).
 
 ## What it writes
 
@@ -65,7 +73,7 @@ Define before the implementation include:
 |---|---|
 | `MINIPSD_STATIC` | make every function `static` (nothing exported) |
 | `MINIPSD_MALLOC` / `MINIPSD_FREE` | replace `malloc` / `free` |
-| `MINIPSD_NO_STDIO` | leave out `minipsd_write_file` and `<stdio.h>` |
+| `MINIPSD_NO_MALLOC` | leave out every allocation (`minipsd_write`); the pull writer stays |
 
 ## Documentation
 
@@ -73,6 +81,7 @@ Define before the implementation include:
 |---|---|
 | [docs/INSTALL.md](docs/INSTALL.md) | every way of adding minipsd to a project, SBOM |
 | [docs/MANUAL.md](docs/MANUAL.md) | how to use it: memory, writing, return codes (skeleton) |
+| [examples/](examples/) | complete programs: a file, a buffer, a non-blocking pipe |
 | [docs/SPECIFICATION.md](docs/SPECIFICATION.md) | the contract: API, file contents, guarantees, PSD primer |
 | [docs/CODING_STYLE_C.md](docs/CODING_STYLE_C.md) | C rules: language, naming, comments |
 | [docs/CODING_STYLE_CPP.md](docs/CODING_STYLE_CPP.md) | C++ rules (tests, the planned wrapper) |

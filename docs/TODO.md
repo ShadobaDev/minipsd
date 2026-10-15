@@ -105,7 +105,7 @@ is in [CODE-ARCH.md](CODE-ARCH.md). Each must follow the
 
 ## MINOR — breaking
 
-- [ ] `0.2.0`: `minipsd_write_file` moves to `examples/` ([ROADMAP.md](ROADMAP.md), stage 3).
+- [x] `0.2.0`: `minipsd_write_file` moves to `examples/` ([ROADMAP.md](ROADMAP.md), stage 3).
 
 ---
 

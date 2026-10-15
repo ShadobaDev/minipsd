@@ -5,8 +5,8 @@ step ([ROADMAP.md](ROADMAP.md)); until then the reference is [minipsd.h](../incl
 and the contract is [SPECIFICATION.md](SPECIFICATION.md).
 
 This manual explains and shows; it does not repeat the reference. Every parameter and return
-code is documented once, in `minipsd.h`. From 0.2.0 on, the code in this manual is taken from
-`examples/`, which CI builds and runs.
+code is documented once, in `minipsd.h`. The code in this manual is taken from
+[examples/](../examples/), complete programs that CI builds and runs.
 
 | Chapter | Covers |
 |---|---|
@@ -33,7 +33,8 @@ the largest document.
 ## Writing
 
 A document is a `minipsd_doc` and its layers; the pixels stay where the application keeps them
-and are read in place. Two ways produce the file, and both give the same bytes:
+and are read in place. minipsd does no I/O: it hands bytes to a callback or puts them into a buffer of yours, and the
+file, pipe or socket is yours. Two ways produce the file, and both give the same bytes:
 
 | You have | Use |
 |---|---|
@@ -74,7 +75,8 @@ minipsd_writer_fill(w, file, (size_t)total, &n);                     /* MINIPSD_
 free(workspace);                                                     /* the writer ends with it */
 ```
 
-There is nothing to release in minipsd: the writer lives in the workspace.
+There is nothing to release in minipsd: the writer lives in the workspace. The whole program:
+[examples/write_memory.c](../examples/write_memory.c).
 
 ### To a blocking stream
 
@@ -82,13 +84,26 @@ There is nothing to release in minipsd: the writer lives in the workspace.
 callback; returning 0 stops it with `MINIPSD_ERR_WRITE`:
 
 ```c
-static int to_file(void *user, const void *data, size_t size)
+static int file_out(void *user, const void *data, size_t size)
 {
     return fwrite(data, 1, size, (FILE *)user) == size;
 }
 
-int rc = minipsd_write(&doc, to_file, f);
+static int write_file(const minipsd_doc *doc, const char *path)
+{
+    int   rc;
+    FILE *f = open_utf8(path);
+    if (!f) return MINIPSD_ERR_OPEN;
+    rc = minipsd_write(doc, file_out, f);
+    if (fclose(f) != 0 && rc == MINIPSD_OK) rc = MINIPSD_ERR_OPEN;   /* the last bytes, flushed */
+    return rc;
+}
 ```
+
+`open_utf8` is `fopen` everywhere but Windows, where the narrow `fopen` reads the ANSI code page:
+there the UTF-8 path goes through `MultiByteToWideChar` to `_wfopen`. The whole program,
+`open_utf8` included: [examples/write_file.c](../examples/write_file.c). `MINIPSD_ERR_OPEN` is
+not returned by minipsd; it is kept for code like this.
 
 It allocates the workspace once, through `MINIPSD_MALLOC`. With `MINIPSD_NO_MALLOC`, write the
 same loop yourself over `minipsd_writer_fill`, on a workspace of your own.
@@ -115,6 +130,8 @@ sent += send_some(sock, chunk + sent, have - sent);                  /* may take
 ```
 
 `minipsd_writer_total` gives the size up front, for a `Content-Length` header or a progress bar.
+The whole program, an `O_NONBLOCK` pipe driven by `poll` with its reading end in the same loop:
+[examples/write_nonblocking.c](../examples/write_nonblocking.c).
 
 ## Reading
 

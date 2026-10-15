@@ -8,6 +8,7 @@
 #   minipsd-cxx17      compile-only: the header and its implementation as C++17
 #   minipsd-include-check  compile-only: minipsd.h alone, then its implementation, as C
 #   minipsd-no-malloc-check  compile-only: the build with MINIPSD_NO_MALLOC, as C
+#   example.<name>     each program in examples/, its output checked against the golden bytes
 #   consumer-<mode>    a tiny project using minipsd each supported way (see consumer/)
 # ---------------------------------------------------------------------------
 
@@ -111,6 +112,9 @@ foreach(_check include no-malloc)
     target_compile_options(minipsd-${_check}-check PRIVATE ${MINIPSD_WARNINGS})
     set_target_properties(minipsd-${_check}-check PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 endforeach()
+
+# The examples (examples/), built with the same warnings and run as tests.
+add_subdirectory("${PROJECT_SOURCE_DIR}/examples" "${PROJECT_BINARY_DIR}/examples")
 
 # clang-tidy (the linux-tidy preset) on our own targets only, not on a fetched GoogleTest.
 # Checks and options come from .clang-tidy at the repository root.

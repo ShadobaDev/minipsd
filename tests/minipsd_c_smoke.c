@@ -45,8 +45,7 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
     doc.width = 3; doc.height = 2; doc.dpi = 300.0; doc.layers = layers; doc.layer_count = 2;
 
     /* Every function, so a static build has none unused. */
-    if (minipsd_write_file(NULL, NULL) != MINIPSD_ERR_ARG || !minipsd_error_string(MINIPSD_OK)[0]
-        || minipsd_doc_check(&doc) != MINIPSD_OK)
+    if (!minipsd_error_string(MINIPSD_OK)[0] || minipsd_doc_check(&doc) != MINIPSD_OK)
         return -100;
 
     b.data = out; b.size = 0; b.capacity = capacity;

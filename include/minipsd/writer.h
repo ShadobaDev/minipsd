@@ -1,7 +1,8 @@
 /**
  * \file
- * \brief Implementation: the writer, a document to PSD bytes, through a callback or into a file.
- *        Included by minipsd.h under MINIPSD_IMPLEMENTATION; the declarations are in minipsd.h.
+ * \brief Implementation: the writer, a document to PSD bytes, pulled into a buffer or pushed to a
+ *        callback.  Included by minipsd.h under MINIPSD_IMPLEMENTATION; the declarations are in
+ *        minipsd.h.
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
@@ -17,12 +18,6 @@
 #    undef  MINIPSD_FREE
 #    define MINIPSD_MALLOC(size) malloc(size)
 #    define MINIPSD_FREE(ptr)    free(ptr)
-#  endif
-#  ifndef MINIPSD_NO_STDIO
-#    include <stdio.h>
-#    ifdef _WIN32
-#      include <wchar.h>
-#    endif
 #  endif
 #endif
 
@@ -482,53 +477,6 @@ MINIPSDDEF int minipsd_write(const minipsd_doc *d, minipsd_write_fn fn, void *us
     return rc;
 }
 
-/* --- to a file --- */
-
-#ifndef MINIPSD_NO_STDIO
-static int mpsd__file_out(void *user, const void *data, size_t size)
-{
-    return fwrite(data, 1, size, (FILE *)user) == size;
-}
-
-#ifdef _WIN32
-static void mpsd__unit_wide(void *ctx, unsigned u) { *(*(wchar_t **)ctx)++ = (wchar_t)u; }
-#endif
-
-static FILE *mpsd__open(const char *path)
-{
-#ifdef _WIN32
-    /* The narrow fopen reads the ANSI code page; convert UTF-8 so any path opens. */
-    FILE    *f = NULL;
-    wchar_t *wide = (wchar_t *)MINIPSD_MALLOC((mpsd__utf16(path, NULL, NULL) + 1) * sizeof(wchar_t));
-    wchar_t *at = wide;
-    if (!wide) return NULL;
-    mpsd__utf16(path, mpsd__unit_wide, &at);
-    *at = 0;
-#  ifdef _MSC_VER
-    if (_wfopen_s(&f, wide, L"wb") != 0) f = NULL;
-#  else
-    f = _wfopen(wide, L"wb");
-#  endif
-    MINIPSD_FREE(wide);
-    return f;
-#else
-    return fopen(path, "wb");
-#endif
-}
-
-MINIPSDDEF int minipsd_write_file(const minipsd_doc *doc, const char *path)
-{
-    FILE *f;
-    int   rc = minipsd_doc_check(doc);
-    if (rc != MINIPSD_OK) return rc;
-    if (!path) return MINIPSD_ERR_ARG;
-    f = mpsd__open(path);
-    if (!f) return MINIPSD_ERR_OPEN;
-    rc = minipsd_write(doc, mpsd__file_out, f);
-    if (fclose(f) != 0 && rc == MINIPSD_OK) rc = MINIPSD_ERR_OPEN;
-    return rc;
-}
-#endif /* MINIPSD_NO_STDIO */
 #endif /* MINIPSD_NO_MALLOC */
 
 #endif /* MPSD__WRITER_DONE */

@@ -76,8 +76,12 @@ real readers win (see [Verification](#verification)).
 |---|---|
 | `MINIPSD_STATIC` | every function is `static`, nothing is exported |
 | `MINIPSD_MALLOC` / `MINIPSD_FREE` | replace `malloc` / `free` (define both) |
-| `MINIPSD_NO_STDIO` | omit `minipsd_write_file` and `<stdio.h>` |
-| `MINIPSD_NO_MALLOC` | omit every allocation: `minipsd_write`, `minipsd_write_file`, `<stdlib.h>` and `<stdio.h>`; the pull writer stays |
+| `MINIPSD_NO_MALLOC` | omit every allocation: `minipsd_write` and `<stdlib.h>`; the pull writer stays |
+| `MINIPSD_NO_STDIO` | accepted, no effect: minipsd never includes `<stdio.h>` |
+
+- **No I/O.** minipsd opens no file, pipe or socket; bytes go to the caller's buffer or callback.
+  Complete programs for a file, a buffer and a non-blocking pipe are in `examples/`, built and
+  run by CI, not installed.
 
 ## API
 
@@ -92,7 +96,6 @@ The declarations, with every parameter and return code, are in
 | `minipsd_writer_total(w)` | the file size, known before the first byte |
 | `minipsd_writer_fill(w, buf, cap, &produced)` | the next bytes, into the caller's buffer: `MINIPSD_MORE` until `MINIPSD_OK` |
 | `minipsd_write(doc, fn, user)` | the whole file through a callback, on a workspace from `MINIPSD_MALLOC`; absent under `MINIPSD_NO_MALLOC` |
-| `minipsd_write_file(doc, path)` | the whole file to a UTF-8 path; absent under `MINIPSD_NO_STDIO` or `MINIPSD_NO_MALLOC` |
 | `minipsd_error_string(code)` | a short English text for a return code |
 
 | Type | What it is |
@@ -118,12 +121,12 @@ The declarations, with every parameter and return code, are in
 | `MINIPSD_ERR_SIZE` | -2 | a side is 0 or above `MINIPSD_MAX_SIDE`, or a section is longer than its 32-bit length field allows (see below) |
 | `MINIPSD_ERR_WRITE` | -3 | the callback returned 0 |
 | `MINIPSD_ERR_ALLOC` | -4 | `MINIPSD_MALLOC` returned NULL |
-| `MINIPSD_ERR_OPEN` | -5 | `minipsd_write_file` could not open or close the file |
+| `MINIPSD_ERR_OPEN` | -5 | not returned by minipsd; reserved for the caller's file code (`examples/write_file.c`) |
 
 ## Memory and ownership
 
 minipsd owns nothing the caller passes in, never copies a document, and allocates only inside
-`minipsd_write` and `minipsd_write_file`, freeing it before they return. Everything else is the
+`minipsd_write`, freeing it before it returns. Everything else is the
 caller's memory:
 
 | Name | Owner | Size | Must stay valid | May live in |
@@ -135,7 +138,6 @@ caller's memory:
 | raw PSD bytes | passed to the callback of `minipsd_write()` | pieces of up to 4 KiB, in order | the callback copies what it keeps | the callback decides |
 | output buffer, `buf` of `minipsd_writer_fill()` | caller | any `cap`, 1 included; a few rows (64 KiB) keeps re-encoding negligible | the call | stack, static or heap |
 | `minipsd_write()` internals | minipsd: the workspace through `MINIPSD_MALLOC` / `MINIPSD_FREE`, a 4 KiB chunk on the stack | `minipsd_writer_workspace_size()` | the call | heap and stack |
-| UTF-16 path, `minipsd_write_file()` on Windows | minipsd, as above | the converted path | the call | heap |
 
 - **The document is read-only and frozen while in use.** The pull writer sizes everything in
   `minipsd_writer_init`; a document changed afterwards would no longer match the sizes already
@@ -178,8 +180,6 @@ caller's memory:
     data) and the image resources (resolution + ICC profile) must each stay under 4 GiB,
     otherwise `MINIPSD_ERR_SIZE`. Example: two full 30 000 x 30 000 layers in RAW are about
     7.2 GB and are refused; the same in RLE usually fits. The composite has no length field.
-- **Windows paths:** `minipsd_write_file` converts the UTF-8 path to UTF-16 and opens it with
-  `_wfopen` (`_wfopen_s` under MSVC), because `fopen` interprets the ANSI code page.
 
 ## Consumer requirements
 
@@ -193,8 +193,8 @@ Platemaker is the first consumer. Breaking any of these breaks it:
 3. **Composite matted against white.** Without it Procreate, GIMP and `psd-tools` show the wrong
    margin colour.
 4. **`MINIPSD_ERR_SIZE` stays a distinct code** (Platemaker maps it to a readable error).
-5. **`MINIPSD_STATIC` and `MINIPSD_NO_STDIO` keep working**, so the host exports no minipsd
-   symbol and does not pull in `stdio`.
+5. **`MINIPSD_STATIC` keeps working and minipsd pulls in no `stdio`**, so the host exports no
+   minipsd symbol; `MINIPSD_NO_STDIO`, which Platemaker defines, stays accepted.
 6. **The template layout stays expressible:** a "Template" layer plus an optional empty "Layer"
    above it.
 
@@ -283,5 +283,5 @@ Rules for adding features without breaking existing callers:
 - **The composite must match the layers.** A feature that changes how layers look (blend modes,
   masks, groups) must also be reflected in the composite, or be documented as invisible to
   composite-only readers.
-- **Optional subsystems hide behind macros**, the way `MINIPSD_NO_STDIO` does, so the minimal
+- **Optional subsystems hide behind macros**, the way `MINIPSD_NO_MALLOC` does, so the minimal
   build stays minimal. Reading, if it comes, is a separate opt-in implementation block.

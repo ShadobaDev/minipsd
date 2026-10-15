@@ -12,7 +12,6 @@
  */
 
 #define MINIPSD_STATIC
-#define MINIPSD_NO_STDIO
 #define MINIPSD_IMPLEMENTATION
 #include "minipsd.h"
 

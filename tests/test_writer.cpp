@@ -15,12 +15,8 @@
 
 #include "support.h"
 
-#include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <algorithm>
-#include <limits>
-#include <utility>
+#include <cstddef>
 
 extern "C" int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size);   // minipsd_c_smoke.c
 
@@ -316,40 +312,6 @@ TEST(MinipsdWriterTest, WriteFailureIsReported)
         EXPECT_EQ(minipsd_write(&d, failing, &c), MINIPSD_ERR_WRITE) << "failing call " << failAt;
         EXPECT_EQ(c.made, failAt) << "the writer stops calling back after the first failure";
     }
-}
-
-TEST(MinipsdWriterTest, WriteFileTakesAUtf8PathAndMatchesTheStream)
-{
-    const Bytes px = testImage(8, 8);
-    const minipsd_layer layer{"L", px.data(), 255, 0};
-    const minipsd_doc d = docOf(8, 8, &layer, 1);
-
-    const std::filesystem::path dir = std::filesystem::temp_directory_path() / u8"minipsd-test-\u017C\u00F3\u0142w";
-    std::filesystem::create_directories(dir);
-    const std::filesystem::path file = dir / u8"szablon-\u0105.psd";
-    const std::u8string u8 = file.u8string();
-    const std::string utf8(u8.begin(), u8.end());
-
-    ASSERT_EQ(minipsd_write_file(&d, utf8.c_str()), MINIPSD_OK);
-    std::ifstream in(file, std::ios::binary);
-    const Bytes onDisk((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    in.close();
-    EXPECT_EQ(onDisk, write(d));
-    std::filesystem::remove_all(dir);
-
-    const std::u8string missing = (dir / "missing" / "x.psd").u8string();
-    EXPECT_EQ(minipsd_write_file(&d, std::string(missing.begin(), missing.end()).c_str()), MINIPSD_ERR_OPEN);
-    EXPECT_EQ(minipsd_write_file(&d, nullptr), MINIPSD_ERR_ARG) << "no path";
-    EXPECT_EQ(minipsd_write_file(nullptr, utf8.c_str()), MINIPSD_ERR_ARG) << "no document";
-
-#ifdef __linux__
-    // /dev/full opens, but every flush fails: a small file only at fclose, a large one already in fwrite.
-    EXPECT_EQ(minipsd_write_file(&d, "/dev/full"), MINIPSD_ERR_OPEN) << "fclose failed";
-    const Bytes big = testImage(512, 512);
-    const minipsd_layer bigLayer{"L", big.data(), 255, 0};
-    const minipsd_doc bigDoc = docOf(512, 512, &bigLayer, 1);
-    EXPECT_EQ(minipsd_write_file(&bigDoc, "/dev/full"), MINIPSD_ERR_WRITE) << "fwrite failed first";
-#endif
 }
 
 TEST(MinipsdWriterTest, CompiledAsCItWritesTheSameBytes)

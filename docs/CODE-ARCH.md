@@ -98,7 +98,8 @@ include/
       packbits.h               PackBits encode, decode, size bound; strided source and target
       composite.h              blending one row "over", white matte and un-matte
 examples/                      the I/O implementations; built and run in CI, never installed
-  write_file.c                 stdio, UTF-8 path on Windows (today's minipsd_write_file, moved)
+  demo.h                       the document every example writes (the golden "template-rle")
+  write_file.c                 stdio, UTF-8 path on Windows (minipsd_write_file until 0.2.0)
   write_memory.c               exact-size buffer from minipsd_writer_total
   write_nonblocking.c          O_NONBLOCK pipe + poll (POSIX)
   read_file.c                  whole file into memory, then decode (later stage)
@@ -130,7 +131,7 @@ Rules for the split:
   - `MINIPSD_STATIC` keeps working unchanged.
 - **No unused internals.** The full implementation, compiled with extern linkage, leaves no
   `static` function unused: that is a warning, and warnings are errors.
-- **Optional subsystems hide behind macros in `minipsd.h`**, the way `MINIPSD_NO_STDIO` does.
+- **Optional subsystems hide behind macros in `minipsd.h`**, the way `MINIPSD_NO_MALLOC` does.
 - **Promotion is additive.** `packbits` and `composite` stay internal until a consumer needs
   them. Making one public means adding a declaration to `minipsd.h`, a PATCH change, never a
   rename of anything existing.

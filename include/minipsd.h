@@ -25,7 +25,7 @@
  *         { "Layer",    NULL, 255, 0 },     // empty, above it
  *     };
  *     minipsd_doc doc = { width, height, 300.0, layers, 2, NULL, 0, MINIPSD_RLE };
- *     int rc = minipsd_write_file(&doc, "template.psd");
+ *     int rc = minipsd_write(&doc, file_out, f);   // file_out: fwrite to f, see minipsd_write_fn
  *     if (rc != MINIPSD_OK) puts(minipsd_error_string(rc));
  * \endcode
  *
@@ -33,10 +33,13 @@
  * Define before the implementation include:
  * - \c MINIPSD_STATIC: make every function static (private to that file);
  * - \c MINIPSD_MALLOC / \c MINIPSD_FREE: replace malloc / free (define both);
- * - \c MINIPSD_NO_STDIO: leave out minipsd_write_file (and <stdio.h>) when bytes only go to a
- *   callback;
- * - \c MINIPSD_NO_MALLOC: leave out every allocation: minipsd_write and minipsd_write_file go
- *   (and <stdlib.h>, <stdio.h>); the pull writer, on the caller's memory, stays.
+ * - \c MINIPSD_NO_MALLOC: leave out every allocation: minipsd_write goes (and <stdlib.h>); the
+ *   pull writer, on the caller's memory, stays.
+ *
+ * minipsd does no I/O of its own and includes no <stdio.h>: files, pipes and sockets are the
+ * caller's, fed by minipsd_write or minipsd_writer_fill (examples/ in the repository has each).
+ * \c MINIPSD_NO_STDIO, which left out a file writer until 0.2.0, is still accepted and does
+ * nothing.
  *
  * \par What it writes
  * An 8-bit RGB document (PSD version 1) with a transparency channel:
@@ -59,8 +62,7 @@
  * pulled by the caller into its own buffer (minipsd_writer_fill), or pushed to a callback
  * (minipsd_write).  The pull writer allocates nothing; its workspace, from the caller, holds a
  * size table (layer_count * 4 numbers), the composite's row sizes and one composite row.
- * minipsd_write allocates that workspace once, and on Windows minipsd_write_file a UTF-16 copy of
- * its path.  Layer pixels are read in place, never copied.
+ * minipsd_write allocates that workspace once.  Layer pixels are read in place, never copied.
  *
  * \par Project
  * https://github.com/ShadobaDev/minipsd
@@ -118,7 +120,8 @@ enum {
                                    large for PSD's 32-bit section lengths (about 4 GiB).      */
     MINIPSD_ERR_WRITE   = -3, /*!< The write callback reported a failure.                      */
     MINIPSD_ERR_ALLOC   = -4, /*!< MINIPSD_MALLOC returned NULL.                               */
-    MINIPSD_ERR_OPEN    = -5  /*!< minipsd_write_file could not open (or close) the file.      */
+    MINIPSD_ERR_OPEN    = -5  /*!< Not returned by minipsd; kept for the caller's own file
+                                   code (examples/): a file not opened or closed.             */
 };
 
 /**
@@ -304,22 +307,6 @@ MINIPSDDEF uint64_t minipsd_writer_total(const minipsd_writer *w);
  * \retval MINIPSD_ERR_ARG w or produced is NULL, or buf is NULL with cap above 0.
  */
 MINIPSDDEF int minipsd_writer_fill(minipsd_writer *w, void *buf, size_t cap, size_t *produced);
-
-#if !defined(MINIPSD_NO_STDIO) && !defined(MINIPSD_NO_MALLOC)
-/**
- * \brief Writes a document as PSD to a file, replacing it if it exists.
- *
- * \param doc  The document to write.
- * \param path The file path, UTF-8 on every platform (Windows included).
- * \return MINIPSD_OK or an error code; see minipsd_write.
- *
- * \retval MINIPSD_ERR_ARG  As for minipsd_write, or path is NULL.
- * \retval MINIPSD_ERR_OPEN The file could not be opened or closed.
- *
- * \note A failure after the file was opened leaves the partial file in place.
- */
-MINIPSDDEF int minipsd_write_file(const minipsd_doc *doc, const char *path);
-#endif
 
 #endif /* MINIPSD_H */
 

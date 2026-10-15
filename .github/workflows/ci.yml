@@ -103,7 +103,6 @@ jobs:
 
       # --merge-lines: minipsd.h is compiled into several test files; count each line once.
       # --exclude-throw-branches: the C++ builds add exception edges that C code never takes.
-      # Branches stop just short of 100 % where gcovr keeps the C and C++ copies of a function apart.
       - name: Coverage report
         if: matrix.preset == 'linux-coverage'
         run: |
