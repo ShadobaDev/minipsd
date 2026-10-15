@@ -5,6 +5,8 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-10-15
+
 **Breaking:** `minipsd_write_file` is gone; minipsd does no I/O of its own. To migrate, copy
 `write_file` from [examples/write_file.c](../examples/write_file.c) (UTF-8 paths on Windows
 included) or pass your own callback to `minipsd_write`. `MINIPSD_NO_STDIO` is still accepted and

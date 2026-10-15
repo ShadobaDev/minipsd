@@ -129,7 +129,7 @@ The only breaking stage. See [Decisions](CODE-ARCH.md#decisions), 1-2.
 - [x] **S3.3** Docs: spec (API, Consumer requirements 5), [INSTALL.md](INSTALL.md), `README.md`
       usage, [MANUAL.md](MANUAL.md) (code taken from `examples/`), [CHANGELOG.md](CHANGELOG.md)
       with the migration line.
-- [ ] **S3.4** Release **0.2.0** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md). Then bump the vcpkg
+- [x] **S3.4** Release **0.2.0** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md). Then bump the vcpkg
       and Conan recipes in `temp/packaging/` and move Platemaker to 0.2.0 (in its own
       repository).
 

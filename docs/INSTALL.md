@@ -13,7 +13,7 @@ attaches the same headers joined into one `minipsd.h`, for those who prefer a si
 include(FetchContent)
 FetchContent_Declare(minipsd
     GIT_REPOSITORY https://github.com/ShadobaDev/minipsd.git
-    GIT_TAG        0.1.0)
+    GIT_TAG        0.2.0)
 FetchContent_MakeAvailable(minipsd)
 target_link_libraries(my-app PRIVATE minipsd::minipsd)
 ```
@@ -21,11 +21,11 @@ target_link_libraries(my-app PRIVATE minipsd::minipsd)
 **[CPM.cmake](https://github.com/cpm-cmake/CPM.cmake)**
 
 ```cmake
-CPMAddPackage("gh:ShadobaDev/minipsd#0.1.0")
+CPMAddPackage("gh:ShadobaDev/minipsd#0.2.0")
 target_link_libraries(my-app PRIVATE minipsd::minipsd)
 ```
 
-Use `#0.1.0`, not `@0.1.0`: the `@` form looks for a tag `v0.1.0`, and minipsd tags have no `v`.
+Use `#0.2.0`, not `@0.2.0`: the `@` form looks for a tag `v0.2.0`, and minipsd tags have no `v`.
 
 **git submodule**
 
@@ -59,11 +59,11 @@ You can get that tree in any of these ways:
 - **As an archive**, `minipsd-X.Y.Z.tar.gz` or `.zip`: use it unpacked where it is, or extract
   it into a prefix. The tree is relocatable, so nothing needs regenerating:
   ```bash
-  sudo tar -xzf minipsd-0.1.0.tar.gz --strip-components=1 -C /usr/local
+  sudo tar -xzf minipsd-0.2.0.tar.gz --strip-components=1 -C /usr/local
   ```
 - **As a Debian/Ubuntu package**, `libminipsd-dev_X.Y.Z_all.deb`:
   ```bash
-  sudo apt install ./libminipsd-dev_0.1.0_all.deb
+  sudo apt install ./libminipsd-dev_0.2.0_all.deb
   ```
 
 The archive and the `.deb` are built with CPack, see
