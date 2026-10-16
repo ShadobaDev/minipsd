@@ -10,8 +10,7 @@
  * - Workspace
  * - Document
  * - Writer
- * - Reader (so far: the file's description, its resources, its layer records and their pixels;
- *   not yet the composite)
+ * - Reader
  *
  * \par Usage
  * In exactly one C or C++ file:
@@ -457,8 +456,8 @@ MINIPSDDEF int minipsd_reader_init(minipsd_reader **r, const void *data, size_t 
  *
  * Exact for the next step only: a section's length is read before the section, so the answer can
  * grow as more of the file arrives.  Read at least that many bytes (from the start of the file) and
- * repeat the call: minipsd_reader_init, then the iteration up to where it stopped.  For
- * minipsd_decode_layer it is where the last channel the target asks for ends.
+ * repeat the call: minipsd_reader_init, then the iteration up to where it stopped.  For a decode
+ * it is where the last channel the target asks for ends.
  *
  * \param r A reader, or the one minipsd_reader_init set before returning MINIPSD_ERR_SHORT.
  * \return The size in bytes; 0 when r is NULL.
@@ -551,7 +550,7 @@ typedef struct minipsd_target {
 typedef struct minipsd_decode_opts {
     uint32_t y_first;    /*!< The first row, counted from the layer's top.                     */
     uint32_t y_count;    /*!< How many rows; 0: from y_first to the end.                        */
-    int      keep_matte; /*!< Composite only (not available yet): keep the white matte.        */
+    int      keep_matte; /*!< Composite only: non-zero keeps the white matte, as stored.        */
 } minipsd_decode_opts;
 
 /**
@@ -588,6 +587,31 @@ MINIPSDDEF void minipsd_target_rgba(minipsd_target *t, uint8_t *rgba, size_t row
  */
 MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view *layer, const minipsd_target *target,
                                     const minipsd_decode_opts *opts);
+
+/**
+ * \brief Decodes the composite (merged) image, or a band of its rows, into the target.
+ *
+ * The composite is what a reader that ignores layers shows: the full canvas, info.width by the
+ * rows asked for.  The file stores its colour matted against white; by default the matte is
+ * undone, giving straight alpha, exact where alpha is 255 and within about 255 / (2 * alpha)
+ * levels below, since 8-bit matting has already merged nearby colours (0 where alpha is 0).
+ * Un-matting reads each pixel's alpha back from the target, so it then needs an A plane.  A file
+ * whose composite has no transparency (info.composite_has_alpha is 0) decodes as opaque.  As in
+ * minipsd_decode_layer, every check comes before the first sample is written.
+ *
+ * \param r      A reader from minipsd_reader_init.
+ * \param target Where the samples go; only its non-NULL planes are written.
+ * \param opts   The rows and keep_matte; NULL for every row, un-matted.
+ * \return MINIPSD_OK or an error code.
+ *
+ * \retval MINIPSD_ERR_ARG         r (never initialised) or target is NULL, the band lies outside
+ *                                 the image, or the matte is to be undone with no A plane.
+ * \retval MINIPSD_ERR_UNSUPPORTED The file is not 8-bit RGB, or the image is ZIP-compressed.
+ * \retval MINIPSD_ERR_SHORT       The rows of a channel the target asks for are not all in the
+ *                                 buffer; minipsd_reader_needed says how far it must reach.
+ * \retval MINIPSD_ERR_FORMAT      The image is malformed.
+ */
+MINIPSDDEF int minipsd_decode_composite(minipsd_reader *r, const minipsd_target *target, const minipsd_decode_opts *opts);
 
 #endif /* MINIPSD_H */
 

@@ -1,7 +1,7 @@
 /**
  * \file
  * \brief Internal: the composite, the layers blended "over" and matted against white, one row at a
- *        time.  Included by the writer only.
+ *        time (the writer); the matte undone again (the reader).
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
@@ -56,6 +56,17 @@ static const uint8_t *mpsd__composite_row(mpsd__composite *c, uint32_t y)
             o[k] = (uint8_t)((o[k] * a + 255u * (255u - a) + 127u) / 255u);
     }
     return c->row;
+}
+
+/* Undoes the white matte of one stored sample s at alpha a: c = 255 - (255 - s) * 255 / a, rounded
+   and clamped; 0 where a is 0, since a transparent pixel has no colour.  Exact at a == 255; below,
+   8-bit matting has already merged nearby colours, about 255 / (2a) levels apart. */
+static uint8_t mpsd__unmatte(unsigned s, unsigned a)
+{
+    unsigned d;
+    if (a == 0) return 0;
+    d = ((255u - s) * 255u + a / 2) / a;
+    return (uint8_t)(d >= 255u ? 0u : 255u - d);
 }
 
 #endif /* MPSD__COMPOSITE_DONE */

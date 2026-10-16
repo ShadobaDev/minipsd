@@ -135,8 +135,7 @@ The whole program, an `O_NONBLOCK` pipe driven by `poll` with its reading end in
 
 ## Reading
 
-*So far the reader describes a file and decodes layer pixels; the composite comes next*
-([ROADMAP.md](ROADMAP.md), stage 4). It works on bytes you already hold, never copies them, and allocates nothing: its
+The reader describes a file and decodes its pixels, layers and composite. It works on bytes you already hold, never copies them, and allocates nothing: its
 workspace has a fixed size, so it can live on the stack.
 
 ```c
@@ -182,6 +181,17 @@ Pixels come as stored: straight alpha, the layer's opacity and visibility left i
 row, so a huge layer can go through a small buffer in strips. Only 8-bit RGB files decode
 (`MINIPSD_ERR_UNSUPPORTED` otherwise); if the layer's pixel data is not in the buffer yet, the
 call says `MINIPSD_ERR_SHORT` and `minipsd_reader_needed` how far to read.
+
+**The composite** is the flattened image a viewer that ignores layers shows, the full canvas
+(`info.width` by `info.height`). `minipsd_decode_composite` takes the same target and bands. The
+file stores it matted against white; it comes back un-matted, straight alpha like the layers,
+which needs the target's `A` plane since the alpha is read back from there. Set `keep_matte`
+for the bytes as stored, for instance to show them on white as they are:
+
+```c
+minipsd_target_rgba(&t, rgba, (size_t)info.width * 4);
+rc = minipsd_decode_composite(r, &t, NULL);   /* every row, un-matted */
+```
 
 **Untrusted files.** Every length is checked; a malformed file is `MINIPSD_ERR_FORMAT`. Pass a
 `minipsd_limits` to refuse large sides or many layers early (`MINIPSD_ERR_LIMIT`).

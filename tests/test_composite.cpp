@@ -12,6 +12,8 @@
 
 #include "support.h"
 
+#include <cstdlib>
+
 namespace {
 
 // The whole composite image, row by row, as the writer stores it.
@@ -84,4 +86,18 @@ TEST(MinipsdCompositeTest, HiddenZeroOpacityAndEmptyLayersAreLeftOut)
     const minipsd_layer layers[4] = {{"Red", red.data(), 255, 0}, {"Hidden", blue.data(), 255, 1},
                                      {"Clear", blue.data(), 0, 0}, {"Empty", nullptr, 255, 0}};
     EXPECT_EQ(composite(1, 1, layers, 4), red);
+}
+
+TEST(MinipsdCompositeTest, UnmattingUndoesTheMatteWithinItsRounding)
+{
+    for (unsigned a = 0; a <= 255; ++a)
+        for (unsigned c = 0; c <= 255; ++c) {
+            const unsigned s = (c * a + 255u * (255u - a) + 127u) / 255u;   // the writer's matte
+            const unsigned back = mpsd__unmatte(s, a);
+            if (a == 0) { ASSERT_EQ(back, 0u) << "no colour where nothing is"; continue; }
+            const int tolerance = a == 255 ? 0 : 1 + 255 / (2 * static_cast<int>(a));
+            ASSERT_LE(std::abs(static_cast<int>(back) - static_cast<int>(c)), tolerance) << "c " << c << ", a " << a;
+        }
+    EXPECT_EQ(mpsd__unmatte(0, 1), 0u) << "clamped, not wrapped";
+    EXPECT_EQ(mpsd__unmatte(255, 1), 255u);
 }

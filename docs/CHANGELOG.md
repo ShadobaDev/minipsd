@@ -14,6 +14,8 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
 - `minipsd_decode_layer`: a layer's pixels, or a band of its rows, from an 8-bit RGB file (raw or
   PackBits) into caller memory of any layout, described by `minipsd_target`
   (`minipsd_target_rgba` for interleaved RGBA).
+- `minipsd_decode_composite`: the merged image, or a band of its rows, un-matted to straight
+  alpha (or as stored, with `keep_matte`).
 - Return codes `MINIPSD_ERR_FORMAT`, `MINIPSD_ERR_UNSUPPORTED`, `MINIPSD_ERR_SHORT`,
   `MINIPSD_ERR_LIMIT`, and `minipsd_limits`.
 

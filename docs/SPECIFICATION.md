@@ -105,10 +105,19 @@ The declarations, with every parameter and return code, are in
 | `minipsd_layer_next_block(layer, &pos, &block)` | a layer's additional-information blocks, each a raw view |
 | `minipsd_target_rgba(&target, rgba, row_stride)` | a target for interleaved RGBA, the common case |
 | `minipsd_decode_layer(r, layer, target, opts)` | a layer's pixels, or a band of its rows, as stored (opacity and visibility not applied), into the caller's planes; 8-bit RGB, raw or PackBits |
+| `minipsd_decode_composite(r, target, opts)` | the composite (merged) image, or a band of its rows, un-matted to straight alpha unless `keep_matte` |
 | `minipsd_error_string(code)` | a short English text for a return code |
 
-The reader describes any version-1 PSD, whatever its colour mode or depth; it decodes layer
-pixels of 8-bit RGB files, and not yet the composite ([ROADMAP.md](ROADMAP.md), stage 4).
+The reader describes any version-1 PSD, whatever its colour mode or depth; it decodes the pixels
+of 8-bit RGB files, layers and composite.
+
+- **Un-matting.** The file stores the composite's colour matted against white; the reader undoes
+  it, `c = 255 - (255 - s) * 255 / a` rounded and clamped, `0` where `a == 0`. That is exact where
+  `a == 255` and within about `255 / (2a)` levels below: 8-bit matting has already merged nearby
+  colours. It reads each alpha back from the target, so it needs the target's `A` plane.
+  `keep_matte` returns the bytes as stored.
+- **A composite without transparency** (a positive layer count) decodes as opaque; a fourth
+  channel is then not transparency and is not read.
 
 | Type | What it is |
 |---|---|
@@ -122,7 +131,7 @@ pixels of 8-bit RGB files, and not yet the composite ([ROADMAP.md](ROADMAP.md), 
 | `minipsd_bytes` | a read-only view into the caller's buffer |
 | `minipsd_resource`, `minipsd_layer_view`, `minipsd_block` | an image resource, a layer record, an additional-information block, as views |
 | `minipsd_target`, `minipsd_plane` | where decoded samples go: per channel R, G, B, A a pointer, a pixel step and a row step; any layout |
-| `minipsd_decode_opts` | the rows to decode; `NULL` for all |
+| `minipsd_decode_opts` | the rows to decode and, for the composite, `keep_matte`; `NULL` for all rows, un-matted |
 
 **Defaults and field meanings**
 - A zero-initialised document selects RLE (`MINIPSD_RLE = 0`).

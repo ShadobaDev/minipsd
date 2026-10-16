@@ -312,8 +312,9 @@ typedef struct minipsd_target { minipsd_plane channel[4]; } minipsd_target;   /*
   opaque.
 - **The composite is un-matted by default.** The file stores it matted against white
   (`c*a + 255*(1-a)`); the reader inverts that, `c = 255 - (255 - s) * 255 / a` clamped to
-  0..255, and `0` where `a == 0`. This gives the straight-alpha image the writer took in, within
-  one level of rounding (see the spec's Verification). `keep_matte` returns it as stored.
+  0..255, and `0` where `a == 0`. This gives the straight-alpha image the writer took in: exactly
+  where `a == 255`, and within about `255 / (2a)` levels below, since 8-bit matting has already
+  merged nearby colours (see the spec's Verification). `keep_matte` returns it as stored.
   Un-matting reads each pixel's alpha back from the target, so the target must have an `A` plane
   (otherwise `MINIPSD_ERR_ARG`) unless `keep_matte` is set or the file has no composite alpha.
 - **Channel order is the target's business.** The library's own order is R, G, B, A.

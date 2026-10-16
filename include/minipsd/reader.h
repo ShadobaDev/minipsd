@@ -5,7 +5,7 @@
  *
  * Nothing is allocated or copied: the reader keeps a few offsets in the caller's workspace and
  * hands out views into the caller's buffer.  Sections follow the order of the file: header, colour
- * mode data, image resources, layer and mask information.
+ * mode data, image resources, layer and mask information, image data (the composite).
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
@@ -17,6 +17,7 @@
 #include "detail/bytes.h"
 #include "detail/utf.h"
 #include "detail/packbits.h"
+#include "detail/composite.h"
 
 /* --- the reader's state --- */
 
@@ -27,6 +28,10 @@ struct minipsd_reader {
     minipsd_limits limits;        /* with zero fields replaced by the format's own limits        */
     int            ready;         /* init succeeded                                              */
     int            rgb8;          /* the file is 8-bit RGB: its pixels can be decoded            */
+    uint32_t       width, height; /* the composite: its size, channels, and where it starts      */
+    uint32_t       channels;
+    int            composite_alpha;
+    uint64_t       image_start;
     uint64_t       res_next;      /* the resources: where the next one starts, where they end    */
     uint64_t       res_end;
     uint64_t       li_start;      /* the layer info: its first record, and the end of its content */
@@ -199,6 +204,11 @@ static int mpsd__scan(minipsd_reader *r, minipsd_info *info)
     r->layer_count = in.layer_count;
     r->record_next = r->li_start;
     r->rgb8        = in.depth == 8 && in.color_mode == 3;
+    r->width           = in.width;
+    r->height          = in.height;
+    r->channels        = in.channels;
+    r->composite_alpha = in.composite_has_alpha;
+    r->image_start     = lm_start + length;                   /* after the layer and mask section */
     *info = in;
     return MINIPSD_OK;
 }
@@ -602,6 +612,94 @@ MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view 
         }
         rc = mpsd__chan_rows(&ch[k], width, y0, rows, pl);
         if (rc != MINIPSD_OK) return rc;
+    }
+    return MINIPSD_OK;
+}
+
+/* --- pixels: the composite, every channel's rows after one compression marker --- */
+
+/* Where the composite's channels 0 .. last are, checked whole in the buffer before a sample is
+   written: raw planes back to back, or (RLE) every channel's row counts, then every row. */
+static int mpsd__composite_open(minipsd_reader *r, int last, mpsd__chan *ch)
+{
+    const uint8_t *d = r->data;
+    const uint64_t at = r->image_start + 2, plane = (uint64_t)r->width * r->height;
+    uint64_t       sum = 0, offset[4], rows_at;
+    uint32_t       y, n;
+    int            k, rc = mpsd__have(r, at);
+    if (rc != MINIPSD_OK) return rc;
+    switch (mpsd__get16(d + (size_t)r->image_start)) {
+    case 0:
+        rc = mpsd__have(r, at + plane * (uint64_t)(last + 1));
+        for (k = 0; rc == MINIPSD_OK && k <= last; ++k) {
+            ch[k].table = NULL;
+            ch[k].rows  = d + (size_t)(at + plane * (uint64_t)k);
+        }
+        return rc;
+    case 1:
+        rows_at = at + 2 * (uint64_t)r->channels * r->height;   /* the counts of every channel come first */
+        rc = mpsd__have(r, rows_at);
+        if (rc != MINIPSD_OK) return rc;
+        for (k = 0; k <= last; ++k) {
+            offset[k] = sum;
+            for (y = 0, n = r->height; y < n; ++y) sum += mpsd__get16(d + (size_t)at + 2 * ((size_t)k * n + y));
+        }
+        rc = mpsd__have(r, rows_at + sum);
+        for (k = 0; rc == MINIPSD_OK && k <= last; ++k) {
+            ch[k].table = d + (size_t)at + 2 * (size_t)k * r->height;
+            ch[k].rows  = d + (size_t)(rows_at + offset[k]);
+        }
+        return rc;
+    case 2: case 3:
+        return MINIPSD_ERR_UNSUPPORTED;
+    default:
+        return MINIPSD_ERR_FORMAT;
+    }
+}
+
+MINIPSDDEF int minipsd_decode_composite(minipsd_reader *r, const minipsd_target *target, const minipsd_decode_opts *opts)
+{
+    mpsd__chan ch[4];
+    uint32_t   y0, rows, y, x;
+    int        k, rc, last = -1, unmatte, colour;
+    if (!r || !target || !r->ready) return MINIPSD_ERR_ARG;
+    y0 = opts ? opts->y_first : 0;
+    if (y0 > r->height) return MINIPSD_ERR_ARG;
+    rows = opts && opts->y_count ? opts->y_count : r->height - y0;
+    if (rows > r->height - y0) return MINIPSD_ERR_ARG;
+    for (k = 0; k < 3; ++k)
+        if (target->channel[k].data) last = k;
+    colour  = last >= 0;
+    unmatte = r->composite_alpha && !(opts && opts->keep_matte) && colour;
+    if (unmatte && !target->channel[MINIPSD_CH_A].data) return MINIPSD_ERR_ARG;   /* the alpha is read back */
+    if (!r->rgb8) return MINIPSD_ERR_UNSUPPORTED;
+    if (r->channels < 3u + (r->composite_alpha ? 1u : 0u)) return MINIPSD_ERR_FORMAT;
+    if (target->channel[MINIPSD_CH_A].data && r->composite_alpha) last = MINIPSD_CH_A;
+    if (rows == 0) return MINIPSD_OK;
+    if (last >= 0) {
+        rc = mpsd__composite_open(r, last, ch);
+        if (rc != MINIPSD_OK) return rc;
+    }
+
+    /* Transparency first: un-matting reads it back from the target. */
+    for (k = MINIPSD_CH_A; k >= 0; --k) {
+        const minipsd_plane *pl = &target->channel[k];
+        if (!pl->data) continue;
+        if (k == MINIPSD_CH_A && !r->composite_alpha) {          /* no transparency: opaque */
+            for (y = 0; y < rows; ++y)
+                for (x = 0; x < r->width; ++x) pl->data[(ptrdiff_t)y * pl->row_step + (ptrdiff_t)x * pl->pixel_step] = 255;
+            continue;
+        }
+        rc = mpsd__chan_rows(&ch[k], r->width, y0, rows, pl);
+        if (rc != MINIPSD_OK) return rc;
+        if (k == MINIPSD_CH_A || !unmatte) continue;
+        for (y = 0; y < rows; ++y) {
+            const minipsd_plane *a = &target->channel[MINIPSD_CH_A];
+            for (x = 0; x < r->width; ++x) {
+                uint8_t *s = pl->data + (ptrdiff_t)y * pl->row_step + (ptrdiff_t)x * pl->pixel_step;
+                *s = mpsd__unmatte(*s, a->data[(ptrdiff_t)y * a->row_step + (ptrdiff_t)x * a->pixel_step]);
+            }
+        }
     }
     return MINIPSD_OK;
 }

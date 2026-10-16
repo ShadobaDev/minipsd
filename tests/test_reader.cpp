@@ -1,7 +1,7 @@
 /**
  * \file
- * \brief Tests for minipsd/reader.h: the file's description, its resources, its layer records and
- *        their pixels.
+ * \brief Tests for minipsd/reader.h: the file's description, its resources, its layer records,
+ *        their pixels and the composite.
  *        Files come from the writer, and from the small PSD builder below, which also makes the
  *        malformed ones and the ones the writer never writes (other colour modes, masks, other
  *        channels, other blocks).
@@ -17,6 +17,7 @@
 #include "support.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <tuple>
 #include <utility>
@@ -155,6 +156,7 @@ struct Spec {
     int           count = -2;           // the declared layer count; the sign is the composite's alpha
     Bytes         rawLayerSection;      // used instead of the layers when hasRawSection
     bool          hasRawSection = false;
+    Bytes         image = {0, 0};       // the image data: the composite, its compression first
 };
 
 Built build(const Spec &s)
@@ -177,7 +179,7 @@ Built build(const Spec &s)
         if (info.b.size() & 1) info.u8(0);
         o.raw(layerSection(info.b));
     }
-    o.u16(0);   // the composite's compression: the reader does not look further
+    o.raw(s.image);
     out.bytes = o.b;
     return out;
 }
@@ -1206,4 +1208,223 @@ TEST(MinipsdReaderTest, DecodeChecksItsArguments)
     Open cut(f.bytes, 10);
     ASSERT_EQ(cut.rc, MINIPSD_ERR_SHORT);
     EXPECT_EQ(minipsd_decode_layer(cut.r, &v, &t, nullptr), MINIPSD_ERR_ARG) << "a reader that never started";
+}
+
+// ---------------------------------------------------------------------------------------------------
+// decode_composite: the merged image, un-matted
+// ---------------------------------------------------------------------------------------------------
+
+namespace {
+
+int decodeComposite(minipsd_reader *r, std::uint32_t w, Bytes &out, std::uint32_t y0 = 0, std::uint32_t count = 0,
+                    int keepMatte = 0)
+{
+    minipsd_target t;
+    minipsd_target_rgba(&t, out.data(), std::size_t(w) * 4);
+    const minipsd_decode_opts opts{y0, count, keepMatte};
+    return minipsd_decode_composite(r, &t, &opts);
+}
+
+// A 2 x 2 file whose composite is raw planes, R, G, B (and more), as given.
+Bytes compositeFile(int count, unsigned channels, const std::vector<Bytes> &planes)
+{
+    Spec s;
+    s.layers = {simpleRec()};
+    s.count = count;
+    s.channels = channels;
+    Out image;
+    image.u16(0);
+    for (const Bytes &p : planes) image.raw(p);
+    s.image = image.b;
+    return build(s).bytes;
+}
+
+} // namespace
+
+TEST(MinipsdReaderTest, TheWritersCompositeDecodesUnmattedOrAsStored)
+{
+    const std::uint32_t w = 37, h = 5;
+    const Bytes px = testImage(w, h);   // one visible, opaque layer: the composite is its pixels
+    const minipsd_layer layer{"L", px.data(), 255, 0};
+    for (int compression : {MINIPSD_RLE, MINIPSD_RAW}) {
+        SCOPED_TRACE(compression);
+        minipsd_doc d = docOf(w, h, &layer, 1);
+        d.compression = compression;
+        Open o(write(d));
+        ASSERT_EQ(o.rc, MINIPSD_OK);
+
+        Bytes stored(px.size(), 0xEE);
+        ASSERT_EQ(decodeComposite(o.r, w, stored, 0, 0, 1), MINIPSD_OK);
+        EXPECT_EQ(stored, matted(px)) << "keep_matte: the bytes as the file holds them";
+
+        Bytes out(px.size(), 0xEE);
+        ASSERT_EQ(decodeComposite(o.r, w, out), MINIPSD_OK);
+        for (std::size_t i = 0; i < px.size(); i += 4) {
+            const unsigned a = px[i + 3];
+            ASSERT_EQ(out[i + 3], a) << i / 4;
+            for (std::size_t k = 0; k < 3; ++k) {
+                if (a == 0) { ASSERT_EQ(out[i + k], 0) << "no colour where nothing is"; continue; }
+                const int tolerance = a == 255 ? 0 : 1 + 255 / (2 * static_cast<int>(a));
+                ASSERT_LE(std::abs(out[i + k] - px[i + k]), tolerance) << i / 4 << "/" << k << " alpha " << a;
+            }
+        }
+        Bytes again(px.size(), 0xEE);
+        minipsd_target t;
+        minipsd_target_rgba(&t, again.data(), std::size_t(w) * 4);
+        ASSERT_EQ(minipsd_decode_composite(o.r, &t, nullptr), MINIPSD_OK);
+        EXPECT_EQ(again, out) << "NULL options: every row, un-matted";
+
+        // A band of rows lands in the target's first row.
+        for (const auto &[y0, count] : {std::pair{1u, 2u}, std::pair{4u, 0u}}) {
+            const std::uint32_t rows = count ? count : h - y0;
+            Bytes band(std::size_t(w) * 4 * rows, 0xEE);
+            ASSERT_EQ(decodeComposite(o.r, w, band, y0, count), MINIPSD_OK);
+            EXPECT_EQ(band, rowsOf(out, w, y0, rows)) << y0 << "+" << count;
+        }
+        EXPECT_EQ(decodeComposite(o.r, w, out, 5, 1), MINIPSD_ERR_ARG) << "a band below the image";
+        EXPECT_EQ(decodeComposite(o.r, w, out, 6, 0), MINIPSD_ERR_ARG);
+        EXPECT_EQ(decodeComposite(o.r, w, out, 5, 0), MINIPSD_OK) << "the empty band at the end";
+    }
+}
+
+TEST(MinipsdReaderTest, UnmattingNeedsTheAlphaPlane)
+{
+    const Bytes px = testImage(4, 2);
+    const minipsd_layer layer{"L", px.data(), 255, 0};
+    Open o(write(docOf(4, 2, &layer, 1)));
+    Bytes out(px.size(), 0xEE);
+    minipsd_target t;
+    minipsd_target_rgba(&t, out.data(), 16);
+    t.channel[MINIPSD_CH_A].data = nullptr;
+    EXPECT_EQ(minipsd_decode_composite(o.r, &t, nullptr), MINIPSD_ERR_ARG) << "the alpha is read back from the target";
+    EXPECT_EQ(out, Bytes(px.size(), 0xEE)) << "untouched";
+    const minipsd_decode_opts keep{0, 0, 1};
+    EXPECT_EQ(minipsd_decode_composite(o.r, &t, &keep), MINIPSD_OK) << "as stored, no alpha needed";
+    const Bytes m = matted(px);
+    for (std::size_t i = 0; i < px.size(); ++i) EXPECT_EQ(out[i], i % 4 == 3 ? 0xEE : m[i]) << i;
+
+    minipsd_target_rgba(&t, out.data(), 16);   // the alpha alone needs no colour
+    t.channel[MINIPSD_CH_R].data = t.channel[MINIPSD_CH_G].data = t.channel[MINIPSD_CH_B].data = nullptr;
+    EXPECT_EQ(minipsd_decode_composite(o.r, &t, nullptr), MINIPSD_OK);
+    for (std::size_t i = 3; i < px.size(); i += 4) EXPECT_EQ(out[i], px[i]) << i;
+}
+
+TEST(MinipsdReaderTest, ACompositeWithoutTransparencyIsOpaqueAndNotUnmatted)
+{
+    const Bytes r = {10, 20, 30, 40}, g = {50, 60, 70, 80}, b = {90, 100, 110, 120}, x = {1, 2, 3, 4};
+    for (unsigned channels : {3u, 4u}) {   // a positive layer count: a fourth channel is not transparency
+        Open o(compositeFile(1, channels, channels == 3 ? std::vector<Bytes>{r, g, b} : std::vector<Bytes>{r, g, b, x}));
+        ASSERT_EQ(o.rc, MINIPSD_OK) << channels;
+        EXPECT_EQ(o.info.composite_has_alpha, 0);
+        Bytes out(16, 0xEE);
+        ASSERT_EQ(decodeComposite(o.r, 2, out), MINIPSD_OK) << channels;
+        EXPECT_EQ(out, (Bytes{10, 50, 90, 255, 20, 60, 100, 255, 30, 70, 110, 255, 40, 80, 120, 255})) << channels;
+    }
+    Spec cut;   // no image data at all: the alpha alone of an opaque composite needs none
+    cut.layers = {simpleRec()};
+    cut.count = 1;
+    cut.channels = 3;
+    cut.image = {};
+    Open opaque(build(cut).bytes);
+    Bytes a(16, 0xEE);
+    minipsd_target t;
+    minipsd_target_rgba(&t, a.data(), 8);
+    t.channel[MINIPSD_CH_R].data = t.channel[MINIPSD_CH_G].data = t.channel[MINIPSD_CH_B].data = nullptr;
+    ASSERT_EQ(minipsd_decode_composite(opaque.r, &t, nullptr), MINIPSD_OK);
+    EXPECT_EQ(a, (Bytes{0xEE, 0xEE, 0xEE, 255, 0xEE, 0xEE, 0xEE, 255, 0xEE, 0xEE, 0xEE, 255, 0xEE, 0xEE, 0xEE, 255}));
+
+    Open alpha(compositeFile(-1, 4, {r, g, b, Bytes{255, 255, 0, 255}}));
+    Bytes out(16, 0xEE);
+    ASSERT_EQ(decodeComposite(alpha.r, 2, out), MINIPSD_OK);
+    EXPECT_EQ(out, (Bytes{10, 50, 90, 255, 20, 60, 100, 255, 0, 0, 0, 0, 40, 80, 120, 255})) << "un-matted at 255 and 0";
+}
+
+TEST(MinipsdReaderTest, ACompositeNotYetReadAsksForMore)
+{
+    const Bytes px = testImage(37, 5);
+    const minipsd_layer layer{"L", px.data(), 255, 0};
+    for (int compression : {MINIPSD_RLE, MINIPSD_RAW}) {
+        SCOPED_TRACE(compression);
+        minipsd_doc d = docOf(37, 5, &layer, 1);
+        d.compression = compression;
+        const Bytes file = write(d);
+        Open whole(file);
+        Bytes expected(px.size());
+        ASSERT_EQ(decodeComposite(whole.r, 37, expected), MINIPSD_OK);
+
+        // The caller's loop: read what `needed` says, decode again.  Marker, row counts, rows.
+        std::size_t have = file.size() / 2, rounds = 0;
+        for (;;) {
+            Open o(file, have);
+            ASSERT_EQ(o.rc, MINIPSD_OK) << "init needs far less: " << have;
+            Bytes out(px.size(), 0xEE);
+            const int rc = decodeComposite(o.r, 37, out);
+            ++rounds;
+            if (rc == MINIPSD_OK) { EXPECT_EQ(out, expected); break; }
+            ASSERT_EQ(rc, MINIPSD_ERR_SHORT);
+            EXPECT_EQ(out, Bytes(px.size(), 0xEE)) << "untouched";
+            ASSERT_GT(minipsd_reader_needed(o.r), have);
+            have = static_cast<std::size_t>(minipsd_reader_needed(o.r));
+            ASSERT_LT(rounds, 5u);
+        }
+        EXPECT_EQ(have, file.size()) << "transparency is the last channel of the file";
+    }
+}
+
+TEST(MinipsdReaderTest, CompositesOutsideTheSubsetOrMalformedAreRefused)
+{
+    const Bytes p = {1, 2, 3, 4};
+    auto withImage = [&](const Bytes &image, int count = -1, unsigned channels = 4, bool inARow = false) {
+        Spec s;
+        s.layers = {simpleRec()};
+        s.count = count;
+        s.channels = channels;
+        s.image = image;
+        Open o(build(s).bytes);
+        EXPECT_EQ(o.rc, MINIPSD_OK);
+        Bytes out(16, 0xEE);
+        const int rc = decodeComposite(o.r, 2, out);
+        if (rc != MINIPSD_OK && !inARow) {
+            EXPECT_EQ(out, Bytes(16, 0xEE)) << "untouched before any sample";
+        }
+        return rc;
+    };
+    const Bytes raw = Out().u16(0).raw(p).raw(p).raw(p).raw(Bytes{255, 255, 255, 255}).b;
+    EXPECT_EQ(withImage(raw), MINIPSD_OK) << "the baseline";
+    for (unsigned zip : {2u, 3u}) EXPECT_EQ(withImage(Out().u16(zip).raw(p).b), MINIPSD_ERR_UNSUPPORTED) << zip;
+    EXPECT_EQ(withImage(Out().u16(4).raw(p).b), MINIPSD_ERR_FORMAT) << "an unknown compression";
+    EXPECT_EQ(withImage(raw, -1, 3), MINIPSD_ERR_FORMAT) << "transparency announced, three channels";
+
+    // RLE: the counts of four channels of two rows, then the rows.
+    Out rle;
+    rle.u16(1);
+    for (int i = 0; i < 8; ++i) rle.u16(2);
+    for (int i = 0; i < 8; ++i) rle.u8(0xFF).u8(i < 6 ? 7 : 255);
+    EXPECT_EQ(withImage(rle.b), MINIPSD_OK) << "the RLE baseline";
+    Bytes bad = rle.b;
+    bad[2 + 16] = 0x05;    // red's first row: six literals, past the width
+    EXPECT_EQ(withImage(bad, -1, 4, true), MINIPSD_ERR_FORMAT) << "a malformed row, found while decoding";
+
+    Spec s;
+    s.layers = {simpleRec()};
+    s.depth = 16;
+    Open deep(build(s).bytes);
+    Bytes out(16, 0xEE);
+    EXPECT_EQ(decodeComposite(deep.r, 2, out), MINIPSD_ERR_UNSUPPORTED) << "16 bits";
+}
+
+TEST(MinipsdReaderTest, DecodeCompositeChecksItsArguments)
+{
+    Spec s;
+    s.layers = {simpleRec()};
+    const Built f = build(s);
+    Bytes out(16);
+    minipsd_target t;
+    minipsd_target_rgba(&t, out.data(), 8);
+    Open o(f.bytes);
+    EXPECT_EQ(minipsd_decode_composite(nullptr, &t, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_decode_composite(o.r, nullptr, nullptr), MINIPSD_ERR_ARG);
+    Open cut(f.bytes, 10);
+    ASSERT_EQ(cut.rc, MINIPSD_ERR_SHORT);
+    EXPECT_EQ(minipsd_decode_composite(cut.r, &t, nullptr), MINIPSD_ERR_ARG) << "a reader that never started";
 }

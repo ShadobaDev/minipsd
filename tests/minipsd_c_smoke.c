@@ -67,7 +67,7 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
         return -102;
 
     /* The reader, over the bytes just written: the file, its resources, its layers, their pixels and
-       their blocks. */
+       their blocks, the composite. */
     {
         minipsd_reader    *rd;
         minipsd_info       info;
@@ -94,6 +94,8 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
         minipsd_target_rgba(&t, got, sizeof got / 2);   /* two rows */
         if (minipsd_decode_layer(rd, &lv, &t, NULL) != MINIPSD_OK || memcmp(got, px, sizeof px) != 0)
             return -107;
+        if (minipsd_decode_composite(rd, &t, NULL) != MINIPSD_OK || got[3] != px[3])   /* one layer: its alpha */
+            return -108;
         while (minipsd_layer_next_block(&lv, &pos, &blk) == MINIPSD_MORE) ++blocks;
         if (blocks != 1 || minipsd_reader_next_layer(rd, &lv) != MINIPSD_MORE
             || minipsd_reader_next_layer(rd, &lv) != MINIPSD_OK)
