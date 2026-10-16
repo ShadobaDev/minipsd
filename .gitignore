@@ -20,5 +20,5 @@ temp
 # Python virtual environments
 .venv
 
-## Ignore test fixtures
-tests/fixtures/Test-g-example.psd
+## Private test files: read by the tests when present, never committed (see tests/data/README.md)
+tests/fixtures/

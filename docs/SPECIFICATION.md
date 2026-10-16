@@ -263,6 +263,12 @@ Platemaker is the first consumer. Breaking any of these breaks it:
 - **Golden bytes:** `test_golden.cpp` writes a fixed set of documents and compares each file's
   SHA-256 with the hash recorded from 0.1.0. A change meant to keep the output must leave every
   hash alone; changing a hash there is the explicit, reviewed sign of a byte change.
+- **Reader round trip:** each golden file is read back, its document rebuilt from the reader's
+  views and decoded pixels, and written again: the bytes must be the same
+  (`encode(decode(x)) == x`).
+- **Files from other programs:** every `.psd` in `tests/data/` (committed, origin and licence in
+  its README) and `tests/fixtures/` (local, never committed) is read whole and in parts, and every
+  layer and the composite of an 8-bit RGB one must decode; `examples/read_file.c` runs on each.
 
 ## Distribution and SBOM
 

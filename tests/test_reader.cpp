@@ -19,6 +19,9 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <tuple>
 #include <utility>
 
@@ -1512,4 +1515,95 @@ TEST(MinipsdReaderTest, ADecodeOverTheBytesLimitIsRefusedBeforeWriting)
     minipsd_target none;
     minipsd_target_rgba(&none, nullptr, 0);
     EXPECT_EQ(minipsd_decode_composite(o.r, &none, nullptr), MINIPSD_OK) << "no planes, no bytes";
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Files from other programs: tests/data (committed, origin and licence in its README) and
+// tests/fixtures (local only, never committed)
+// ---------------------------------------------------------------------------------------------------
+
+namespace {
+
+std::vector<std::filesystem::path> filesFromOtherPrograms()
+{
+    std::vector<std::filesystem::path> files;
+    for (const char *dir : {MINIPSD_TEST_DATA_DIR, MINIPSD_TEST_FIXTURES_DIR}) {
+        std::error_code ec;
+        for (const auto &entry : std::filesystem::directory_iterator(dir, ec))
+            if (entry.path().extension() == ".psd") files.push_back(entry.path());
+    }
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
+Bytes readFile(const std::filesystem::path &path)
+{
+    std::ifstream in(path, std::ios::binary);
+    return Bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+} // namespace
+
+TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
+{
+    const auto files = filesFromOtherPrograms();
+    if (files.empty()) GTEST_SKIP() << "no .psd in tests/data or tests/fixtures";
+    for (const auto &path : files) {
+        SCOPED_TRACE(path.filename().string());
+        const Bytes file = readFile(path);
+
+        // Whole: every layer and the composite decode, when the file is 8-bit RGB.
+        Open o(file);
+        ASSERT_EQ(o.rc, MINIPSD_OK);
+        const bool rgb8 = o.info.depth == 8 && o.info.color_mode == 3;
+        const std::uint32_t w = o.info.width, h = o.info.height;
+        std::size_t layers = 0;
+        minipsd_layer_view v;
+        Bytes px;
+        while (minipsd_reader_next_layer(o.r, &v) == MINIPSD_MORE) {
+            ++layers;
+            nameOf(v);
+            if (!rgb8) continue;
+            const auto lw = static_cast<std::uint32_t>(v.right - v.left), lh = static_cast<std::uint32_t>(v.bottom - v.top);
+            px.assign(std::size_t(lw) * lh * 4, 0);
+            EXPECT_EQ(decodeRgba(o.r, v, lw, px), MINIPSD_OK) << "layer " << layers - 1;
+        }
+        EXPECT_EQ(layers, o.info.layer_count);
+        Bytes composite(std::size_t(w) * h * 4), stored(composite.size());
+        if (rgb8) {
+            EXPECT_EQ(decodeComposite(o.r, w, composite), MINIPSD_OK);
+            EXPECT_EQ(decodeComposite(o.r, w, stored, 0, 0, 1), MINIPSD_OK);
+        }
+
+        // In parts, as a download or a file manager would: grow the prefix to exactly what `needed`
+        // says until the layers and the composite are all there, and get the same composite.  Each
+        // round asks for more; a record tells its length in three steps (its header, its channel
+        // table, its extra data), so the rounds stay within a few per layer.
+        std::size_t have = 0, rounds = 0;
+        const std::size_t most = 8 + 3 * o.info.layer_count + 3;
+        auto grow = [&](minipsd_reader *r) {
+            const auto needed = static_cast<std::size_t>(minipsd_reader_needed(r));
+            EXPECT_GT(needed, have) << "every round asks for more";
+            have = needed;
+        };
+        for (bool done = false; !done; ++rounds) {
+            ASSERT_LT(rounds, most);
+            Open p(file, have);
+            if (p.rc == MINIPSD_ERR_SHORT) { grow(p.r); continue; }
+            ASSERT_EQ(p.rc, MINIPSD_OK) << have;
+            int rc;
+            while ((rc = minipsd_reader_next_layer(p.r, &v)) == MINIPSD_MORE) {}
+            if (rc == MINIPSD_OK && rgb8) {
+                Bytes again(composite.size());
+                rc = decodeComposite(p.r, w, again);
+                if (rc == MINIPSD_OK) {
+                    EXPECT_EQ(again, composite);
+                }
+            }
+            if (rc == MINIPSD_ERR_SHORT) { grow(p.r); continue; }
+            ASSERT_EQ(rc, MINIPSD_OK) << have;
+            done = true;
+        }
+        EXPECT_LE(have, file.size());
+    }
 }

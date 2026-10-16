@@ -158,7 +158,9 @@ any of it is used.
 
 **A prefix is enough to describe a file.** `minipsd_reader_init` needs the bytes up to the layer
 count only. Given less, it returns `MINIPSD_ERR_SHORT`, and `minipsd_reader_needed` says how
-long the buffer must be for the next step; read that much and call `init` again. Layer names need
+long the buffer must be for the next step; read that much and call `init` again. It is the least
+length, and each layer record reveals its own in about three steps, so a file of many layers
+takes many small steps: read in larger chunks (64 KiB or more), and use `needed` as the floor. Layer names need
 the whole records section; a layer whose pixel data is not in the buffer yet still comes back,
 with that channel's view `data == NULL`.
 
@@ -192,6 +194,10 @@ for the bytes as stored, for instance to show them on white as they are:
 minipsd_target_rgba(&t, rgba, (size_t)info.width * 4);
 rc = minipsd_decode_composite(r, &t, NULL);   /* every row, un-matted */
 ```
+
+[examples/read_file.c](../examples/read_file.c) puts this together: it prints what a file
+holds, its layers with their names, blend modes and blocks, and how many pixels of each layer and
+of the composite are visible.
 
 **Untrusted files.** Every length is checked; a malformed file is `MINIPSD_ERR_FORMAT`. Pass a
 `minipsd_limits` to refuse what is too large before it costs anything, with

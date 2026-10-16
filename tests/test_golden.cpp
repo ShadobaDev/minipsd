@@ -7,6 +7,9 @@
  * to alter the bytes is breaking (consumers hash the output; see SPECIFICATION.md), and updating a
  * hash here is the explicit sign of it: the failure message prints the new one.
  *
+ * Each file also goes through the reader and back: the document it describes, written again, gives
+ * the same bytes (encode(decode(x)) == x).
+ *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
  */
@@ -95,6 +98,48 @@ struct Golden {
     const char *sha256;   // of the file written by minipsd 0.1.0
 };
 
+// The document a file describes, rebuilt with the reader; it borrows from `file`, which must stay.
+struct Decoded {
+    std::vector<Bytes>         pixels;
+    std::vector<std::string>   names;
+    std::vector<minipsd_layer> layers;
+    minipsd_doc                doc{};
+};
+
+void decode(const Bytes &file, Decoded &out)
+{
+    Bytes workspace(256);
+    minipsd_reader *r = nullptr;
+    minipsd_info info{};
+    ASSERT_EQ(minipsd_reader_init(&r, file.data(), file.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
+    out.pixels.resize(info.layer_count);
+    out.names.resize(info.layer_count);
+    out.layers.resize(info.layer_count);
+    out.doc.compression = MINIPSD_RAW;
+    minipsd_layer_view v;
+    for (std::size_t i = 0; minipsd_reader_next_layer(r, &v) == MINIPSD_MORE; ++i) {
+        std::size_t needed = 0;
+        minipsd_layer_name(&v, nullptr, 0, &needed);
+        out.names[i].resize(needed);
+        ASSERT_EQ(minipsd_layer_name(&v, out.names[i].data(), needed, nullptr), MINIPSD_OK);
+        out.layers[i] = {out.names[i].c_str(), nullptr, v.opacity, v.hidden};
+        if (v.right == v.left) continue;   // an empty layer
+        out.pixels[i].resize(std::size_t(info.width) * info.height * 4);
+        minipsd_target t;
+        minipsd_target_rgba(&t, out.pixels[i].data(), std::size_t(info.width) * 4);
+        ASSERT_EQ(minipsd_decode_layer(r, &v, &t, nullptr), MINIPSD_OK);
+        out.layers[i].rgba = out.pixels[i].data();
+        if (v.channel[MINIPSD_CH_R].data[1] == 1) out.doc.compression = MINIPSD_RLE;   // the marker's low byte
+    }
+    out.doc.width = info.width;
+    out.doc.height = info.height;
+    out.doc.dpi = info.dpi;
+    out.doc.layers = out.layers.data();
+    out.doc.layer_count = out.layers.size();
+    out.doc.icc = info.icc.size ? info.icc.data : nullptr;
+    out.doc.icc_size = info.icc.size;
+}
+
 } // namespace
 
 TEST(MinipsdGoldenTest, OutputMatchesTheBytesOf010)
@@ -136,6 +181,9 @@ TEST(MinipsdGoldenTest, OutputMatchesTheBytesOf010)
         const int rc = minipsd_write(&t.doc, collect, &out);
         ASSERT_EQ(rc, MINIPSD_OK) << minipsd_error_string(rc);
         EXPECT_EQ(sha256(out), t.golden.sha256) << "the bytes of '" << t.golden.name << "' changed";
+        Decoded back;
+        decode(out, back);
+        EXPECT_EQ(write(back.doc), out) << "encode(decode(x)) == x";
         EXPECT_EQ(pullTotal(t.doc), out.size()) << "the pull writer knows the size before writing";
         for (std::size_t cap : {std::size_t(1), std::size_t(7), std::size_t(4096), out.size(), std::size_t(0)})
             EXPECT_EQ(pull(t.doc, cap), out) << "pulled " << (cap ? std::to_string(cap) : "random") << " bytes at a time";

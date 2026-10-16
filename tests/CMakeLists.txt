@@ -71,6 +71,10 @@ function(minipsd_add_test_executable target)
     add_executable(${target} ${ARGN})
     target_link_libraries(${target} PRIVATE GTest::gtest GTest::gtest_main)
     target_compile_options(${target} PRIVATE ${MINIPSD_WARNINGS} ${_minipsd_test_only_warnings})
+    # PSD files from other programs: tests/data is committed, tests/fixtures is local and ignored.
+    target_compile_definitions(${target} PRIVATE
+        MINIPSD_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+        MINIPSD_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
     set_target_properties(${target} PROPERTIES
         C_STANDARD   99 C_STANDARD_REQUIRED   ON C_EXTENSIONS   OFF
         CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF   # the tests use std::u8string

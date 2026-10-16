@@ -160,13 +160,16 @@ Additive. See [Reader](CODE-ARCH.md#reader).
       `R3`, `R4`.
 - [x] **S4.6** Limits (`R8`, `X4`), checked before any decoding.
 - [ ] **S4.7** Tests:
-      - `encode(decode(x)) == x` over the golden set (`E4`);
-      - files saved by GIMP, Krita and Photopea in `tests/data/`, with their origin and
-        licence noted;
-      - `examples/read_file.c`.
-- [ ] **S4.8** Fuzzing: a libFuzzer target under ASan, seeded from `tests/data/`. It runs in CI
-      for a fixed time.
-      *Done when:* that time passes with no finding.
+      - [x] `encode(decode(x)) == x` over the golden set (`E4`);
+      - [ ] files saved by GIMP, Krita and Photopea in `tests/data/`, with their origin and
+        licence noted. The test that reads them, whole and in parts, is in place and already
+        runs on a local Procreate file in `tests/fixtures/`; the files themselves are missing;
+      - [x] `examples/read_file.c`.
+- [ ] **S4.8** Fuzzing, a local tool and not a CI job: a libFuzzer target under ASan and
+      UBSan, seeded from `tests/data/` and from the writer's own files, built by its own preset
+      and run by hand for as long as wanted. CI keeps to tests that guard against regressions:
+      each finding, once fixed, is kept as an input file that the ordinary tests replay.
+      *Done when:* a local run of a fixed time (an hour) ends with no finding.
 - [ ] **S4.9** Docs: the spec gains the reader. Release: 0.3.0 if anything above broke
       the API, otherwise 0.2.1.
 
@@ -198,7 +201,46 @@ Each step covers the document model, writer, reader and composite, and is verifi
 
 - [ ] **S6.1** Layers smaller than the canvas. It comes first because masks and groups need
       bounds.
-- [ ] **S6.2** Blend modes. They come before groups, which add the pass-through mode.
+- [ ] **S6.2** Blend modes. They come before groups, which add the pass-through mode. Each mode
+      is a four-character key in the layer record: the writer writes it, the reader already
+      returns it in `minipsd_layer_view.blend`, and the composite blends with it. Every mode is
+      checked against `psd-tools` and by hand in one real application. Photoshop's full set, in
+      its menu order:
+
+      | Group | Mode | Key |
+      |---|---|---|
+      | Normal | Normal | `norm` (done) |
+      | | Dissolve | `diss` |
+      | Darken | Darken | `dark` |
+      | | Multiply | `mul ` |
+      | | Color Burn | `idiv` |
+      | | Linear Burn | `lbrn` |
+      | | Darker Color | `dkCl` |
+      | Lighten | Lighten | `lite` |
+      | | Screen | `scrn` |
+      | | Color Dodge | `div ` |
+      | | Linear Dodge (Add) | `lddg` |
+      | | Lighter Color | `lgCl` |
+      | Contrast | Overlay | `over` |
+      | | Soft Light | `sLit` |
+      | | Hard Light | `hLit` |
+      | | Vivid Light | `vLit` |
+      | | Linear Light | `lLit` |
+      | | Pin Light | `pLit` |
+      | | Hard Mix | `hMix` |
+      | Inversion | Difference | `diff` |
+      | | Exclusion | `smud` |
+      | Cancellation | Subtract | `fsub` |
+      | | Divide | `fdiv` |
+      | Component | Hue | `hue ` |
+      | | Saturation | `sat ` |
+      | | Color | `colr` |
+      | | Luminosity | `lum ` |
+      | Groups only | Pass Through | `pass` (S6.3) |
+
+      Dissolve picks pixels at random, so the composite cannot match Photoshop's byte for byte;
+      it is written and read, and its composite is checked by its alpha statistics only.
+      Procreate already writes `sLit` and `colr` (seen in a real file in S4.7).
 - [ ] **S6.3** Layer groups (`lsct`).
 - [ ] **S6.4** Layer masks.
 - [ ] **S6.5** 16-bit channels.

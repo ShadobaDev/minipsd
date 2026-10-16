@@ -6,9 +6,10 @@
 #   write_file         minipsd_write to stdio, a UTF-8 path on Windows included   (blocking)
 #   write_memory       the pull writer into one buffer of the exact size
 #   write_nonblocking  the pull writer into an O_NONBLOCK pipe, with poll          (POSIX only)
+#   read_file          a PSD read whole, described, every layer and the composite decoded
 # ---------------------------------------------------------------------------
 
-set(_examples write_file write_memory)
+set(_examples write_file write_memory read_file)
 if(UNIX)
     list(APPEND _examples write_nonblocking)
 endif()
@@ -50,3 +51,24 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME example.write_file.dev-full COMMAND write_file /dev/full)
     set_tests_properties(example.write_file.dev-full PROPERTIES PASS_REGULAR_EXPRESSION "write failed|cannot open or close")
 endif()
+
+# read_file: on what write_memory wrote, and on every PSD from other programs (tests/data,
+# committed; tests/fixtures, local only).  A layer or composite that fails to decode fails it.
+set_tests_properties(example.write_memory PROPERTIES FIXTURES_SETUP minipsd-example-psd)
+add_test(NAME example.read_file COMMAND read_file "${CMAKE_CURRENT_BINARY_DIR}/out-write_memory/out.psd")
+set_tests_properties(example.read_file PROPERTIES
+    FIXTURES_REQUIRED minipsd-example-psd
+    PASS_REGULAR_EXPRESSION "300 x 7, 8-bit RGB.*0 'Template'.*1 'Layer'[^
+]*
+[^
+]*
+ +empty
+composite:
+ +[0-9]+ visible pixels"
+    FAIL_REGULAR_EXPRESSION "not decoded")
+file(GLOB _other_psds "${PROJECT_SOURCE_DIR}/tests/data/*.psd" "${PROJECT_SOURCE_DIR}/tests/fixtures/*.psd")
+foreach(_psd IN LISTS _other_psds)
+    get_filename_component(_name "${_psd}" NAME_WE)
+    add_test(NAME example.read_file.${_name} COMMAND read_file "${_psd}")
+    set_tests_properties(example.read_file.${_name} PROPERTIES FAIL_REGULAR_EXPRESSION "not decoded")
+endforeach()

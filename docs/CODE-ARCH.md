@@ -105,7 +105,7 @@ examples/                      the I/O implementations; built and run in CI, nev
   read_file.c                  whole file into memory, then decode (later stage)
 tests/
   test_<module>.cpp            one file per module; detail modules are tested directly
-  fuzz/                        libFuzzer target for the reader (later stage)
+  fuzz/                        libFuzzer target for the reader, run locally (later stage)
 tools/
   amalgamate.cmake             joins include/ into one file, a release artifact
 ```
@@ -423,7 +423,9 @@ while ((rc = minipsd_reader_init(&r, buf, have, ws, ws_size, NULL, &info)) == MI
     (`R1`). Only the pixel decoding is limited to 8-bit RGB (`MINIPSD_ERR_UNSUPPORTED`, from
     `decode_*`, S4.4 and S4.5), as is any feature it does not decode yet. A PSB (version 2) is
     refused by `init`, since its lengths are wider.
-  - A libFuzzer target runs in CI under ASan, seeded from the test files.
+  - A libFuzzer target runs locally under ASan and UBSan, seeded from the test files; it is a
+    tool, not a CI job. Each finding, once fixed, stays as an input that the ordinary tests
+    replay, so CI guards against its return.
 - **Symmetric with the writer.** For the subset minipsd writes, the decoded views and pixels
   rebuild a `minipsd_doc`, and writing it again gives the original bytes. That round trip
   `encode(decode(x)) == x` is the reader's main test, next to files saved by GIMP, Krita and
