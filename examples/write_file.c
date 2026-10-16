@@ -5,7 +5,7 @@
  * minipsd itself has no file I/O; this is the whole of it.  The path is UTF-8 on every platform:
  * on Windows the narrow fopen reads the ANSI code page, so the path goes to _wfopen as UTF-16.
  *
- * Usage: write_file [path].  Without a path it writes szablon-?.psd, the ? an a with ogonek
+ * Usage: write_file [path].  Without a path it writes template-?.psd, the ? an a with ogonek
  * (U+0105, two bytes of UTF-8), to the current directory, to show a name outside ASCII.  On
  * Windows argv is in the ANSI code page, not UTF-8, so a path given there should be ASCII.
  *
@@ -67,7 +67,7 @@ int main(int argc, char **argv)
     static demo d;
     int         rc;
     demo_init(&d);
-    rc = write_file(&d.doc, argc > 1 ? argv[1] : "szablon-\xC4\x85.psd");
+    rc = write_file(&d.doc, argc > 1 ? argv[1] : "template-\xC4\x85.psd");
     if (rc != MINIPSD_OK) {
         fprintf(stderr, "write_file: %s\n", minipsd_error_string(rc));
         return 1;

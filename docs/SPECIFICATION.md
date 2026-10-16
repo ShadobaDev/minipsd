@@ -103,10 +103,12 @@ The declarations, with every parameter and return code, are in
 | `minipsd_reader_next_layer(r, &layer)` | the layer records, bottom first, with views of their channel data: `MINIPSD_MORE` per layer, then `MINIPSD_OK` |
 | `minipsd_layer_name(layer, utf8, cap, &needed)` | a layer's name as UTF-8 (`luni`, else the legacy name as Latin-1) |
 | `minipsd_layer_next_block(layer, &pos, &block)` | a layer's additional-information blocks, each a raw view |
+| `minipsd_target_rgba(&target, rgba, row_stride)` | a target for interleaved RGBA, the common case |
+| `minipsd_decode_layer(r, layer, target, opts)` | a layer's pixels, or a band of its rows, as stored (opacity and visibility not applied), into the caller's planes; 8-bit RGB, raw or PackBits |
 | `minipsd_error_string(code)` | a short English text for a return code |
 
-The reader describes any version-1 PSD, whatever its colour mode or depth; it does not decode
-pixels yet ([ROADMAP.md](ROADMAP.md), stage 4).
+The reader describes any version-1 PSD, whatever its colour mode or depth; it decodes layer
+pixels of 8-bit RGB files, and not yet the composite ([ROADMAP.md](ROADMAP.md), stage 4).
 
 | Type | What it is |
 |---|---|
@@ -119,6 +121,8 @@ pixels yet ([ROADMAP.md](ROADMAP.md), stage 4).
 | `minipsd_info` | what the file says about itself: size, depth, colour mode, dpi, ICC profile, layer count |
 | `minipsd_bytes` | a read-only view into the caller's buffer |
 | `minipsd_resource`, `minipsd_layer_view`, `minipsd_block` | an image resource, a layer record, an additional-information block, as views |
+| `minipsd_target`, `minipsd_plane` | where decoded samples go: per channel R, G, B, A a pointer, a pixel step and a row step; any layout |
+| `minipsd_decode_opts` | the rows to decode; `NULL` for all |
 
 **Defaults and field meanings**
 - A zero-initialised document selects RLE (`MINIPSD_RLE = 0`).
@@ -138,7 +142,7 @@ pixels yet ([ROADMAP.md](ROADMAP.md), stage 4).
 | `MINIPSD_ERR_ALLOC` | -4 | `MINIPSD_MALLOC` returned NULL |
 | `MINIPSD_ERR_OPEN` | -5 | not returned by minipsd; reserved for the caller's file code (`examples/write_file.c`) |
 | `MINIPSD_ERR_FORMAT` | -6 | reader: not a well-formed PSD |
-| `MINIPSD_ERR_UNSUPPORTED` | -7 | reader: a valid PSD outside what minipsd reads (a PSB, version 2) |
+| `MINIPSD_ERR_UNSUPPORTED` | -7 | reader: a valid PSD outside what minipsd reads: a PSB (version 2); for decoding, a file not 8-bit RGB or a ZIP-compressed channel |
 | `MINIPSD_ERR_SHORT` | -8 | reader: the buffer ends inside data the call needs; read more, `minipsd_reader_needed` says how much |
 | `MINIPSD_ERR_LIMIT` | -9 | reader: a side or the layer count is over `minipsd_limits` |
 
@@ -162,6 +166,7 @@ caller's memory:
 | `minipsd_reader` | inside its workspace; opaque | part of the workspace | as the workspace | the caller keeps only the pointer |
 | `minipsd_info`, `minipsd_resource`, `minipsd_layer_view`, `minipsd_block` | caller; filled by the reader | `sizeof` | their views point into the PSD: valid as the PSD | stack |
 | layer name, `utf8` of `minipsd_layer_name()` | caller | `needed` bytes, the NUL included | the call | stack, static or heap |
+| decoded pixels, the planes of `minipsd_target` | caller; written, never read | per plane, `width x rows` samples at its steps: the layer's rectangle and the band | the call | anywhere; the library writes those samples and nothing else |
 
 - **The document is read-only and frozen while in use.** The pull writer sizes everything in
   `minipsd_writer_init`; a document changed afterwards would no longer match the sizes already

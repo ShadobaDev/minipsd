@@ -10,8 +10,10 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   colour mode, dpi, ICC profile, layer count), from the whole file or a prefix
   (`MINIPSD_ERR_SHORT` with `minipsd_reader_needed`); `minipsd_reader_next_resource`,
   `minipsd_reader_next_layer`, `minipsd_layer_name` and `minipsd_layer_next_block` walk its
-  resources, layer records and their blocks as views, with no allocation and no copy. Pixels are
-  not decoded yet.
+  resources, layer records and their blocks as views, with no allocation and no copy.
+- `minipsd_decode_layer`: a layer's pixels, or a band of its rows, from an 8-bit RGB file (raw or
+  PackBits) into caller memory of any layout, described by `minipsd_target`
+  (`minipsd_target_rgba` for interleaved RGBA).
 - Return codes `MINIPSD_ERR_FORMAT`, `MINIPSD_ERR_UNSUPPORTED`, `MINIPSD_ERR_SHORT`,
   `MINIPSD_ERR_LIMIT`, and `minipsd_limits`.
 

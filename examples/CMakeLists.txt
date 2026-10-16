@@ -35,8 +35,8 @@ function(minipsd_add_example_test name exe)
                 -DSHA256=${_golden} ${ARGN} -P "${CMAKE_CURRENT_SOURCE_DIR}/run_example.cmake")
 endfunction()
 
-# No argument: the example's own file name, "szablon-" a-ogonek ".psd" in UTF-8.
-minipsd_add_example_test(write_file write_file -DNAME_HEX=737a61626c6f6e2dc4852e707364)
+# No argument: the example's own file name, "template-" a-ogonek ".psd" in UTF-8.
+minipsd_add_example_test(write_file write_file -DNAME_HEX=74656d706c6174652dc4852e707364)
 minipsd_add_example_test(write_memory write_memory -DARG=out.psd)
 if(UNIX)
     minipsd_add_example_test(write_nonblocking write_nonblocking -DARG=out.psd)

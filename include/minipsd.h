@@ -10,7 +10,8 @@
  * - Workspace
  * - Document
  * - Writer
- * - Reader (so far: the file's description, its resources and its layer records; no pixels yet)
+ * - Reader (so far: the file's description, its resources, its layer records and their pixels;
+ *   not yet the composite)
  *
  * \par Usage
  * In exactly one C or C++ file:
@@ -399,6 +400,9 @@ typedef struct minipsd_layer_view {
                                                  size 0: the layer has no such channel.  data NULL with
                                                  a size: the channel exists but the buffer ends before
                                                  it (a prefix of the file).                            */
+    uint64_t      channel_offset[4];        /*!< Where each channel's data starts in the file (0 for an
+                                                 absent one): a buffer holds the channel once it reaches
+                                                 channel_offset + size.                                */
     uint16_t      other_channels;           /*!< Channels the reader does not read (masks, ...).       */
 } minipsd_layer_view;
 
@@ -453,7 +457,8 @@ MINIPSDDEF int minipsd_reader_init(minipsd_reader **r, const void *data, size_t 
  *
  * Exact for the next step only: a section's length is read before the section, so the answer can
  * grow as more of the file arrives.  Read at least that many bytes (from the start of the file) and
- * repeat the call.
+ * repeat the call: minipsd_reader_init, then the iteration up to where it stopped.  For
+ * minipsd_decode_layer it is where the last channel the target asks for ends.
  *
  * \param r A reader, or the one minipsd_reader_init set before returning MINIPSD_ERR_SHORT.
  * \return The size in bytes; 0 when r is NULL.
@@ -514,6 +519,75 @@ MINIPSDDEF int minipsd_layer_name(const minipsd_layer_view *layer, char *utf8, s
  *         MINIPSD_ERR_FORMAT for a malformed block; MINIPSD_ERR_ARG for a NULL argument.
  */
 MINIPSDDEF int minipsd_layer_next_block(const minipsd_layer_view *layer, size_t *pos, minipsd_block *block);
+
+/**
+ * \brief Where one channel's samples go: the first sample, and the steps to the next one.
+ *
+ * The library cannot see the size of the memory behind data: it writes exactly the samples of the
+ * rows it decodes, at data + y * row_step + x * pixel_step, and nothing else.
+ */
+typedef struct minipsd_plane {
+    uint8_t  *data;       /*!< Sample (0, 0) of the channel; NULL: the channel is not written.      */
+    ptrdiff_t pixel_step; /*!< Bytes from a sample to its right neighbour: 4 for interleaved RGBA. */
+    ptrdiff_t row_step;   /*!< Bytes from a row to the next; negative for bottom-up rows.          */
+} minipsd_plane;
+
+/**
+ * \brief Where decoded pixels go: one plane per channel, by MINIPSD_CH_* (R, G, B, A).
+ *
+ * One shape for every layout: interleaved RGBA (minipsd_target_rgba), BGRA (swap two planes),
+ * planar, a sub-rectangle of a larger image (offset data), or only some channels (the rest NULL).
+ * Its row 0 receives the first decoded row.  Samples are 8-bit; straight, not premultiplied, alpha.
+ */
+typedef struct minipsd_target {
+    minipsd_plane channel[4]; /*!< R, G, B, A. */
+} minipsd_target;
+
+/**
+ * \brief Which rows to decode.  NULL options decode the whole image.
+ *
+ * Fields are only ever added at the end, and zero keeps the previous behaviour.
+ */
+typedef struct minipsd_decode_opts {
+    uint32_t y_first;    /*!< The first row, counted from the layer's top.                     */
+    uint32_t y_count;    /*!< How many rows; 0: from y_first to the end.                        */
+    int      keep_matte; /*!< Composite only (not available yet): keep the white matte.        */
+} minipsd_decode_opts;
+
+/**
+ * \brief Points a target at interleaved RGBA: four planes one byte apart, a pixel step of 4.
+ *
+ * \param t          The target to fill; nothing happens when it is NULL.
+ * \param rgba       The first pixel; NULL leaves every plane NULL.
+ * \param row_stride Bytes from a row to the next: width * 4 for a tight image.
+ */
+MINIPSDDEF void minipsd_target_rgba(minipsd_target *t, uint8_t *rgba, size_t row_stride);
+
+/**
+ * \brief Decodes a layer's pixels, or a band of its rows, into the target.
+ *
+ * The layer is decoded as stored: its rectangle's width (right - left) by the rows asked for,
+ * with its opacity and hidden flag left in the view, not applied.  A layer without a transparency
+ * channel decodes as opaque (255 in the A plane).  Everything that can fail before decoding is
+ * checked first, so after MINIPSD_ERR_ARG, MINIPSD_ERR_UNSUPPORTED or MINIPSD_ERR_SHORT the target
+ * is untouched; after MINIPSD_ERR_FORMAT found inside a row it holds the rows decoded so far.
+ * An empty layer, or a band of no rows, writes nothing.
+ *
+ * \param r      The reader the layer came from.
+ * \param layer  A record from minipsd_reader_next_layer of that reader.
+ * \param target Where the samples go; only its non-NULL planes are written.
+ * \param opts   The rows; NULL for all of them.
+ * \return MINIPSD_OK or an error code.
+ *
+ * \retval MINIPSD_ERR_ARG         r (never initialised), layer or target is NULL, or the band
+ *                                 lies outside the layer.
+ * \retval MINIPSD_ERR_UNSUPPORTED The file is not 8-bit RGB, or a channel is ZIP-compressed.
+ * \retval MINIPSD_ERR_SHORT       A channel the target asks for is not all in the buffer;
+ *                                 minipsd_reader_needed says how far it must reach.
+ * \retval MINIPSD_ERR_FORMAT      A channel the target asks for is missing or malformed.
+ */
+MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view *layer, const minipsd_target *target,
+                                    const minipsd_decode_opts *opts);
 
 #endif /* MINIPSD_H */
 

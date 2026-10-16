@@ -93,6 +93,30 @@ The code and tests are in (`include/`, `tests/`) but nothing builds them yet: `C
 - [ ] Listing in `awesome-c`.
 - [ ] Announcement (r/C_Programming, r/cpp "Show and tell").
 
+**SBOM for the single-file release** (**to do before the next release**: it changes what a release
+publishes, so it should not wait for a later one). The SBOM fragment from the CMake build describes
+the `include/` tree (eight files, `git+...` download location), not the `minipsd.h` a release
+attaches, so a consumer of the single file cannot merge it. Wanted:
+- [ ] Move the SBOM generator in `CMakeLists.txt` (the per-file loop and the template fill) into a
+      function in `cmake/`, taking the file list, the names to show and the download location, so
+      the tree and the single file share one template.
+- [ ] `tools/amalgamate.cmake` takes `-DSBOM=<file>` and writes `minipsd.h.spdx.json` next to
+      `minipsd.h`: one file entry (`./minipsd.h`, SHA-1 and SHA-256 of the output) and the
+      release asset URL as the download location. Project URL and description are read from
+      `project()` in `CMakeLists.txt`, as the version is read from the header. It honours
+      `SOURCE_DATE_EPOCH`.
+- [ ] The release workflow passes `-DSBOM=dist/minipsd.h.spdx.json`, publishes the file as a raw
+      asset beside `minipsd.h` and `minipsd.h.sha256`, and adds it to the provenance attestation
+      (`subject-path`). `minipsd.h.sha256` may list both files (`sha256sum -c` reads it); no
+      separate hash per artefact.
+- [ ] A test in `minipsd-tests-amalgamated`: the SBOM parses, and its SHA-256 for `minipsd.h`
+      equals the file's.
+- [ ] [GITHUB-RELEASE.md](GITHUB-RELEASE.md): the new asset, and the consumer's check (the SBOM's
+      hash equals the hash pinned for `minipsd.h`).
+- Not wanted: tarballs of our own. Consumers that pin a tag can keep fetching it; a source archive
+  attached to the release, or *immutable releases* in the repository settings, remain options if
+  the tag archive's checksum ever proves unstable.
+
 ---
 
 ## PATCH — additions

@@ -135,8 +135,8 @@ The whole program, an `O_NONBLOCK` pipe driven by `poll` with its reading end in
 
 ## Reading
 
-*So far the reader describes a file; decoding pixels comes next* ([ROADMAP.md](ROADMAP.md),
-stage 4). It works on bytes you already hold, never copies them, and allocates nothing: its
+*So far the reader describes a file and decodes layer pixels; the composite comes next*
+([ROADMAP.md](ROADMAP.md), stage 4). It works on bytes you already hold, never copies them, and allocates nothing: its
 workspace has a fixed size, so it can live on the stack.
 
 ```c
@@ -162,6 +162,26 @@ count only. Given less, it returns `MINIPSD_ERR_SHORT`, and `minipsd_reader_need
 long the buffer must be for the next step; read that much and call `init` again. Layer names need
 the whole records section; a layer whose pixel data is not in the buffer yet still comes back,
 with that channel's view `data == NULL`.
+
+**Pixels go where you say.** A layer decodes into a `minipsd_target`: for each of R, G, B and
+A a pointer, a pixel step and a row step, so interleaved RGBA, BGRA, planar, bottom-up or a spot
+inside a larger canvas are all the same call. A `NULL` plane is not written. The size comes from
+the layer's rectangle; the library writes exactly those samples:
+
+```c
+uint32_t       w = (uint32_t)(layer.right - layer.left), h = (uint32_t)(layer.bottom - layer.top);
+uint8_t       *rgba = malloc((size_t)w * h * 4);
+minipsd_target t;
+
+minipsd_target_rgba(&t, rgba, (size_t)w * 4);
+rc = minipsd_decode_layer(r, &layer, &t, NULL);   /* NULL: every row */
+```
+
+Pixels come as stored: straight alpha, the layer's opacity and visibility left in the view. A
+`minipsd_decode_opts` with `y_first` and `y_count` decodes a band of rows into the target's first
+row, so a huge layer can go through a small buffer in strips. Only 8-bit RGB files decode
+(`MINIPSD_ERR_UNSUPPORTED` otherwise); if the layer's pixel data is not in the buffer yet, the
+call says `MINIPSD_ERR_SHORT` and `minipsd_reader_needed` how far to read.
 
 **Untrusted files.** Every length is checked; a malformed file is `MINIPSD_ERR_FORMAT`. Pass a
 `minipsd_limits` to refuse large sides or many layers early (`MINIPSD_ERR_LIMIT`).

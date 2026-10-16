@@ -155,7 +155,7 @@ Additive. See [Reader](CODE-ARCH.md#reader).
       - records, channel views, both names;
       - unknown additional-info blocks as raw views (`R10`).
       Serves `R6`.
-- [ ] **S4.4** `minipsd_decode_layer` into the target descriptor. Serves `R5`, `R6`.
+- [x] **S4.4** `minipsd_decode_layer` into the target descriptor. Serves `R5`, `R6`.
 - [ ] **S4.5** `minipsd_decode_composite` with un-matting, whole image or a range of rows. Serves
       `R3`, `R4`.
 - [ ] **S4.6** Limits (`R8`, `X4`), checked before any decoding.

@@ -229,9 +229,9 @@ int minipsd_reader_next_layer   (minipsd_reader *r, minipsd_layer_view *layer); 
 int minipsd_layer_name          (const minipsd_layer_view *layer, char *utf8, size_t cap, size_t *needed);
 int minipsd_layer_next_block    (const minipsd_layer_view *layer, size_t *pos, minipsd_block *block);  /* MORE / OK */
 
-int minipsd_decode_layer    (const minipsd_reader *r, const minipsd_layer_view *layer,
+int minipsd_decode_layer    (minipsd_reader *r, const minipsd_layer_view *layer,      /* r: for needed */
                              const minipsd_target *target, const minipsd_decode_opts *opts);
-int minipsd_decode_composite(const minipsd_reader *r,
+int minipsd_decode_composite(minipsd_reader *r,
                              const minipsd_target *target, const minipsd_decode_opts *opts);
 
 void minipsd_target_rgba(minipsd_target *t, uint8_t *rgba, size_t row_stride);  /* the common case */
@@ -261,6 +261,8 @@ workspace). Every pointer below is a borrowed view into the blob or the caller's
   - the colour channels R, G, B and A (`MINIPSD_CH_*`), each as a `minipsd_bytes` view of its
     stored data, compression marker first. `size == 0`: the layer has no such channel. `data ==
     NULL` with a size: the channel exists but the buffer ends before it, as in a prefix;
+    `channel_offset` says where in the file each one starts, so a caller reading in parts knows
+    how far to read for a layer;
   - `other_channels`, the number of channels not read (masks, extra channels), so a caller knows
     something was left out; they become views when layer masks land;
   - the record's additional-info region as one `minipsd_bytes` view, walked with
@@ -381,7 +383,9 @@ while ((rc = minipsd_reader_init(&r, buf, have, ws, ws_size, NULL, &info)) == MI
 - `next_layer` works on the same terms. Its first call walks every record once to find where the
   channel data begins, so it needs the whole records section, names included, and says `SHORT`
   until it has it. After that a layer is returned even when its channel data is not in the buffer
-  yet: that channel's view says so (see above), and `decode_*` answers `SHORT` for it.
+  yet: that channel's view says so (see above), and `decode_*` answers `SHORT` for it, with
+  `needed` at the end of the last channel the target asks for. A decode therefore takes a
+  non-`const` reader: the reader is where `needed` is kept.
 - **A longer prefix means calling `init` again** on the same workspace; layer iteration then
   starts from the first layer. Every earlier view is valid only if the buffer did not move.
 

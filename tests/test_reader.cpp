@@ -1,6 +1,7 @@
 /**
  * \file
- * \brief Tests for minipsd/reader.h: the file's description, its resources and its layer records.
+ * \brief Tests for minipsd/reader.h: the file's description, its resources, its layer records and
+ *        their pixels.
  *        Files come from the writer, and from the small PSD builder below, which also makes the
  *        malformed ones and the ones the writer never writes (other colour modes, masks, other
  *        channels, other blocks).
@@ -17,6 +18,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <tuple>
+#include <utility>
 
 namespace {
 
@@ -92,10 +95,10 @@ struct Rec {
     int channelCount = -1;              // the declared number of channels; -1: channels.size()
 };
 
-Chan chan(int id, std::size_t length, unsigned fill)   // a marker 0 (raw) and `fill` bytes
+Chan chan(int id, std::size_t length, unsigned fill)   // the two-byte marker 0 (raw), then `fill` bytes
 {
     Chan c{id, Bytes(length, static_cast<std::uint8_t>(fill))};
-    c.data[0] = 0;
+    c.data[0] = c.data[1] = 0;
     return c;
 }
 
@@ -643,11 +646,11 @@ TEST(MinipsdReaderTest, ChannelsAreFoundByIdWhateverTheirOrderAndOthersAreCounte
 {
     Rec a;
     a.right = 2; a.bottom = 1;
-    a.channels = {chan(2, 3, 0x0B), chan(-2, 5, 0x0D), chan(-1, 4, 0x0A), chan(0, 3, 0x0E), chan(-2, 2, 0x0F), chan(1, 6, 0x0C),
-                  chan(3, 2, 0x10)};
+    a.channels = {chan(2, 3, 0x0B), chan(-2, 5, 0x0D), chan(-1, 4, 0x0A), chan(0, 3, 0x0E), chan(-2, 3, 0x0F), chan(1, 6, 0x0C),
+                  chan(3, 3, 0x10)};
     Rec b;
     b.right = 1; b.bottom = 1;
-    b.channels = {chan(0, 2, 0x21), chan(1, 2, 0x22), chan(2, 2, 0x23)};   // no transparency
+    b.channels = {chan(0, 3, 0x21), chan(1, 3, 0x22), chan(2, 3, 0x23)};   // no transparency
     Spec s;
     s.layers = {a, b};
     const Built f = build(s);
@@ -661,13 +664,13 @@ TEST(MinipsdReaderTest, ChannelsAreFoundByIdWhateverTheirOrderAndOthersAreCounte
     for (int k = 0; k < 4; ++k) {
         ASSERT_EQ(va.channel[k].size, size[k]) << k;
         ASSERT_NE(va.channel[k].data, nullptr);
-        EXPECT_EQ(va.channel[k].data[1], fill[k]) << k;
+        EXPECT_EQ(va.channel[k].data[2], fill[k]) << k;
     }
     const minipsd_layer_view vb = nextLayer(o.r);
     EXPECT_EQ(vb.other_channels, 0);
     for (int k = 0; k < 3; ++k) {   // the first layer's masks were stepped over
-        ASSERT_EQ(vb.channel[k].size, 2u);
-        EXPECT_EQ(vb.channel[k].data[1], 0x21u + static_cast<unsigned>(k)) << k;
+        ASSERT_EQ(vb.channel[k].size, 3u);
+        EXPECT_EQ(vb.channel[k].data[2], 0x21u + static_cast<unsigned>(k)) << k;
     }
     EXPECT_EQ(vb.channel[MINIPSD_CH_A].size, 0u);
     EXPECT_EQ(vb.channel[MINIPSD_CH_A].data, nullptr) << "a layer without transparency";
@@ -874,9 +877,11 @@ TEST(MinipsdReaderTest, RecordsNeedTheirBytesAndChannelDataMayBeMissing)
     Open head(f.bytes, f.recordsEnd);
     ASSERT_EQ(head.rc, MINIPSD_OK);
     const minipsd_layer_view none = nextLayer(head.r);
+    const int place[4] = {1, 2, 3, 0};   // where each of R, G, B, A comes in the file: A, R, G, B
     for (int k = 0; k < 4; ++k) {
         EXPECT_EQ(none.channel[k].size, 6u) << k;
         EXPECT_EQ(none.channel[k].data, nullptr) << k;
+        EXPECT_EQ(none.channel_offset[k], f.recordsEnd + 6 * static_cast<std::size_t>(place[k])) << "where to read up to: " << k;
     }
     EXPECT_EQ(nameOf(none), "L");
 
@@ -916,4 +921,289 @@ TEST(MinipsdReaderTest, ACallOnAReaderThatNeverStartedIsRefused)
     EXPECT_EQ(minipsd_reader_next_layer(ok.r, nullptr), MINIPSD_ERR_ARG);
     EXPECT_EQ(minipsd_reader_next_resource(nullptr, &res), MINIPSD_ERR_ARG);
     EXPECT_EQ(minipsd_reader_next_resource(ok.r, nullptr), MINIPSD_ERR_ARG);
+}
+
+// ---------------------------------------------------------------------------------------------------
+// decode_layer: pixels into the caller's planes
+// ---------------------------------------------------------------------------------------------------
+
+namespace {
+
+// A PackBits channel: the marker 1, the rows' byte counts, the rows.
+Chan rleChan(int id, const std::vector<Bytes> &rows)
+{
+    Out o;
+    o.u16(1);
+    for (const Bytes &row : rows) o.u16(static_cast<unsigned>(row.size()));
+    for (const Bytes &row : rows) o.raw(row);
+    return Chan{id, o.b};
+}
+
+// Decodes rows [y0, y0 + count) of a layer into tight RGBA, w pixels wide, over a buffer of `fill`.
+int decodeRgba(minipsd_reader *r, const minipsd_layer_view &v, std::uint32_t w, Bytes &out,
+               std::uint32_t y0 = 0, std::uint32_t count = 0)
+{
+    minipsd_target t;
+    minipsd_target_rgba(&t, out.data(), std::size_t(w) * 4);
+    const minipsd_decode_opts opts{y0, count, 0};
+    return minipsd_decode_layer(r, &v, &t, &opts);
+}
+
+Bytes rowsOf(const Bytes &px, std::uint32_t w, std::uint32_t y0, std::uint32_t count)
+{
+    return Bytes(px.begin() + std::ptrdiff_t(y0) * w * 4, px.begin() + std::ptrdiff_t(y0 + count) * w * 4);
+}
+
+// A one-layer file around a record, opened; the layer is in `v`.
+struct OneLayer {
+    Open               o;
+    minipsd_layer_view v{};
+    explicit OneLayer(const Rec &r, unsigned depth = 8, unsigned mode = 3) : o(fileOf(r, depth, mode))
+    {
+        EXPECT_EQ(o.rc, MINIPSD_OK);
+        EXPECT_EQ(minipsd_reader_next_layer(o.r, &v), MINIPSD_MORE);
+    }
+    static Bytes fileOf(const Rec &r, unsigned depth, unsigned mode)
+    {
+        Spec s;
+        s.layers = {r};
+        s.count = -1;
+        s.depth = depth;
+        s.mode = mode;
+        return build(s).bytes;
+    }
+    int decode(Bytes &out) { return decodeRgba(o.r, v, static_cast<std::uint32_t>(v.right - v.left), out); }
+};
+
+} // namespace
+
+TEST(MinipsdReaderTest, TheWritersLayersDecodeBackToTheirPixels)
+{
+    const Bytes wide = testImage(300, 4);   // runs and literals longer than a PackBits packet
+    const Bytes small = testImage(37, 5);
+    for (int compression : {MINIPSD_RLE, MINIPSD_RAW}) {
+        SCOPED_TRACE(compression);
+        for (const auto &[px, w, h] : {std::tuple{&wide, 300u, 4u}, std::tuple{&small, 37u, 5u}}) {
+            const minipsd_layer layers[2] = {{"Pixels", px->data(), 200, 1}, {"Empty", nullptr, 255, 0}};
+            minipsd_doc d = docOf(w, h, layers, 2);
+            d.compression = compression;
+            Open o(write(d));
+            ASSERT_EQ(o.rc, MINIPSD_OK);
+
+            const minipsd_layer_view a = nextLayer(o.r);
+            Bytes out(px->size(), 0xEE);
+            ASSERT_EQ(decodeRgba(o.r, a, w, out), MINIPSD_OK);
+            EXPECT_EQ(out, *px) << "as stored: opacity and visibility are not applied";
+
+            const minipsd_layer_view e = nextLayer(o.r);
+            Bytes untouched(16, 0xEE);
+            EXPECT_EQ(decodeRgba(o.r, e, w, untouched), MINIPSD_OK) << "an empty layer";
+            EXPECT_EQ(untouched, Bytes(16, 0xEE)) << "writes nothing";
+        }
+    }
+}
+
+TEST(MinipsdReaderTest, ABandOfRowsLandsInTheTargetsFirstRow)
+{
+    const std::uint32_t w = 37, h = 5;
+    const Bytes px = testImage(w, h);
+    const minipsd_layer layer{"L", px.data(), 255, 0};
+    for (int compression : {MINIPSD_RLE, MINIPSD_RAW}) {
+        SCOPED_TRACE(compression);
+        minipsd_doc d = docOf(w, h, &layer, 1);
+        d.compression = compression;
+        Open o(write(d));
+        const minipsd_layer_view v = nextLayer(o.r);
+
+        const std::pair<std::uint32_t, std::uint32_t> bands[] = {{0, 1}, {2, 2}, {4, 1}, {1, 0}, {0, 0}};
+        for (const auto &[y0, count] : bands) {
+            const std::uint32_t rows = count ? count : h - y0;
+            Bytes out(std::size_t(w) * 4 * rows + 8, 0xEE);
+            ASSERT_EQ(decodeRgba(o.r, v, w, out, y0, count), MINIPSD_OK) << y0 << "+" << count;
+            EXPECT_EQ(Bytes(out.begin(), out.end() - 8), rowsOf(px, w, y0, rows)) << y0 << "+" << count;
+            EXPECT_EQ(Bytes(out.end() - 8, out.end()), Bytes(8, 0xEE)) << "nothing past the band";
+        }
+
+        Bytes out(px.size(), 0xEE);
+        EXPECT_EQ(decodeRgba(o.r, v, w, out, 5, 0), MINIPSD_OK) << "the empty band at the end";
+        EXPECT_EQ(decodeRgba(o.r, v, w, out, 6, 0), MINIPSD_ERR_ARG) << "a band below the layer";
+        EXPECT_EQ(decodeRgba(o.r, v, w, out, 5, 1), MINIPSD_ERR_ARG);
+        EXPECT_EQ(decodeRgba(o.r, v, w, out, 3, 3), MINIPSD_ERR_ARG) << "a band running past the end";
+        EXPECT_EQ(out, Bytes(px.size(), 0xEE)) << "untouched by every refusal";
+    }
+}
+
+TEST(MinipsdReaderTest, TheTargetDescribesAnyLayout)
+{
+    const std::uint32_t w = 6, h = 3;
+    const Bytes px = testImage(w, h);
+    const minipsd_layer layer{"L", px.data(), 255, 0};
+    Open o(write(docOf(w, h, &layer, 1)));
+    const minipsd_layer_view v = nextLayer(o.r);
+    auto at = [&](std::uint32_t x, std::uint32_t y, int k) { return px[(std::size_t(y) * w + x) * 4 + std::size_t(k)]; };
+
+    // BGRA: two planes swapped.
+    Bytes bgra(px.size());
+    minipsd_target t;
+    minipsd_target_rgba(&t, bgra.data(), std::size_t(w) * 4);
+    std::swap(t.channel[MINIPSD_CH_R].data, t.channel[MINIPSD_CH_B].data);
+    ASSERT_EQ(minipsd_decode_layer(o.r, &v, &t, nullptr), MINIPSD_OK);
+    for (std::uint32_t i = 0; i < w * h; ++i) {
+        EXPECT_EQ(bgra[i * 4 + 0], px[i * 4 + 2]);
+        EXPECT_EQ(bgra[i * 4 + 2], px[i * 4 + 0]);
+    }
+
+    // Planar and bottom-up: four buffers, each starting at its last row.
+    std::vector<Bytes> planes(4, Bytes(std::size_t(w) * h));
+    for (int k = 0; k < 4; ++k)
+        t.channel[k] = minipsd_plane{planes[k].data() + std::size_t(w) * (h - 1), 1, -static_cast<std::ptrdiff_t>(w)};
+    ASSERT_EQ(minipsd_decode_layer(o.r, &v, &t, nullptr), MINIPSD_OK);
+    for (int k = 0; k < 4; ++k)
+        for (std::uint32_t y = 0; y < h; ++y)
+            for (std::uint32_t x = 0; x < w; ++x)
+                ASSERT_EQ(planes[k][std::size_t(h - 1 - y) * w + x], at(x, y, k)) << k << " " << x << "," << y;
+
+    // Inside a larger canvas, at (2, 1), and the alpha only: nothing else is written.
+    const std::uint32_t cw = 10, ch = 5;
+    Bytes canvas(std::size_t(cw) * ch * 4, 0xEE);
+    minipsd_target_rgba(&t, canvas.data() + (std::size_t(1) * cw + 2) * 4, std::size_t(cw) * 4);
+    t.channel[MINIPSD_CH_R].data = t.channel[MINIPSD_CH_G].data = t.channel[MINIPSD_CH_B].data = nullptr;
+    ASSERT_EQ(minipsd_decode_layer(o.r, &v, &t, nullptr), MINIPSD_OK);
+    for (std::uint32_t y = 0; y < ch; ++y)
+        for (std::uint32_t x = 0; x < cw; ++x)
+            for (int k = 0; k < 4; ++k) {
+                const bool alphaInside = k == 3 && x >= 2 && x < 2 + w && y >= 1 && y < 1 + h;
+                ASSERT_EQ(canvas[(std::size_t(y) * cw + x) * 4 + std::size_t(k)], alphaInside ? at(x - 2, y - 1, 3) : 0xEE)
+                    << x << "," << y << " " << k;
+            }
+
+    minipsd_target_rgba(&t, nullptr, 0);
+    for (const minipsd_plane &p : t.channel) EXPECT_EQ(p.data, nullptr) << "no buffer: no planes";
+    EXPECT_EQ(minipsd_decode_layer(o.r, &v, &t, nullptr), MINIPSD_OK) << "nothing asked, nothing written";
+    minipsd_target_rgba(nullptr, canvas.data(), 4);   // no target: nothing to fill, no crash
+}
+
+TEST(MinipsdReaderTest, ALayerWithoutTransparencyDecodesAsOpaque)
+{
+    Rec r;
+    r.right = 2; r.bottom = 1;
+    r.channels = {chan(0, 4, 10), chan(1, 4, 20), chan(2, 4, 30)};
+    OneLayer l(r);
+    Bytes out(8, 0);
+    ASSERT_EQ(l.decode(out), MINIPSD_OK);
+    EXPECT_EQ(out, (Bytes{10, 20, 30, 255, 10, 20, 30, 255}));
+}
+
+TEST(MinipsdReaderTest, PackBitsRowsMayCarryNoOpsAndPadding)
+{
+    Rec r;
+    r.right = 4; r.bottom = 2;
+    // Row 0: a no-op (128), a repeat of 3, a literal; row 1: one repeat of 4, then a padding byte.
+    r.channels = {rleChan(0, {{0x80, 0xFE, 7, 0x00, 9}, {0xFD, 5, 0x00}}), chan(1, 10, 1), chan(2, 10, 2), chan(-1, 10, 3)};
+    OneLayer l(r);
+    Bytes out(std::size_t(4) * 2 * 4, 0);
+    ASSERT_EQ(l.decode(out), MINIPSD_OK);
+    const Bytes red = {7, 7, 7, 9, 5, 5, 5, 5};
+    for (std::size_t i = 0; i < 8; ++i) EXPECT_EQ(out[i * 4], red[i]) << i;
+}
+
+TEST(MinipsdReaderTest, OnlyEightBitRgbAndUncompressedOrPackBitsDecode)
+{
+    Bytes out(16, 0xEE);
+    for (const auto &[depth, mode] : {std::pair{16u, 3u}, std::pair{1u, 3u}, std::pair{8u, 4u}, std::pair{8u, 1u}}) {
+        OneLayer l(simpleRec(), depth, mode);
+        EXPECT_EQ(l.decode(out), MINIPSD_ERR_UNSUPPORTED) << depth << " bits, mode " << mode;
+    }
+    for (unsigned zip : {2u, 3u}) {
+        Rec r = simpleRec();
+        r.channels[1].data[1] = static_cast<std::uint8_t>(zip);   // red, ZIP
+        OneLayer l(r);
+        EXPECT_EQ(l.decode(out), MINIPSD_ERR_UNSUPPORTED) << zip;
+    }
+    EXPECT_EQ(out, Bytes(16, 0xEE)) << "untouched";
+}
+
+TEST(MinipsdReaderTest, MalformedChannelsAreRefused)
+{
+    auto withRed = [](const Chan &red) {
+        Rec r = simpleRec();   // 2 x 2
+        r.channels[1] = red;
+        OneLayer l(r);
+        Bytes out(16, 0xEE);
+        return l.decode(out);
+    };
+    EXPECT_EQ(withRed(chan(0, 6, 2)), MINIPSD_OK) << "the baseline";
+    EXPECT_EQ(withRed(chan(0, 5, 2)), MINIPSD_ERR_FORMAT) << "raw, a byte short";
+    EXPECT_EQ(withRed(chan(0, 2, 2)), MINIPSD_ERR_FORMAT) << "raw, the marker only";
+    Chan unknown = chan(0, 6, 2);
+    unknown.data[1] = 4;
+    EXPECT_EQ(withRed(unknown), MINIPSD_ERR_FORMAT) << "an unknown compression";
+    EXPECT_EQ(withRed(Chan{0, {0, 1, 0}}), MINIPSD_ERR_FORMAT) << "RLE, the row counts cut short";
+    EXPECT_EQ(withRed(Chan{0, {0, 1, 0, 9, 0, 2, 0xFF, 1, 0xFF, 1}}), MINIPSD_ERR_FORMAT) << "RLE, rows longer than the data";
+    EXPECT_EQ(withRed(rleChan(0, {{0xFF, 1}, {0xFF, 1}})), MINIPSD_OK) << "RLE baseline";
+    EXPECT_EQ(withRed(rleChan(0, {{0xFF, 1}, {0x00, 1}})), MINIPSD_ERR_FORMAT) << "a row one sample short";
+    EXPECT_EQ(withRed(rleChan(0, {{0xFF, 1}, {}})), MINIPSD_ERR_FORMAT) << "an empty row";
+    EXPECT_EQ(withRed(rleChan(0, {{0xFF, 1}, {0x02, 1, 2, 3}})), MINIPSD_ERR_FORMAT) << "literals past the width";
+    EXPECT_EQ(withRed(rleChan(0, {{0xFF, 1}, {0xFE, 1}})), MINIPSD_ERR_FORMAT) << "a repeat past the width";
+    EXPECT_EQ(withRed(rleChan(0, {{0xFF, 1}, {0x01, 1}})), MINIPSD_ERR_FORMAT) << "literals past the row";
+    EXPECT_EQ(withRed(rleChan(0, {{0xFF, 1}, {0xFF}})), MINIPSD_ERR_FORMAT) << "a repeat without its byte";
+
+    // A missing colour channel is malformed only when the target asks for it.
+    Rec r = simpleRec();
+    r.channels.pop_back();   // no blue
+    OneLayer l(r);
+    Bytes out(16, 0xEE);
+    EXPECT_EQ(l.decode(out), MINIPSD_ERR_FORMAT);
+    EXPECT_EQ(out, Bytes(16, 0xEE)) << "untouched";
+    minipsd_target t;
+    minipsd_target_rgba(&t, out.data(), 8);
+    t.channel[MINIPSD_CH_B].data = nullptr;
+    EXPECT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, nullptr), MINIPSD_OK);
+}
+
+TEST(MinipsdReaderTest, ChannelDataNotYetReadAsksForMore)
+{
+    Spec s;
+    s.layers = {simpleRec()};
+    s.count = -1;
+    const Built f = build(s);   // the channels follow the record: A, R, G, B, six bytes each
+
+    Open head(f.bytes, f.recordsEnd);
+    const minipsd_layer_view v = nextLayer(head.r);
+    Bytes out(16, 0xEE);
+    EXPECT_EQ(decodeRgba(head.r, v, 2, out), MINIPSD_ERR_SHORT);
+    EXPECT_EQ(minipsd_reader_needed(head.r), f.recordsEnd + 24) << "up to the last channel asked for";
+    EXPECT_EQ(out, Bytes(16, 0xEE)) << "untouched";
+
+    // Only the channels the target asks for count: A and R are the first two.
+    Open part(f.bytes, f.recordsEnd + 12);
+    const minipsd_layer_view p = nextLayer(part.r);
+    minipsd_target t;
+    minipsd_target_rgba(&t, out.data(), 8);
+    t.channel[MINIPSD_CH_G].data = nullptr;
+    EXPECT_EQ(minipsd_decode_layer(part.r, &p, &t, nullptr), MINIPSD_ERR_SHORT);
+    EXPECT_EQ(minipsd_reader_needed(part.r), f.recordsEnd + 24) << "blue ends last";
+    t.channel[MINIPSD_CH_B].data = nullptr;
+    EXPECT_EQ(minipsd_decode_layer(part.r, &p, &t, nullptr), MINIPSD_OK);
+    EXPECT_EQ(out, (Bytes{2, 0xEE, 0xEE, 1, 2, 0xEE, 0xEE, 1, 2, 0xEE, 0xEE, 1, 2, 0xEE, 0xEE, 1}));
+}
+
+TEST(MinipsdReaderTest, DecodeChecksItsArguments)
+{
+    Spec s;
+    s.layers = {simpleRec()};
+    s.count = -1;
+    const Built f = build(s);
+    Open o(f.bytes);
+    const minipsd_layer_view v = nextLayer(o.r);
+    Bytes out(16);
+    minipsd_target t;
+    minipsd_target_rgba(&t, out.data(), 8);
+    EXPECT_EQ(minipsd_decode_layer(o.r, &v, &t, nullptr), MINIPSD_OK);
+    EXPECT_EQ(minipsd_decode_layer(nullptr, &v, &t, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_decode_layer(o.r, nullptr, &t, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_decode_layer(o.r, &v, nullptr, nullptr), MINIPSD_ERR_ARG);
+    Open cut(f.bytes, 10);
+    ASSERT_EQ(cut.rc, MINIPSD_ERR_SHORT);
+    EXPECT_EQ(minipsd_decode_layer(cut.r, &v, &t, nullptr), MINIPSD_ERR_ARG) << "a reader that never started";
 }

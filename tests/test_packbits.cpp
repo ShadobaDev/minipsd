@@ -59,3 +59,27 @@ TEST(MinipsdPackbitsTest, ShortRowsEncode)
         EXPECT_EQ(unpackAll(pack(row.data(), w, 1), w), row) << "width " << w;
     }
 }
+
+TEST(MinipsdPackbitsTest, TheDecoderUndoesTheEncoderIntoAStridedTarget)
+{
+    const std::size_t w = 300;
+    Bytes px(w * 4);
+    for (std::size_t x = 0; x < w; ++x) {
+        px[x * 4 + 0] = 7;
+        px[x * 4 + 1] = static_cast<std::uint8_t>(x);
+        px[x * 4 + 2] = static_cast<std::uint8_t>(x / 2);
+        px[x * 4 + 3] = static_cast<std::uint8_t>(x < 200 ? 255 : x);
+    }
+    Bytes back(w * 4, 0xEE);
+    for (int k = 0; k < 4; ++k) {   // each channel back into its place in interleaved RGBA
+        const Bytes packed = pack(px.data() + k, w, 4);
+        ASSERT_EQ(mpsd__unpackbits(packed.data(), packed.size(), back.data() + k, 4, static_cast<std::uint32_t>(w)), 1) << k;
+    }
+    EXPECT_EQ(back, px);
+
+    const Bytes noop = {0x80, 0x00, 9};   // 128 is no packet at all
+    std::uint8_t one = 0;
+    EXPECT_EQ(mpsd__unpackbits(noop.data(), noop.size(), &one, 1, 1), 1);
+    EXPECT_EQ(one, 9);
+    EXPECT_EQ(mpsd__unpackbits(noop.data(), 2, &one, 1, 1), 0) << "the row ends inside a packet";
+}
