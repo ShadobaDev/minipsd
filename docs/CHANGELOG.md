@@ -17,7 +17,8 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
 - `minipsd_decode_composite`: the merged image, or a band of its rows, un-matted to straight
   alpha (or as stored, with `keep_matte`).
 - Return codes `MINIPSD_ERR_FORMAT`, `MINIPSD_ERR_UNSUPPORTED`, `MINIPSD_ERR_SHORT`,
-  `MINIPSD_ERR_LIMIT`, and `minipsd_limits`.
+  `MINIPSD_ERR_LIMIT`, and `minipsd_limits` for untrusted files: the largest side (canvas, and
+  layers when set), the most layers, the most bytes one decode call writes.
 
 ## [0.2.0] — 2026-10-15
 

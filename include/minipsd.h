@@ -128,7 +128,7 @@ enum {
                                        PSB; pixels other than 8-bit RGB once decoding lands).     */
     MINIPSD_ERR_SHORT   = -8, /*!< Reader: the buffer ends inside data the call needs; the
                                    file may be fine.  minipsd_reader_needed says how much more.  */
-    MINIPSD_ERR_LIMIT   = -9  /*!< Reader: a value is over a limit the caller set.             */
+    MINIPSD_ERR_LIMIT   = -9  /*!< Reader: a value is over a limit (minipsd_limits).           */
 };
 
 /**
@@ -334,8 +334,12 @@ typedef struct minipsd_bytes {
  * Fields are only ever added at the end, and zero keeps the previous behaviour.
  */
 typedef struct minipsd_limits {
-    uint32_t max_side;   /*!< Largest width or height; 0 is MINIPSD_MAX_SIDE.  */
-    uint32_t max_layers; /*!< Most layers in a file; 0 is 32767, the format's cap. */
+    uint32_t max_side;          /*!< Largest width or height of the canvas, checked by init, and of
+                                     a layer, checked by next_layer; 0 is MINIPSD_MAX_SIDE for the
+                                     canvas and no limit for layers, which may reach past it.     */
+    uint32_t max_layers;        /*!< Most layers in a file; 0 is 32767, the format's cap.          */
+    uint64_t max_decoded_bytes; /*!< Most bytes one decode call may write, width * rows * planes;
+                                     0 is no limit.                                              */
 } minipsd_limits;
 
 /**
@@ -489,6 +493,8 @@ MINIPSDDEF int minipsd_reader_next_resource(minipsd_reader *r, minipsd_resource 
  * \retval MINIPSD_ERR_ARG    r (never initialised) or layer is NULL.
  * \retval MINIPSD_ERR_SHORT  The buffer ends inside the records; the reader stays where it was.
  * \retval MINIPSD_ERR_FORMAT The records are malformed.
+ * \retval MINIPSD_ERR_LIMIT  The layer is wider or taller than the max_side the caller set; the
+ *                           reader stays where it was.
  */
 MINIPSDDEF int minipsd_reader_next_layer(minipsd_reader *r, minipsd_layer_view *layer);
 
@@ -580,6 +586,7 @@ MINIPSDDEF void minipsd_target_rgba(minipsd_target *t, uint8_t *rgba, size_t row
  *
  * \retval MINIPSD_ERR_ARG         r (never initialised), layer or target is NULL, or the band
  *                                 lies outside the layer.
+ * \retval MINIPSD_ERR_LIMIT       The call would write more than max_decoded_bytes.
  * \retval MINIPSD_ERR_UNSUPPORTED The file is not 8-bit RGB, or a channel is ZIP-compressed.
  * \retval MINIPSD_ERR_SHORT       A channel the target asks for is not all in the buffer;
  *                                 minipsd_reader_needed says how far it must reach.
@@ -606,6 +613,7 @@ MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view 
  *
  * \retval MINIPSD_ERR_ARG         r (never initialised) or target is NULL, the band lies outside
  *                                 the image, or the matte is to be undone with no A plane.
+ * \retval MINIPSD_ERR_LIMIT       The call would write more than max_decoded_bytes.
  * \retval MINIPSD_ERR_UNSUPPORTED The file is not 8-bit RGB, or the image is ZIP-compressed.
  * \retval MINIPSD_ERR_SHORT       The rows of a channel the target asks for are not all in the
  *                                 buffer; minipsd_reader_needed says how far it must reach.

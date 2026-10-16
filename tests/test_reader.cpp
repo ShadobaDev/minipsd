@@ -393,6 +393,49 @@ TEST(MinipsdReaderTest, LimitsAreCheckedWhereTheQuantityIsFirstKnown)
     EXPECT_EQ(Open(file, SIZE_MAX, &lim).rc, MINIPSD_OK);
 }
 
+TEST(MinipsdReaderTest, ALayerOverTheCallersSideLimitIsRefusedByNextLayer)
+{
+    Rec wide;   // past the canvas, and past the format's own side: a layer may reach out that far
+    wide.left = -20000; wide.right = 20000; wide.bottom = 1;
+    wide.channels = {chan(0, 2, 0)};
+    Rec tall = wide;
+    tall.left = 0; tall.right = 1; tall.bottom = 50;
+    Spec s;
+    s.layers = {simpleRec(), wide, tall};
+    s.count = -3;
+    const Bytes file = build(s).bytes;
+
+    Open unlimited(file);
+    nextLayer(unlimited.r);
+    EXPECT_EQ(nextLayer(unlimited.r).right, 20000) << "no limit set: no limit on layers";
+    nextLayer(unlimited.r);
+
+    minipsd_limits lim{};
+    lim.max_side = 40000;
+    Open fits(file, SIZE_MAX, &lim);
+    nextLayer(fits.r);
+    nextLayer(fits.r);
+    nextLayer(fits.r);
+
+    lim.max_side = 39999;
+    Open over(file, SIZE_MAX, &lim);
+    ASSERT_EQ(over.rc, MINIPSD_OK) << "the canvas is 2 x 2";
+    nextLayer(over.r);
+    nextLayer(over.r, MINIPSD_ERR_LIMIT);
+    nextLayer(over.r, MINIPSD_ERR_LIMIT);   // and it stays there
+
+    Spec t;   // the height alone
+    t.layers = {simpleRec(), tall};
+    lim.max_side = 49;
+    Open height(build(t).bytes, SIZE_MAX, &lim);
+    nextLayer(height.r);
+    nextLayer(height.r, MINIPSD_ERR_LIMIT);
+    lim.max_side = 50;
+    Open fitsHeight(build(t).bytes, SIZE_MAX, &lim);
+    nextLayer(fitsHeight.r);
+    nextLayer(fitsHeight.r);
+}
+
 TEST(MinipsdReaderTest, InitChecksItsArguments)
 {
     const Bytes file = write(docOf(2, 2, std::vector<minipsd_layer>{{"L", nullptr, 255, 0}}.data(), 1));
@@ -1427,4 +1470,46 @@ TEST(MinipsdReaderTest, DecodeCompositeChecksItsArguments)
     Open cut(f.bytes, 10);
     ASSERT_EQ(cut.rc, MINIPSD_ERR_SHORT);
     EXPECT_EQ(minipsd_decode_composite(cut.r, &t, nullptr), MINIPSD_ERR_ARG) << "a reader that never started";
+}
+
+TEST(MinipsdReaderTest, ADecodeOverTheBytesLimitIsRefusedBeforeWriting)
+{
+    const std::uint32_t w = 6, h = 4;
+    const Bytes px = testImage(w, h);
+    const minipsd_layer layer{"L", px.data(), 255, 0};
+    const Bytes file = write(docOf(w, h, &layer, 1));
+    const std::uint64_t all = std::uint64_t(w) * h * 4;
+
+    for (bool composite : {false, true}) {
+        SCOPED_TRACE(composite ? "composite" : "layer");
+        auto decode = [&](std::uint64_t max, std::uint32_t y0, std::uint32_t count, Bytes &out, bool alphaOnly = false) {
+            minipsd_limits lim{};
+            lim.max_decoded_bytes = max;
+            Open o(file, SIZE_MAX, &lim);
+            const minipsd_layer_view v = nextLayer(o.r);
+            minipsd_target t;
+            minipsd_target_rgba(&t, out.data(), std::size_t(w) * 4);
+            if (alphaOnly) t.channel[MINIPSD_CH_R].data = t.channel[MINIPSD_CH_G].data = t.channel[MINIPSD_CH_B].data = nullptr;
+            const minipsd_decode_opts opts{y0, count, 0};
+            return composite ? minipsd_decode_composite(o.r, &t, &opts) : minipsd_decode_layer(o.r, &v, &t, &opts);
+        };
+        Bytes out(px.size(), 0xEE);
+        EXPECT_EQ(decode(all, 0, 0, out), MINIPSD_OK) << "the limit itself is allowed";
+        out.assign(px.size(), 0xEE);
+        EXPECT_EQ(decode(all - 1, 0, 0, out), MINIPSD_ERR_LIMIT);
+        EXPECT_EQ(out, Bytes(px.size(), 0xEE)) << "untouched";
+        EXPECT_EQ(decode(all / 2, 0, 2, out), MINIPSD_OK) << "half the rows: a band fits";
+        EXPECT_EQ(decode(all / 2, 1, 3, out), MINIPSD_ERR_LIMIT);
+        EXPECT_EQ(decode(all / 4, 0, 0, out, true), MINIPSD_OK) << "one plane of four";
+        EXPECT_EQ(decode(all / 4 - 1, 0, 0, out, true), MINIPSD_ERR_LIMIT);
+        EXPECT_EQ(decode(1, 4, 0, out), MINIPSD_OK) << "no rows, no bytes";
+        EXPECT_EQ(decode(0, 0, 0, out), MINIPSD_OK) << "0: no limit";
+    }
+
+    minipsd_limits lim{};
+    lim.max_decoded_bytes = 1;
+    Open o(file, SIZE_MAX, &lim);
+    minipsd_target none;
+    minipsd_target_rgba(&none, nullptr, 0);
+    EXPECT_EQ(minipsd_decode_composite(o.r, &none, nullptr), MINIPSD_OK) << "no planes, no bytes";
 }

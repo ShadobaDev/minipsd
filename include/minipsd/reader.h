@@ -26,6 +26,7 @@ struct minipsd_reader {
     size_t         size;
     uint64_t       needed;        /* what the last MINIPSD_ERR_SHORT asked for                   */
     minipsd_limits limits;        /* with zero fields replaced by the format's own limits        */
+    uint32_t       layer_side;    /* the caller's max_side, for layers; 0: none                  */
     int            ready;         /* init succeeded                                              */
     int            rgb8;          /* the file is 8-bit RGB: its pixels can be decoded            */
     uint32_t       width, height; /* the composite: its size, channels, and where it starts      */
@@ -241,6 +242,8 @@ MINIPSDDEF int minipsd_reader_init(minipsd_reader **out, const void *data, size_
     r->needed       = 0;
     r->limits.max_side   = limits && limits->max_side ? limits->max_side : MINIPSD_MAX_SIDE;
     r->limits.max_layers = limits && limits->max_layers ? limits->max_layers : MPSD__MAX_LAYERS;
+    r->limits.max_decoded_bytes = limits ? limits->max_decoded_bytes : 0;
+    r->layer_side        = limits ? limits->max_side : 0;
     r->ready        = 0;
     r->rgb8         = 0;
     r->res_next     = r->res_end = 0;
@@ -442,6 +445,9 @@ MINIPSDDEF int minipsd_reader_next_layer(minipsd_reader *r, minipsd_layer_view *
         if (rc != MINIPSD_OK) return rc;
     }
     (void)mpsd__record(r, r->record_next, &rec);              /* the walk checked every record */
+    if (r->layer_side && ((uint64_t)((int64_t)rec.view.right - rec.view.left) > r->layer_side
+                          || (uint64_t)((int64_t)rec.view.bottom - rec.view.top) > r->layer_side))
+        return MINIPSD_ERR_LIMIT;
     for (k = 0; k < 4; ++k) {
         const uint64_t at = r->data_next + rec.offset[k];
         rec.view.channel[k].size  = rec.length[k];
@@ -502,6 +508,16 @@ MINIPSDDEF int minipsd_layer_next_block(const minipsd_layer_view *layer, size_t 
 }
 
 /* --- pixels: a layer's channels into the caller's planes --- */
+
+/* Do the bytes one decode call writes, width * rows for each plane, stay within the limit? */
+static int mpsd__within(const minipsd_reader *r, const minipsd_target *t, uint32_t width, uint32_t rows)
+{
+    const uint64_t max = r->limits.max_decoded_bytes;
+    uint64_t       planes = 0;
+    int            k;
+    for (k = 0; k < 4; ++k) planes += t->channel[k].data != NULL;
+    return !max || !planes || !rows || width <= max / planes / rows;   /* no product to overflow */
+}
 
 MINIPSDDEF void minipsd_target_rgba(minipsd_target *t, uint8_t *rgba, size_t row_stride)
 {
@@ -582,6 +598,7 @@ MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view 
     if (y0 > height) return MINIPSD_ERR_ARG;
     rows   = opts && opts->y_count ? opts->y_count : height - y0;
     if (rows > height - y0) return MINIPSD_ERR_ARG;
+    if (!mpsd__within(r, target, width, rows)) return MINIPSD_ERR_LIMIT;
     if (!r->rgb8) return MINIPSD_ERR_UNSUPPORTED;
     if (width == 0 || rows == 0) return MINIPSD_OK;
 
@@ -672,6 +689,7 @@ MINIPSDDEF int minipsd_decode_composite(minipsd_reader *r, const minipsd_target 
     colour  = last >= 0;
     unmatte = r->composite_alpha && !(opts && opts->keep_matte) && colour;
     if (unmatte && !target->channel[MINIPSD_CH_A].data) return MINIPSD_ERR_ARG;   /* the alpha is read back */
+    if (!mpsd__within(r, target, r->width, rows)) return MINIPSD_ERR_LIMIT;
     if (!r->rgb8) return MINIPSD_ERR_UNSUPPORTED;
     if (r->channels < 3u + (r->composite_alpha ? 1u : 0u)) return MINIPSD_ERR_FORMAT;
     if (target->channel[MINIPSD_CH_A].data && r->composite_alpha) last = MINIPSD_CH_A;

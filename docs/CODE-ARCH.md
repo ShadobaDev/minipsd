@@ -341,16 +341,21 @@ typedef struct minipsd_decode_opts {
 
 ```c
 typedef struct minipsd_limits {
-    uint32_t max_side;           /* 0: MINIPSD_MAX_SIDE */
+    uint32_t max_side;           /* canvas: 0 is MINIPSD_MAX_SIDE; layers: 0 is no limit */
     uint32_t max_layers;         /* 0: 32767, the format's own cap */
-} minipsd_limits;                /* S4.6 adds, at the end, max_decoded_bytes (per decode call);
-                                    nesting depth follows with layer groups */
+    uint64_t max_decoded_bytes;  /* per decode call, width * rows * planes; 0: no limit */
+} minipsd_limits;                /* nesting depth goes at the end with layer groups */
 ```
 
 - **Always checked; the defaults are the format's own caps**, so with `NULL` the reader accepts
   every valid file and an untrusted-upload service tightens the fields (`R8`). The limits are
-  tested where each quantity first becomes known: sides and layer count in `init`, a layer's
-  area in `next_layer`, the bytes of one call before `decode_*` writes anything.
+  tested where each quantity first becomes known: the canvas's sides and the layer count in
+  `init`, a layer's sides in `next_layer`, the bytes of one call before `decode_*` writes
+  anything.
+- **A layer has no side limit of its own by default.** Its rectangle may reach past the canvas,
+  and past 30 000 px, in a valid file, so only a `max_side` the caller sets applies to layers.
+- **Bytes are counted per call, not per layer.** A layer too large for the limit can still be
+  decoded in bands of rows, which is what strips (`R4`) are for.
 - **New return codes**, added after `MINIPSD_ERR_UNSUPPORTED = -7`, never renumbered:
 
   | Code | Value | Meaning | Caller's reply |

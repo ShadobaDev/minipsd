@@ -194,7 +194,16 @@ rc = minipsd_decode_composite(r, &t, NULL);   /* every row, un-matted */
 ```
 
 **Untrusted files.** Every length is checked; a malformed file is `MINIPSD_ERR_FORMAT`. Pass a
-`minipsd_limits` to refuse large sides or many layers early (`MINIPSD_ERR_LIMIT`).
+`minipsd_limits` to refuse what is too large before it costs anything, with
+`MINIPSD_ERR_LIMIT`, distinct from a malformed file:
+
+| Field | Checked by | 0 means |
+|---|---|---|
+| `max_side` | `init` for the canvas, `next_layer` for each layer | 30 000 for the canvas; no limit for layers, which may reach past it |
+| `max_layers` | `init` | 32 767, the format's cap |
+| `max_decoded_bytes` | each `decode_*` call, before it writes: width x rows x planes | no limit |
+
+The byte limit is per call, so a layer larger than it can still be decoded in bands of rows.
 
 ## Return codes
 

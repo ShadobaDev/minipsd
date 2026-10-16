@@ -126,7 +126,7 @@ of 8-bit RGB files, layers and composite.
 | `minipsd_writer` | opaque; built by `minipsd_writer_init` inside the workspace |
 | `minipsd_write_fn` | the callback of `minipsd_write`: non-zero to go on, 0 to abort |
 | `minipsd_reader` | opaque; built by `minipsd_reader_init` inside the workspace |
-| `minipsd_limits` | what the reader refuses: largest side, most layers; zero fields keep the format's caps |
+| `minipsd_limits` | what the reader refuses: largest side (canvas, and layers when set), most layers, most bytes one decode call writes; zero fields keep the format's caps |
 | `minipsd_info` | what the file says about itself: size, depth, colour mode, dpi, ICC profile, layer count |
 | `minipsd_bytes` | a read-only view into the caller's buffer |
 | `minipsd_resource`, `minipsd_layer_view`, `minipsd_block` | an image resource, a layer record, an additional-information block, as views |
@@ -153,7 +153,7 @@ of 8-bit RGB files, layers and composite.
 | `MINIPSD_ERR_FORMAT` | -6 | reader: not a well-formed PSD |
 | `MINIPSD_ERR_UNSUPPORTED` | -7 | reader: a valid PSD outside what minipsd reads: a PSB (version 2); for decoding, a file not 8-bit RGB or a ZIP-compressed channel |
 | `MINIPSD_ERR_SHORT` | -8 | reader: the buffer ends inside data the call needs; read more, `minipsd_reader_needed` says how much |
-| `MINIPSD_ERR_LIMIT` | -9 | reader: a side or the layer count is over `minipsd_limits` |
+| `MINIPSD_ERR_LIMIT` | -9 | reader: over `minipsd_limits`: the canvas's or a layer's side, the layer count, or the bytes of a decode call; the file is not known to be bad |
 
 ## Memory and ownership
 
