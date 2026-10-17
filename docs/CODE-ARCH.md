@@ -408,7 +408,7 @@ while ((rc = minipsd_reader_init(&r, buf, have, ws, ws_size, NULL, &info)) == MI
   | `minipsd_workspace` | caller; lent to the reader | the opaque `minipsd_reader` and its state (section offsets, the resource and layer cursors); a fixed small size; heap, stack or static. The index for `R5` is a later call with its own workspace |
   | `minipsd_info`, `minipsd_layer_view` | caller | fixed size, stack; their `minipsd_bytes` fields point into the blob |
   | decoded pixels | caller | the target descriptor (`X2`) says where; one layer at a time (`R6`) or all of them (`R7`) |
-  | a whole `minipsd_doc` (`R7`) | caller | stage 5: sizes first, then the caller's buffers or allocator; never a copy kept by the reader |
+  | a whole `minipsd_doc` (`R7`) | caller | `minipsd_read`: one block, copied out of the file (see [Round trip](#round-trip)) |
 
 - **Forward iteration, no table.** Layer records have variable length, and the channel data of
   all layers follows the last record, so where layer 0's data begins is known only after every
@@ -437,11 +437,157 @@ while ((rc = minipsd_reader_init(&r, buf, have, ws, ws_size, NULL, &info)) == MI
   contradicts [Dependency rules](#dependency-rules). It is added only if a real consumer needs
   it.
 
+## Round trip
+
+A file read, changed and written again (`R7`, `E1`, `E2`, `W7`). Built on the reader and the pull
+writer; every addition is a field at the end of an existing struct whose zero keeps the previous
+bytes, so nothing here breaks the API.
+
+### What a round trip keeps
+
+| Input | Kept |
+|---|---|
+| a file minipsd wrote | the same bytes (`E4`) |
+| a file from another program | the same content: every layer's pixels, name, rectangle, opacity, visibility, blend key, clipping, kept blocks and resources, and the composite's pixels. Not the same bytes: minipsd writes its own legacy name, PackBits runs and block order, which no reader depends on |
+
+What the document cannot carry is reported (see [Loss](#loss)).
+
+### The composite: supplied, or composed as a best effort
+
+The composite is the flattened image that readers ignoring layers show: previews, thumbnails,
+viewers. Flattening layers is rendering, which is the caller's domain; minipsd only encodes the
+image the way PSD stores it.
+
+```c
+/* at the end of minipsd_doc */
+const uint8_t *composite;          /* the full canvas, width * height * 4, straight alpha; NULL: composed */
+int            composite_matted;   /* non-zero: composite is already matted, written as it is */
+```
+
+- **Supplied (`composite` set): the right way.** The writer writes exactly that image, whatever
+  the layers hold: blend modes, masks, effects, adjustments. Rendering it is the caller's job;
+  libvips does most of it (the spec's [Working with libvips](SPECIFICATION.md#working-with-libvips)).
+- **Composed (`composite == NULL`): a best effort, no guarantee.** For a caller that only needs
+  a plausible preview, as Platemaker does. The writer composes the visible layers with "over",
+  with their opacity and at their rectangles. Every other blend mode is drawn as `norm`; masks,
+  clipping, groups and effects are left out. It is today's behaviour, so a document that does
+  not set `composite` keeps its bytes.
+- **The matte is always the writer's.** PSD stores the composite's colour matted against white;
+  that is the format's encoding, not rendering, so the caller gives straight alpha, as for
+  layers, and the writer mattes it. Only `composite_matted` skips it: `minipsd_read` sets it,
+  because un-matting and matting again drift where alpha is low (8-bit matting merges nearby
+  colours), and a file's own composite must come back pixel for pixel.
+- **Workspace.** A supplied composite is read row by row like a layer; the composed one keeps
+  its one row in the workspace, as now.
+
+### What the document gains
+
+`minipsd_layer`, at the end:
+
+| Field | Zero means | Notes |
+|---|---|---|
+| `int32_t top, left, bottom, right` | all four zero: the full canvas | the fields of `minipsd_layer_view`, in its order. `rgba` holds `(right - left) * (bottom - top) * 4` bytes. A rectangle may reach past the canvas; an inverted one is `MINIPSD_ERR_ARG`. Row tables and channel sizes follow the rectangle; the composed composite blends at the offset and clips to the canvas |
+| `char blend[4]` | `norm` | written as given |
+| `uint8_t clipping` | not clipped | written as given |
+| `minipsd_bytes extra` | no extra blocks | the layer's additional-information blocks as one blob, in the format of the reader's `extra` view; written after the writer's own blocks |
+| `const minipsd_bytes *stored` | encode `rgba` | four channel blobs (R, G, B, A, as `minipsd_layer_view.channel`), each the stored data with its compression marker and row counts. The writer copies them instead of encoding `rgba`; the sizing pass takes their sizes. Name, opacity, visibility, blend, clipping and `extra` still come from the layer |
+
+`minipsd_doc`, at the end, after `composite` and `composite_matted`:
+
+| Field | Zero means | Notes |
+|---|---|---|
+| `const minipsd_resource *resources`, `size_t resource_count` | no other resources | written in order after the writer's own; the reader's `minipsd_resource` type |
+| `minipsd_bytes layer_tail` | none | the rest of the layer and mask section after the records: the global layer mask information and the global additional blocks (`Txt2`, `Patt`, `Lr16`, ...), written back as they are |
+
+The reader gains the two matching fields: `minipsd_layer_view.clipping` and
+`minipsd_info.layer_tail`, the bytes it skips today.
+
+**When the document and kept data both say something, the document's field wins** and the kept
+data with that key is skipped: `name` over the `luni` block in `extra`, `dpi` over resource 1005,
+`icc` over resource 1039. So a layer is renamed by changing `name` alone, and kept blocks and
+resources pass through whole, unfiltered. Data that goes stale on an edit, such as the thumbnail
+(1036), stays the caller's to drop.
+
+### `minipsd_read`
+
+Bytes to a document, the mirror of `minipsd_write`, built on the public reader:
+
+```c
+/* Two phases: the caller owns the memory. */
+int minipsd_read_size(const void *data, size_t size, const minipsd_limits *limits,
+                      const minipsd_read_opts *opts, size_t *block_size);
+int minipsd_read_into(const void *data, size_t size, const minipsd_limits *limits,
+                      const minipsd_read_opts *opts, void *block, size_t block_size,
+                      minipsd_doc **doc, uint32_t *lost);
+
+/* One call, through MINIPSD_MALLOC; gone with MINIPSD_NO_MALLOC, like minipsd_write. */
+int  minipsd_read    (const void *data, size_t size, const minipsd_limits *limits,
+                      const minipsd_read_opts *opts, minipsd_doc **doc, uint32_t *lost);
+void minipsd_doc_free(minipsd_doc *doc);   /* MINIPSD_FREE, so a replaced allocator stays right */
+
+typedef struct minipsd_read_opts {
+    int stored;   /* non-zero: each layer keeps its stored channels (stored) instead of pixels */
+} minipsd_read_opts;   /* NULL: decode every layer */
+```
+
+| Writing | Reading |
+|---|---|
+| `minipsd_writer_*`: low level, the caller's memory | `minipsd_reader_*`: low level, views into the file |
+| `minipsd_write`: a document to bytes, one call | `minipsd_read`: bytes to a document, one call |
+
+- **One block, and nothing points into the file.** The document lives in one block, the
+  caller's (`minipsd_read_into`, any alignment) or one `MINIPSD_MALLOC` with the document at its
+  start. Everything is copied into it, so the file's buffer may be freed as soon as the call
+  returns:
+
+  | In the block | Size |
+  |---|---|
+  | the `minipsd_doc`, the `minipsd_layer` array | `sizeof`; `layer_count` entries |
+  | names, UTF-8 with their NUL | each name's `needed` |
+  | each layer's pixels, or with `opts->stored` its stored channels | `w * h * 4`, or the channels' stored size |
+  | the composite, as stored (matted), `composite_matted` set | `width * height * 4` |
+  | `extra` blobs, resources, `layer_tail`, the ICC profile | their stored size |
+
+  Non-pixel data is usually kilobytes (text, effects, a thumbnail); an embedded smart object can
+  reach megabytes and is copied too, the price of a document that stands alone.
+- **`opts->stored`** decodes nothing: each layer keeps its compressed channels, a fraction of its
+  pixels' size. The caller decodes the one layer it edits through the reader, from the same
+  file, sets that layer's `rgba` and clears its `stored`, then writes. Untouched layers are never
+  decoded nor encoded again, and the file's own composite needs no rendering (`E1`).
+- **Limits:** `minipsd_limits` as in the reader; `max_decoded_bytes` bounds the sum of the call's
+  decoded pixels. A block larger than `SIZE_MAX` is `MINIPSD_ERR_SIZE`.
+- **What it accepts:** 8-bit RGB, as the decoder; anything else is `MINIPSD_ERR_UNSUPPORTED`
+  until the document has other depths.
+- **No allocator passed at run time.** The caller's block and `MINIPSD_MALLOC` cover both cases;
+  a `{alloc, free, user}` variant is an addition when a caller needs one.
+
+### Loss
+
+`lost` receives a bitmask over the whole document; 0 is the expected value.
+
+| Flag | What is lost |
+|---|---|
+| `MINIPSD_LOST_MASK` | layer and vector masks: the record's mask data and its mask channels |
+| `MINIPSD_LOST_BLENDING_RANGES` | the record's blending ranges ("Blend If") |
+| `MINIPSD_LOST_CHANNELS` | channels other than R, G, B, transparency and masks |
+
+- **Every known loss is tracked.** The code that sets a bit carries a `TODO` naming the ROADMAP
+  step that will carry the content, so the list of bits is the list of open work.
+- **A loud warning, and a request.** The MANUAL asks whoever sees a non-zero `lost` to open an
+  issue with the file or a description of it; the bits make the report precise.
+- **Not loss:** groups (their `lsct` blocks are in `extra`, the dividers are empty layers), text,
+  effects, smart objects and adjustments (blocks and `layer_tail`), blend keys and clipping
+  (fields), the composite (copied).
+- **Document-wide.** Which layer has a mask, the reader tells; a per-layer list is an addition
+  when a caller needs it.
+
 ## Features through the modules
 
 Each planned feature, and where it lands. All of them follow the
 [extensibility rules](SPECIFICATION.md#extensibility-rules): a new field goes at the end of its
-struct, and zero keeps the previous output. So each one is a PATCH addition unless noted.
+struct, and zero keeps the previous output. So each one is a PATCH addition unless noted. A
+feature is serialization: written and read as data. The composite composed as a best effort
+(see [Round trip](#round-trip)) learns a feature only on demand; a supplied composite needs none.
 
 | Feature | Document (in `minipsd.h`) | `writer.h` | `reader.h` | detail | Notes |
 |---|---|---|---|---|---|
@@ -449,10 +595,11 @@ struct, and zero keeps the previous output. So each one is a PATCH addition unle
 | **Pull writer + workspace** | `minipsd_doc_check` | `minipsd_writer_*` | — | `bytes` | `minipsd_write` rebuilt on top, same bytes |
 | **`minipsd_write_file` to `examples/`** | — | removed | — | — | the only **breaking** item: 0.2.0 |
 | **Reader, own subset** | — | — | new | `bytes`, `utf`, `packbits`, `composite` (un-matte) | 8-bit RGB, full-canvas or empty layers |
-| **Layers smaller than the canvas** | `left, top, width, height` on `minipsd_layer`; all zero = full canvas | bounds, row tables | bounds into the view | `composite`: offset blend | first feature that needs both directions |
-| **Blend modes** | `blend` key; zero = `norm` | key in the record | key in the view | `composite`: one function per mode | composite checked against `psd-tools` |
-| **Layer groups (`lsct`)** | `kind`: layer / group open / group close; zero = layer | divider records, `lsct` block | group structure in the view | `composite`: pass-through, hidden groups | |
-| **Layer masks** | optional mask (rect + bytes) per layer | mask record, channel `-2` | mask view | `composite`: mask multiply | |
+| **Layers smaller than the canvas** | `top, left, bottom, right` on `minipsd_layer`, as in the view; all zero = full canvas | bounds, row tables | done: the view's rectangle | `composite`: offset blend, clipped to the canvas | |
+| **Blend modes** | `blend[4]`; zero = `norm` | key in the record | done: the view's key | — | the composed composite draws every mode as `norm` |
+| **Round trip** | `clipping`, `extra`, `stored`; `composite`, `composite_matted`, `resources`, `layer_tail` | kept data written back | `clipping`, `layer_tail`; `minipsd_read` | — | see [Round trip](#round-trip) |
+| **Layer groups (`lsct`)** | `kind`: layer / group open / group close; zero = layer | divider records, `lsct` block | group structure in the view | — | kept today as `lsct` blocks in `extra` |
+| **Layer masks** | optional mask (rect + bytes) per layer | mask record, channel `-2` | mask view | — | until then `MINIPSD_LOST_MASK` |
 | **16-bit channels** | `depth` on `minipsd_doc`; zero = 8 | 2-byte samples | 2-byte samples | `packbits` over byte planes, `composite` in 16-bit | |
 | **PSB (version 2)** | `format` on `minipsd_doc`; zero = PSD | 8-byte lengths, 4-byte RLE counts | both versions | `bytes`: 64-bit fields | sides up to 300 000 px |
 
@@ -487,6 +634,7 @@ commit message. [ROADMAP.md](ROADMAP.md) turns these into numbered steps.
 | **4. Reader** | `reader.h` for the own subset, then real-application files; fuzzing | 0.2.1 |
 | **5. Round trip** | layer rectangles in the writer, a supplied composite, full import, kept unknown content, pass-through | 0.2.x |
 | **6. Features** | one row of the table above per stage, writer and reader together | 0.2.x |
+| **7. Interoperability** | libvips: an example and a MANUAL chapter | 0.2.x |
 
 Every stage follows these rules:
 

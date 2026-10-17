@@ -13,6 +13,7 @@ planned work to [TODO.md](TODO.md).
 | [Memory and ownership](#memory-and-ownership) | whose each buffer is, its size, lifetime and where it may live |
 | [What goes into the file](#what-goes-into-the-file) | the exact PSD subset written |
 | [What is read](#what-is-read) | which files are described, which decoded, and what is left as raw data |
+| [Working with libvips](#working-with-libvips) | the buffers they share; rendering layers with libvips |
 | [Consumer requirements](#consumer-requirements) | guarantees Platemaker depends on |
 | [Verification](#verification) | how a format change is proven correct |
 | [Distribution and SBOM](#distribution-and-sbom) | how consumers obtain and declare minipsd |
@@ -260,6 +261,45 @@ them; nothing is copied or allocated. Results on real files from other programs:
   caller's `minipsd_limits` add the canvas's and the layers' side, the layer count and the bytes
   one decode call writes, all checked before anything is decoded.
 
+## Working with libvips
+
+minipsd reads and writes PSD; it does not process images. [libvips](https://www.libvips.org/)
+does, and its memory images are minipsd's buffers, with no conversion:
+
+| | minipsd | libvips, 8-bit RGBA |
+|---|---|---|
+| layout | interleaved RGBA, rows top down, `width * 4` bytes per row | bands interleaved, rows contiguous |
+| sample | `uint8_t` | `VIPS_FORMAT_UCHAR` |
+| alpha | straight | straight; premultiplying is an explicit `vips_premultiply` |
+| colour | sRGB, or the document's ICC profile | `interpretation` sRGB, the profile in `icc-profile-data` |
+
+- **From libvips to minipsd:** `vips_image_write_to_memory` gives a buffer that is a layer's
+  `rgba` as it is; a 3-band image takes `vips_bandjoin_const1(image, 255)` first.
+- **From minipsd to libvips:** decode with `minipsd_target_rgba`, then wrap the buffer with
+  `vips_image_new_from_memory(buffer, size, width, height, 4, VIPS_FORMAT_UCHAR)`, no copy.
+- **Rendering layers:** `vips_composite` takes the layers with their positions (the layer
+  rectangle); opacity is a multiplication of the alpha band, hidden layers are left out. Blend
+  modes with a libvips counterpart:
+
+  | PSD key | libvips | PSD key | libvips |
+  |---|---|---|---|
+  | `norm` | `VIPS_BLEND_MODE_OVER` | `div ` | `VIPS_BLEND_MODE_COLOUR_DODGE` |
+  | `mul ` | `VIPS_BLEND_MODE_MULTIPLY` | `idiv` | `VIPS_BLEND_MODE_COLOUR_BURN` |
+  | `scrn` | `VIPS_BLEND_MODE_SCREEN` | `hLit` | `VIPS_BLEND_MODE_HARD_LIGHT` |
+  | `over` | `VIPS_BLEND_MODE_OVERLAY` | `sLit` | `VIPS_BLEND_MODE_SOFT_LIGHT` (the PDF formula, close to Photoshop's) |
+  | `dark` | `VIPS_BLEND_MODE_DARKEN` | `diff` | `VIPS_BLEND_MODE_DIFFERENCE` |
+  | `lite` | `VIPS_BLEND_MODE_LIGHTEN` | `smud` | `VIPS_BLEND_MODE_EXCLUSION` |
+  | `lddg` | `VIPS_BLEND_MODE_ADD` | | |
+
+  The other modes (linear burn, darker and lighter colour, vivid, linear and pin light, hard
+  mix, subtract, divide, hue, saturation, colour, luminosity, dissolve) need code of the
+  caller's own. libvips computes in floating point, Photoshop in integers, so results differ by
+  about one level.
+- **Memory:** libvips computes lazily, in strips; minipsd takes a whole layer, so a large
+  pipeline materialises each layer before writing. Reading in bands of rows
+  (`minipsd_decode_opts`) fits libvips' strips.
+- minipsd never depends on libvips.
+
 ## Consumer requirements
 
 Platemaker is the first consumer. Breaking any of these breaks it:
@@ -370,9 +410,10 @@ Rules for adding features without breaking existing callers:
 - **New struct fields go at the end.** Positional initialisers (C99 without designated
   initialisers, C++) must keep compiling.
 - **New error codes and enum values are added, never renumbered.**
-- **The composite must match the layers.** A feature that changes how layers look (blend modes,
-  masks, groups) must also be reflected in the composite, or be documented as invisible to
-  composite-only readers.
+- **The composite is not a renderer.** A feature that changes how layers look (blend modes,
+  masks, groups) is written and read as data. The composite the writer composes is a best
+  effort: it learns such a feature only on demand, and the docs say which features it leaves
+  out.
 - **Optional subsystems hide behind macros**, the way `MINIPSD_NO_MALLOC` does, so the minimal
   build stays minimal. The reader needs none: it allocates nothing, and a function the program
   does not call costs nothing once linked.
