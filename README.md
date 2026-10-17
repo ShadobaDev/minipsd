@@ -83,6 +83,7 @@ Define before the implementation include:
 | [docs/MANUAL.md](docs/MANUAL.md) | how to use it: memory, writing, return codes (skeleton) |
 | [examples/](examples/) | complete programs: a file, a buffer, a non-blocking pipe |
 | [docs/SPECIFICATION.md](docs/SPECIFICATION.md) | the contract: API, file contents, guarantees, PSD primer |
+| [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | the reader on 315 files from other programs (psd-tools' test set): decoded, described, refused |
 | [docs/CODING_STYLE_C.md](docs/CODING_STYLE_C.md) | C rules: language, naming, comments |
 | [docs/CODING_STYLE_CPP.md](docs/CODING_STYLE_CPP.md) | C++ rules (tests, the planned wrapper) |
 | [docs/CODE-ARCH.md](docs/CODE-ARCH.md) | the target architecture: modules, I/O model, reader |

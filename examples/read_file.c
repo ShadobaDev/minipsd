@@ -17,6 +17,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* The whole file in a new buffer; NULL when it cannot be read. */
 static uint8_t *read_all(const char *path, size_t *size)
@@ -112,7 +113,11 @@ int main(int argc, char **argv)
         printf("  %u '%s': (%d, %d)-(%d, %d), opacity %u, %s, blend %s\n", i++, name, (int)layer.left, (int)layer.top,
                (int)layer.right, (int)layer.bottom, (unsigned)layer.opacity, layer.hidden ? "hidden" : "visible", layer.blend);
         printf("      blocks:");
-        for (pos = 0; minipsd_layer_next_block(&layer, &pos, &block) == MINIPSD_MORE;) printf(" %s", block.key);
+        for (pos = 0; minipsd_layer_next_block(&layer, &pos, &block) == MINIPSD_MORE;) {
+            printf(" %s", block.key);
+            if (strcmp(block.key, "lsct") == 0 && block.data.size >= 4)   /* 1, 2: a group opens; 3: it closes */
+                printf("=%u", (unsigned)block.data.data[3]);
+        }
         printf("%s\n", layer.other_channels ? ", and channels not read (masks)" : "");
         if (info.depth == 8 && info.color_mode == 3
             && show_pixels(r, &layer, (uint32_t)(layer.right - layer.left), (uint32_t)(layer.bottom - layer.top)) != MINIPSD_OK)
