@@ -30,8 +30,13 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
 - `minipsd_read`: a whole 8-bit RGB file into a `minipsd_doc` that `minipsd_write` takes as it
   is, every byte copied into one block so the file can be freed at once; `minipsd_doc_free`;
   `minipsd_read_size` and `minipsd_read_into` for the caller's own memory. `lost`
-  (`MINIPSD_LOST_*`) says what the document could not carry: masks, blending ranges, extra
-  channels, and for now blend modes, clipping, blocks and resources.
+  (`MINIPSD_LOST_*`) says what the document could not carry: layer masks, blending ranges,
+  extra channels.
+- Content kept from a file and written back as it is: `blend`, `clipping`, `flags` and `extra`
+  (additional-information blocks: text, effects, groups, smart objects) on `minipsd_layer`;
+  `resources` and `layer_tail` (global layer mask and blocks) on `minipsd_doc`. The document's
+  own fields win over kept data that says the same (`name`, `dpi`, `icc`). The reader gives
+  `clipping` and `flags` in the layer view, resource names, and `layer_tail` in `minipsd_info`.
 - `examples/read_file.c` also reads the file as a document and prints what it would lose.
 - Return codes `MINIPSD_ERR_FORMAT`, `MINIPSD_ERR_UNSUPPORTED`, `MINIPSD_ERR_SHORT`,
   `MINIPSD_ERR_LIMIT`, and `minipsd_limits` for untrusted files: the largest side (canvas, and

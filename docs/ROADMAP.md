@@ -227,8 +227,8 @@ whatever cannot be carried is reported.
 - [ ] **S5.5** Unknown content kept (`E2`): `blend`, `clipping` and `extra` on the layer,
       `resources` and `layer_tail` on the document, written back as given; the reader gains
       `clipping` in the view and `layer_tail` in `minipsd_info`; the document's fields win over
-      kept data with the same key (`luni`, 1005, 1039). `MINIPSD_LOST_EXTRA` is no longer set,
-      and goes if no release had it.
+      kept data with the same key (`luni`, 1005, 1039). `MINIPSD_LOST_EXTRA` goes: no release had
+      it. Also kept: the record's other flag bits (`flags`) and resource names.
       *Done when:* a file of psd-tools' set with a text layer survives `minipsd_read` and
       `minipsd_write`: every kept block identical byte for byte (checked by `psd-tools`), the
       text shown by Photoshop or Photopea, checked by hand once.

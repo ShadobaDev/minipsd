@@ -491,24 +491,29 @@ int            composite_matted;   /* non-zero: composite is already matted, wri
 | `int32_t top, left, bottom, right` | all four zero: the full canvas | the fields of `minipsd_layer_view`, in its order. `rgba` holds `(right - left) * (bottom - top) * 4` bytes. A rectangle may reach past the canvas; an inverted one, or an area without `rgba`, is `MINIPSD_ERR_ARG`; a side above `MINIPSD_MAX_SIDE` is `MINIPSD_ERR_SIZE` (RLE row counts are 16 bits). Row tables and channel sizes follow the rectangle; the composed composite blends at the offset and clips to the canvas |
 | `char blend[4]` | `norm` | written as given |
 | `uint8_t clipping` | not clipped | written as given |
-| `minipsd_bytes extra` | no extra blocks | the layer's additional-information blocks as one blob, in the format of the reader's `extra` view; written after the writer's own blocks |
+| `uint8_t flags` | none | the record's other flag bits (0x01 transparency locked, 0x08 and 0x10 pixel data irrelevant), written as given; 0x02 comes from `hidden` |
+| `minipsd_bytes extra` | no extra blocks | the layer's additional-information blocks as one blob, in the format of the reader's `extra` view; written after the writer's own blocks. `minipsd_doc_check` walks them: a malformed run is `MINIPSD_ERR_ARG` |
 | `const minipsd_bytes *stored` | encode `rgba` | four channel blobs (R, G, B, A, as `minipsd_layer_view.channel`), each the stored data with its compression marker and row counts. The writer copies them instead of encoding `rgba`; the sizing pass takes their sizes. Name, opacity, visibility, blend, clipping and `extra` still come from the layer |
 
 `minipsd_doc`, at the end, after `composite` and `composite_matted`:
 
 | Field | Zero means | Notes |
 |---|---|---|
-| `const minipsd_resource *resources`, `size_t resource_count` | no other resources | written in order after the writer's own; the reader's `minipsd_resource` type |
-| `minipsd_bytes layer_tail` | none | the rest of the layer and mask section after the records: the global layer mask information and the global additional blocks (`Txt2`, `Patt`, `Lr16`, ...), written back as they are |
+| `const minipsd_resource *resources`, `size_t resource_count` | no other resources | written in order after the writer's own; the reader's `minipsd_resource` type, which carries the resource's name (`name`, a Pascal string's bytes, at most 255) |
+| `minipsd_bytes layer_tail` | an empty global layer mask (four zero bytes) | the rest of the layer and mask section after the layer info: the global layer mask information and the global additional blocks (`Txt2`, `Patt`, `Lr16`, ...), written back as they are |
 
-The reader gains the two matching fields: `minipsd_layer_view.clipping` and
-`minipsd_info.layer_tail`, the bytes it skips today.
+The reader gives the matching fields: `minipsd_layer_view.clipping` and `.flags`,
+`minipsd_resource.name`, and `minipsd_info.layer_tail` (data `NULL` with a size when the buffer
+ends before it). `minipsd_bytes`, `minipsd_resource` and `minipsd_block` are declared with the
+document, which uses them.
 
 **When the document and kept data both say something, the document's field wins** and the kept
 data with that key is skipped: `name` over the `luni` block in `extra`, `dpi` over resource 1005,
 `icc` over resource 1039. So a layer is renamed by changing `name` alone, and kept blocks and
-resources pass through whole, unfiltered. Data that goes stale on an edit, such as the thumbnail
-(1036), stays the caller's to drop.
+resources pass through whole, unfiltered. One refinement: a kept 1005 that says the same dpi is
+written in place of the writer's own, so its units (centimetres) and vertical resolution
+survive. Data that goes stale on an edit, such as the thumbnail (1036), stays the caller's to
+drop.
 
 ### `minipsd_read`
 
@@ -576,18 +581,17 @@ typedef struct minipsd_read_opts {
 
 | Flag | What is lost |
 |---|---|
-| `MINIPSD_LOST_MASK` | layer and vector masks: the record's mask data and its mask channels |
+| `MINIPSD_LOST_MASK` | layer masks: the record's mask data and its mask channels (vector masks are blocks, kept) |
 | `MINIPSD_LOST_BLENDING_RANGES` | the record's blending ranges ("Blend If") |
 | `MINIPSD_LOST_CHANNELS` | channels other than R, G, B, transparency and masks, of a layer or of the composite (a positive layer count makes a fourth composite channel an alpha channel) |
-| `MINIPSD_LOST_EXTRA` | until S5.5: a blend key other than `norm`, clipping, a layer's blocks other than `luni`, resources other than 1005 and 1039, a non-empty rest of the layer and mask section |
 
 - **Every known loss is tracked.** The code that sets a bit carries a `TODO` naming the ROADMAP
   step that will carry the content, so the list of bits is the list of open work.
 - **A loud warning, and a request.** The MANUAL asks whoever sees a non-zero `lost` to open an
   issue with the file or a description of it; the bits make the report precise.
-- **Not loss once S5.5 lands:** groups (their `lsct` blocks are in `extra`, the dividers are
-  empty layers), text, effects, smart objects and adjustments (blocks and `layer_tail`), blend
-  keys and clipping (fields). The composite is copied, never lost. Blending ranges left at their
+- **Not loss:** groups (their `lsct` blocks are in `extra`, the dividers are empty layers),
+  text, effects, smart objects, adjustments and vector masks (blocks and `layer_tail`), blend
+  keys, clipping and flags (fields). The composite is copied, never lost. Blending ranges left at their
   default (`0 0 255 255` for every pair) are not loss either.
 - **Document-wide.** Which layer has a mask, the reader tells; a per-layer list is an addition
   when a caller needs it.
@@ -607,9 +611,9 @@ feature is serialization: written and read as data. The composite composed as a 
 | **`minipsd_write_file` to `examples/`** | — | removed | — | — | the only **breaking** item: 0.2.0 |
 | **Reader, own subset** | — | — | new | `bytes`, `utf`, `packbits`, `composite` (un-matte) | 8-bit RGB, full-canvas or empty layers |
 | **Layers smaller than the canvas** | done: `top, left, bottom, right` on `minipsd_layer`, as in the view; all zero = full canvas | done: bounds, row tables | done: the view's rectangle | done: `composite`: offset blend, clipped to the canvas | |
-| **Blend modes** | `blend[4]`; zero = `norm` | key in the record | done: the view's key | — | the composed composite draws every mode as `norm` |
+| **Blend modes** | done: `blend[4]`; zero = `norm` | done: key in the record | done: the view's key | — | the composed composite draws every mode as `norm` |
 | **Supplied composite** | done: `composite`, `composite_matted`; NULL = composed | done: matted unless marked, composing skipped | — | `composite`: the row source | `W7` |
-| **Round trip** | `clipping`, `extra`, `stored`; `resources`, `layer_tail` | kept data written back | `clipping`, `layer_tail`; `minipsd_read` | — | see [Round trip](#round-trip) |
+| **Round trip** | done: `blend`, `clipping`, `flags`, `extra`; `resources`, `layer_tail`. Next: `stored` | done: kept data written back | done: `clipping`, `flags`, resource names, `layer_tail`; `minipsd_read` | `bytes`: the block walker, shared | see [Round trip](#round-trip) |
 | **Layer groups (`lsct`)** | `kind`: layer / group open / group close; zero = layer | divider records, `lsct` block | group structure in the view | — | kept today as `lsct` blocks in `extra` |
 | **Layer masks** | optional mask (rect + bytes) per layer | mask record, channel `-2` | mask view | — | until then `MINIPSD_LOST_MASK` |
 | **16-bit channels** | `depth` on `minipsd_doc`; zero = 8 | 2-byte samples | 2-byte samples | `packbits` over byte planes, `composite` in 16-bit | |

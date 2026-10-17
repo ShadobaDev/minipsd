@@ -204,8 +204,10 @@ caller's memory:
   - name twice: a legacy Pascal string (ASCII, every non-ASCII character replaced by `?`) and a
     `luni` block in UTF-16 with surrogate pairs;
   - opacity;
-  - visibility: flag bit `0x02` set means hidden;
-  - blend mode `norm` only.
+  - visibility: flag bit `0x02` set means hidden; the other flag bits as given (`flags`);
+  - the blend key as given, `norm` by default, and clipping as given;
+  - after the writer's own `luni`, the blocks kept from a file (`extra`), as they are, except a
+    kept `luni`: the name wins.
 - **Composite image:**
   - the caller's `composite` when set (the full canvas, straight alpha), whatever the layers
     hold: flattening layers is rendering, the caller's domain;
@@ -218,9 +220,14 @@ caller's memory:
     readers subtract the white back out. The writer mattes, a supplied composite too, unless
     `composite_matted` says it already is: then it is written byte for byte.
 - **Image resources:**
-  - 1005 ResolutionInfo: dpi as 16.16 fixed point, unit inches;
+  - 1005 ResolutionInfo: dpi as 16.16 fixed point, unit inches; a kept 1005 that says the same
+    dpi is written instead, with its own units and vertical resolution;
   - 1039 ICC profile, only when `icc` is set;
+  - then the resources kept from a file (`resources`), in order, with their names, except 1005
+    and 1039: `dpi` and `icc` win;
   - a resource of odd length is padded to even.
+- **After the layer info:** the kept `layer_tail` (global layer mask, global blocks) as it is,
+  or an empty global layer mask.
 - **Compression:** PackBits RLE (runs from 3 bytes, packets up to 128 bytes) or raw.
   Row byte counts are computed in a separate sizing pass, so output streams forward through the
   callback and never seeks back.
@@ -250,10 +257,10 @@ them; nothing is copied or allocated. Results on real files from other programs:
     wrong bytes at the start are `MINIPSD_ERR_FORMAT`.
 - **Header and resources:** size, channels, depth, colour mode; dpi from resource 1005
   (horizontal, 0 without it); the ICC profile from 1039. Every resource, these two included, is
-  also returned as a raw view, in file order.
+  also returned as a raw view, with its name, in file order.
 - **Layer records**, bottom first:
   - the rectangle; one stored inverted (Photoshop's fill layers) comes back empty;
-  - opacity, visibility, the blend mode's key, as stored;
+  - opacity, visibility, the blend mode's key, clipping and the flag bits, as stored;
   - the name: the `luni` block when there is one, otherwise the legacy name read as Latin-1;
     an unpaired surrogate becomes U+FFFD and a U+0000 ends the name;
   - the channels red, green, blue and transparency as views of their stored data; any other
@@ -264,11 +271,13 @@ them; nothing is copied or allocated. Results on real files from other programs:
 - **The composite:** un-matted to straight alpha (see [API](#api)), or as stored with
   `keep_matte`; a file whose layer count is positive has no transparency in it, and its composite
   decodes as opaque.
-- **Not read:** the colour mode data (palettes), the global layer mask information and the
-  global additional-information blocks that follow the layer records.
+- **The layer tail:** the global layer mask information and the global additional-information
+  blocks that follow the layer info, as one raw view (`minipsd_info.layer_tail`).
+- **Not read:** the colour mode data (palettes).
 - **As a document** (`minipsd_read`): 8-bit RGB files; each layer's rectangle, name, opacity,
-  visibility and decoded pixels, the composite as stored (`composite_matted`), the dpi (72 when
-  none is stored) and the ICC profile, all copied into one block. A file without layers gets one,
+  visibility, blend key, clipping, flags, decoded pixels and blocks, the composite as stored
+  (`composite_matted`), the dpi (72 when none is stored), the ICC profile, every resource and the
+  layer tail, all copied into one block. A file without layers gets one,
   "Background", holding its image. Anything else is reported in `lost` (`MINIPSD_LOST_*`), never
   dropped silently.
 - **A prefix is enough** for what lies inside it: `MINIPSD_ERR_SHORT` with

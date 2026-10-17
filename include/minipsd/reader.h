@@ -64,15 +64,6 @@ static int mpsd__length(minipsd_reader *r, uint64_t at, uint32_t *length)
     return rc;
 }
 
-/* Four bytes equal to a four-character tag. */
-static int mpsd__tag(const uint8_t *p, const char *tag)
-{
-    size_t i;
-    for (i = 0; i < 4; ++i)
-        if (p[i] != (uint8_t)tag[i]) return 0;
-    return 1;
-}
-
 /* The first bytes of the buffer, as many as there are, agree with the signature. */
 static int mpsd__starts(const minipsd_reader *r, const char *signature)
 {
@@ -97,6 +88,8 @@ static int mpsd__resource(const minipsd_reader *r, uint64_t at, minipsd_resource
     pos += 4;
     if (size + (size & 1) > r->res_end - pos) return MINIPSD_ERR_FORMAT;
     res->id        = (uint16_t)mpsd__get16(d + (size_t)at + 4);
+    res->name.data = d + (size_t)at + 7;
+    res->name.size = d[(size_t)at + 6];
     res->data.data = d + (size_t)pos;
     res->data.size = (size_t)size;
     *next          = pos + size + (size & 1);
@@ -119,6 +112,8 @@ static void mpsd__info_clear(minipsd_info *i)
     i->icc.size = 0;
     i->layer_count = 0;
     i->composite_has_alpha = 0;
+    i->layer_tail.data = NULL;
+    i->layer_tail.size = 0;
 }
 
 static int mpsd__depth_ok(uint32_t depth) { return depth == 1 || depth == 8 || depth == 16 || depth == 32; }
@@ -184,11 +179,15 @@ static int mpsd__scan(minipsd_reader *r, minipsd_info *info)
     if (rc != MINIPSD_OK) return rc;
     lm_start = r->res_end + 4;
     if (length != 0) {
-        uint32_t info_length;
+        uint32_t       info_length;
+        uint64_t       tail;
         if (length < 4) return MINIPSD_ERR_FORMAT;
         rc = mpsd__length(r, lm_start, &info_length);
         if (rc != MINIPSD_OK) return rc;
         if (info_length > length - 4u || info_length == 1) return MINIPSD_ERR_FORMAT;
+        tail = lm_start + 4 + info_length;                     /* the global layer mask, the global blocks */
+        in.layer_tail.size = (size_t)(lm_start + length - tail);
+        if (lm_start + length <= r->size) in.layer_tail.data = d + (size_t)tail;
         if (info_length != 0) {
             rc = mpsd__have(r, lm_start + 6);
             if (rc != MINIPSD_OK) return rc;
@@ -272,24 +271,6 @@ MINIPSDDEF int minipsd_reader_next_resource(minipsd_reader *r, minipsd_resource 
 }
 
 /* --- layers: a record each, then every layer's channel data --- */
-
-/* A layer's additional information is a run of blocks: '8BIM' (or '8B64'), a key, a length, the
-   data.  The length already includes any padding. */
-static int mpsd__block(minipsd_bytes region, size_t pos, minipsd_block *block, size_t *next)
-{
-    const uint8_t *p    = region.data + pos;
-    const size_t   left = region.size - pos;
-    size_t         size, i;
-    if (left < 12 || !(mpsd__tag(p, "8BIM") || mpsd__tag(p, "8B64"))) return MINIPSD_ERR_FORMAT;
-    size = mpsd__get32(p + 8);
-    if (size > left - 12) return MINIPSD_ERR_FORMAT;
-    for (i = 0; i < 4; ++i) block->key[i] = (char)p[4 + i];
-    block->key[4]    = '\0';
-    block->data.data = p + 12;
-    block->data.size = size;
-    *next            = pos + 12 + size;
-    return MINIPSD_OK;
-}
 
 /* One layer record, parsed.  The channel data is not in the record: for the colour channels it
    keeps where each one starts in the layer's run of channel data, and how long it is. */
@@ -406,7 +387,9 @@ static int mpsd__record(minipsd_reader *r, uint64_t at, mpsd__rec *rec)
     for (k = 0; k < 4; ++k) v->blend[k] = (char)d[(size_t)pos + 4 + k];
     v->blend[4] = '\0';
     v->opacity  = d[(size_t)pos + 8];
-    v->hidden   = (d[(size_t)pos + 10] & 0x02) != 0;
+    v->clipping = d[(size_t)pos + 9];
+    v->flags    = d[(size_t)pos + 10];
+    v->hidden   = (v->flags & 0x02) != 0;
     extra       = mpsd__get32(d + (size_t)pos + 12);
     extra_end   = pos + 16 + extra;
     rc = mpsd__room(r, extra_end);

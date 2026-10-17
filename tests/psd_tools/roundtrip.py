@@ -4,7 +4,10 @@ The documents and the expected results are built here, in Python, not taken from
 project's own test reader shares the writer's reading of the format, and once let a composite
 that was not matted against white pass. psd-tools is how other programs will see the files.
 
-Usage: roundtrip.py <minipsd shared library> <output directory>
+It also reads files from other programs with minipsd_read and writes them back with
+minipsd_write: every block, resource and global block psd-tools finds must come back the same.
+
+Usage: roundtrip.py <minipsd shared library> <output directory> [<psd-tools' psd_files directory>]
 
 SPDX-License-Identifier: MIT
 SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
@@ -20,18 +23,25 @@ MINIPSD_OK, MINIPSD_RLE, MINIPSD_RAW = 0, 0, 1
 WRITE_FN = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t)
 
 
+class Bytes(ctypes.Structure):
+    _fields_ = [("data", ctypes.c_void_p), ("size", ctypes.c_size_t)]
+
+
 class Layer(ctypes.Structure):
     _fields_ = [("name", ctypes.c_char_p), ("rgba", ctypes.c_void_p),
                 ("opacity", ctypes.c_uint8), ("hidden", ctypes.c_uint8),
                 ("top", ctypes.c_int32), ("left", ctypes.c_int32),
-                ("bottom", ctypes.c_int32), ("right", ctypes.c_int32)]
+                ("bottom", ctypes.c_int32), ("right", ctypes.c_int32),
+                ("blend", ctypes.c_char * 4), ("clipping", ctypes.c_uint8), ("flags", ctypes.c_uint8),
+                ("extra", Bytes)]
 
 
 class Doc(ctypes.Structure):
     _fields_ = [("width", ctypes.c_uint32), ("height", ctypes.c_uint32), ("dpi", ctypes.c_double),
                 ("layers", ctypes.POINTER(Layer)), ("layer_count", ctypes.c_size_t),
                 ("icc", ctypes.c_void_p), ("icc_size", ctypes.c_size_t), ("compression", ctypes.c_int),
-                ("composite", ctypes.c_void_p), ("composite_matted", ctypes.c_int)]
+                ("composite", ctypes.c_void_p), ("composite_matted", ctypes.c_int),
+                ("resources", ctypes.c_void_p), ("resource_count", ctypes.c_size_t), ("layer_tail", Bytes)]
 
 
 # --- the documents --------------------------------------------------------------------------------
@@ -200,10 +210,68 @@ def check(name, psd, w, h, dpi, layers):
     return errors
 
 
+# --- files from other programs: read, written back, what is kept compared --------------------------
+
+# Files with text, effects, groups and resources of every kind; read whole, written back as they are.
+KEPT_FILES = ["text.psd", "layer_effects.psd", "group.psd", "blend-and-clipping.psd", "unicode_pathname.psd"]
+
+
+def resave(lib, source, path):
+    data = source.read_bytes()
+    doc = ctypes.POINTER(Doc)()
+    lost = ctypes.c_uint32(0)
+    rc = lib.minipsd_read(data, len(data), None, ctypes.byref(doc), ctypes.byref(lost))
+    if rc != MINIPSD_OK:
+        return rc, 0
+    out = bytearray()
+
+    def collect(_user, chunk, size):
+        out.extend(ctypes.string_at(chunk, size))
+        return 1
+
+    rc = lib.minipsd_write(doc, WRITE_FN(collect), None)
+    lib.minipsd_doc_free(doc)
+    if rc == MINIPSD_OK:
+        path.write_bytes(out)
+    return rc, lost.value
+
+
+def check_kept(name, before, after):
+    """Every layer's blocks, every resource and every global block, byte for byte as psd-tools
+    writes them, in any order; blend key, clipping and flags of every record."""
+    errors = []
+
+    def same(what, a, b):
+        if a != b:
+            errors.append(f"{name}: {what} differ")
+
+    def blocks(tagged):
+        return {key: block.tobytes() for key, block in tagged.items()}
+
+    def resources(psd):
+        return {key: resource.tobytes() for key, resource in psd.image_resources.items()}
+
+    same("resources", resources(before), resources(after))
+    gb, ga = before._record.layer_and_mask_information, after._record.layer_and_mask_information
+    same("global blocks", blocks(gb.tagged_blocks) if gb.tagged_blocks else {}, blocks(ga.tagged_blocks) if ga.tagged_blocks else {})
+    same("global layer mask", gb.global_layer_mask_info, ga.global_layer_mask_info)
+    rb, ra = gb.layer_info.layer_records, ga.layer_info.layer_records
+    same("layer count", len(rb), len(ra))
+    for i, (b, a) in enumerate(zip(rb, ra)):
+        same(f"layer {i} blocks", blocks(b.tagged_blocks), blocks(a.tagged_blocks))
+        same(f"layer {i} blend, clipping, flags", (b.blend_mode, b.clipping, b.flags), (a.blend_mode, a.clipping, a.flags))
+    return errors
+
+
 def main():
     lib = ctypes.CDLL(sys.argv[1])
     lib.minipsd_write.argtypes = [ctypes.POINTER(Doc), WRITE_FN, ctypes.c_void_p]
     lib.minipsd_write.restype = ctypes.c_int
+    lib.minipsd_read.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_void_p,
+                                 ctypes.POINTER(ctypes.POINTER(Doc)), ctypes.POINTER(ctypes.c_uint32)]
+    lib.minipsd_read.restype = ctypes.c_int
+    lib.minipsd_doc_free.argtypes = [ctypes.POINTER(Doc)]
+    lib.minipsd_doc_free.restype = None
     out = pathlib.Path(sys.argv[2])
     out.mkdir(parents=True, exist_ok=True)
 
@@ -217,6 +285,19 @@ def main():
         found = check(name, PSDImage.open(path), w, h, dpi, layers)
         errors += found
         print(f"{name}: {'FAILED' if found else 'ok'}")
+
+    files = pathlib.Path(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] else None
+    if files is None:
+        print("kept content: skipped, no psd-tools files (MINIPSD_PSD_TOOLS_FILES)")
+    for name in KEPT_FILES if files else []:
+        path = out / f"resaved-{name}"
+        rc, lost = resave(lib, files / name, path)
+        if rc != MINIPSD_OK:
+            errors.append(f"{name}: minipsd_read or minipsd_write returned {rc}")
+            continue
+        found = check_kept(name, PSDImage.open(files / name), PSDImage.open(path))
+        errors += found
+        print(f"resaved {name} (lost {lost}): {'FAILED' if found else 'ok'}")
     for e in errors:
         print(e)
     return 1 if errors else 0

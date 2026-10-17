@@ -510,12 +510,14 @@ TEST(MinipsdReaderTest, ResourcesWithNamesAndOddSizesAreWalkedCorrectly)
     EXPECT_DOUBLE_EQ(o.info.dpi, 150.25);
     EXPECT_EQ(o.info.icc.size, 3u);
 
-    const std::pair<int, std::size_t> expected[] = {{1036, 7}, {2000, 4}, {1005, 16}, {1039, 3}, {1005, 16}, {1039, 9}};
-    for (const auto &e : expected) {
+    const std::tuple<int, std::size_t, std::string> expected[] = {
+        {1036, 7, "ab"}, {2000, 4, "abc"}, {1005, 16, ""}, {1039, 3, ""}, {1005, 16, ""}, {1039, 9, ""}};
+    for (const auto &[id, size, name] : expected) {
         minipsd_resource res;
         ASSERT_EQ(minipsd_reader_next_resource(o.r, &res), MINIPSD_MORE);
-        EXPECT_EQ(res.id, e.first);
-        EXPECT_EQ(res.data.size, e.second);
+        EXPECT_EQ(res.id, id);
+        EXPECT_EQ(res.data.size, size);
+        EXPECT_EQ(std::string(reinterpret_cast<const char *>(res.name.data), res.name.size), name);
     }
 }
 
@@ -743,6 +745,8 @@ TEST(MinipsdReaderTest, ALayerMaskAndBlendingRangesAreSkipped)
     EXPECT_STREQ(v.blend, "mul ");
     EXPECT_EQ(v.opacity, 77);
     EXPECT_NE(v.hidden, 0);
+    EXPECT_EQ(v.flags, 0x0B) << "as stored";
+    EXPECT_EQ(v.clipping, 0);
     EXPECT_EQ(v.name_unicode.data, nullptr) << "no 'luni' in this record";
 }
 
@@ -1669,10 +1673,10 @@ TEST(MinipsdReadTest, LostSaysWhatTheDocumentCannotCarry)
         {"a channel beyond RGBA", MINIPSD_LOST_CHANNELS, [](Spec &, Rec &r) { r.channels.push_back(chan(3, 6, 0)); }},
         {"an alpha channel of the composite", MINIPSD_LOST_CHANNELS,
          [](Spec &s, Rec &) { s.channels = 5; s.image = rawImage(5, 2, 2, 0); }},
-        {"a blend mode", MINIPSD_LOST_EXTRA, [](Spec &, Rec &r) { r.blendKey = "mul "; }},
-        {"a block other than the name", MINIPSD_LOST_EXTRA, [](Spec &, Rec &r) { r.blocks = block("lsct", Bytes(4, 0)); }},
-        {"a vector mask", MINIPSD_LOST_MASK | MINIPSD_LOST_EXTRA, [](Spec &, Rec &r) { r.blocks = block("vmsk", Bytes(8, 0)); }},
-        {"a resource other than resolution and ICC", MINIPSD_LOST_EXTRA,
+        {"a blend mode, kept", 0, [](Spec &, Rec &r) { r.blendKey = "mul "; }},
+        {"a block other than the name, kept", 0, [](Spec &, Rec &r) { r.blocks = block("lsct", Bytes(4, 0)); }},
+        {"a vector mask: a block, kept", 0, [](Spec &, Rec &r) { r.blocks = block("vmsk", Bytes(8, 0)); }},
+        {"a resource other than resolution and ICC, kept", 0,
          [](Spec &s, Rec &) { s.resources = resource(1036, Bytes(8, 1)); }},
         {"blending ranges", MINIPSD_LOST_BLENDING_RANGES, [](Spec &, Rec &r) {
              Out x;   // no mask; one range pair that is not "0 0 255 255"; the name "L"
@@ -1730,6 +1734,45 @@ std::vector<std::filesystem::path> filesFromOtherPrograms()
     }
     std::sort(files.begin(), files.end());
     return files;
+}
+
+// What a file written back from a document keeps of the original, through the reader: resources
+// (1005 and 1039 come from dpi and icc), every layer's blend key, clipping, flags and blocks
+// ('luni' comes from the name), and the layer tail, byte for byte.
+void expectKeptAlike(const Bytes &before, const Bytes &after)
+{
+    Open a(before), b(after);
+    ASSERT_EQ(a.rc, MINIPSD_OK);
+    ASSERT_EQ(b.rc, MINIPSD_OK);
+    auto resources = [](minipsd_reader *r) {
+        std::vector<std::tuple<int, Bytes, Bytes>> out;
+        minipsd_resource res;
+        while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE)
+            if (res.id != 1005 && res.id != 1039)
+                out.emplace_back(res.id, Bytes(res.data.data, res.data.data + res.data.size),
+                                 Bytes(res.name.data, res.name.data + res.name.size));
+        return out;
+    };
+    EXPECT_EQ(resources(a.r), resources(b.r));
+    auto tail = [](const minipsd_info &i) {   // none at all is an empty global layer mask
+        return i.layer_tail.size ? Bytes(i.layer_tail.data, i.layer_tail.data + i.layer_tail.size) : Bytes(4, 0);
+    };
+    EXPECT_EQ(tail(a.info), tail(b.info));
+    auto blocks = [](const minipsd_layer_view &v) {
+        std::vector<std::pair<std::string, Bytes>> out;
+        minipsd_block blk;
+        for (std::size_t pos = 0; minipsd_layer_next_block(&v, &pos, &blk) == MINIPSD_MORE;)
+            if (std::string(blk.key) != "luni") out.emplace_back(blk.key, Bytes(blk.data.data, blk.data.data + blk.data.size));
+        return out;
+    };
+    minipsd_layer_view va, vb;
+    while (minipsd_reader_next_layer(a.r, &va) == MINIPSD_MORE) {
+        ASSERT_EQ(minipsd_reader_next_layer(b.r, &vb), MINIPSD_MORE);
+        EXPECT_STREQ(va.blend, vb.blend);
+        EXPECT_EQ(va.clipping, vb.clipping);
+        EXPECT_EQ(va.flags, vb.flags);
+        EXPECT_EQ(blocks(va), blocks(vb));
+    }
 }
 
 Bytes readFile(const std::filesystem::path &path)
@@ -1803,6 +1846,7 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
                 if (a.rgba && b.rgba) { EXPECT_TRUE(std::equal(a.rgba, a.rgba + n, b.rgba)); }
             }
             EXPECT_TRUE(std::equal(d->composite, d->composite + composite.size(), e->composite));
+            expectKeptAlike(file, again);
         }
 
         // In parts, as a download or a file manager would: grow the prefix to exactly what `needed`

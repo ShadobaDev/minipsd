@@ -139,9 +139,9 @@ int main(int argc, char **argv)
         rc = minipsd_read(data, size, NULL, &doc, &lost);
         if (rc != MINIPSD_OK) { printf("as a document: %s\n", minipsd_error_string(rc)); failed = 1; }
         else if (!lost)       printf("as a document: everything kept\n");
-        else printf("as a document, lost:%s%s%s%s\n", lost & MINIPSD_LOST_MASK ? " masks" : "",
+        else printf("as a document, lost:%s%s%s\n", lost & MINIPSD_LOST_MASK ? " masks" : "",
                     lost & MINIPSD_LOST_BLENDING_RANGES ? " blending-ranges" : "",
-                    lost & MINIPSD_LOST_CHANNELS ? " channels" : "", lost & MINIPSD_LOST_EXTRA ? " extra" : "");
+                    lost & MINIPSD_LOST_CHANNELS ? " channels" : "");
         minipsd_doc_free(doc);
     }
     free(data);

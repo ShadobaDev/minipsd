@@ -70,6 +70,25 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
         EXPECT_EQ(minipsd_doc_check(&d), c.rc) << c.top << ", " << c.left << ", " << c.bottom << ", " << c.right;
     }
 
+    // Kept content: a size without its data, a resource name longer than a Pascal string, blocks
+    // that do not parse.
+    const std::uint8_t one[1] = {0};
+    const std::string longName(256, 'n');
+    const minipsd_resource noData{1036, {nullptr, 4}, {}}, longNamed{1036, {}, {reinterpret_cast<const std::uint8_t *>(longName.data()), 256}};
+    d = docOf(2, 2, &layer, 1); d.resource_count = 1;
+    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_ARG) << "a resource count without resources";
+    d.resources = &noData;
+    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_ARG) << "a resource size without data";
+    d.resources = &longNamed;
+    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_SIZE) << "a resource name over 255 bytes";
+    d = docOf(2, 2, &layer, 1); d.layer_tail = {nullptr, 4};
+    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_ARG) << "a layer tail size without data";
+    for (const minipsd_bytes extra : {minipsd_bytes{nullptr, 12}, minipsd_bytes{one, 1}}) {
+        const minipsd_layer bad{.name = "L", .rgba = px.data(), .opacity = 255, .extra = extra};
+        d = docOf(2, 2, &bad, 1);
+        EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_ARG) << "extra of " << extra.size << " bytes";
+    }
+
     // The resources' length is 32-bit; the ICC size alone decides it, so no ICC byte is read and a
     // 4-byte buffer stands in for 4 GiB.
     const std::uint8_t stand_in[4] = {};

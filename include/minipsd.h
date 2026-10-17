@@ -47,8 +47,9 @@
  * \par What it writes
  * An 8-bit RGB document (PSD version 1) with a transparency channel:
  * - one or more layers, bottom first, each a rectangle anywhere on or off the canvas (by default
- *   the full canvas) or empty, with a name, opacity and visibility; names go out both as a legacy
- *   Pascal string (ASCII) and as Unicode ('luni');
+ *   the full canvas) or empty, with a name, opacity, visibility, blend key, clipping and flags;
+ *   names go out both as a legacy Pascal string (ASCII) and as Unicode ('luni'), followed by any
+ *   blocks kept from a file (text, effects, groups, ...);
  * - the composite (merged) image, which is what a reader that ignores layers shows: the caller's
  *   own render (minipsd_doc.composite), the right way, since flattening layers is rendering; or,
  *   without one, a best effort with no guarantee: the visible layers blended with straight-alpha
@@ -56,11 +57,13 @@
  *   channel, flagged by a negative layer count, and its colour is matted against white
  *   (c * a + 255 * (1 - a)), as Photoshop stores it and readers expect to undo;
  * - the resolution, in pixels per inch (resource 1005);
- * - an optional ICC profile (resource 1039); without one, readers assume sRGB.
+ * - an optional ICC profile (resource 1039); without one, readers assume sRGB;
+ * - resources and the global layer mask and blocks kept from a file, as they are.
  *
  * Channel data is PackBits RLE by default (small for flat art), or raw.
  *
- * Not written: 16/32-bit, other colour modes, masks, groups, blend modes other than normal, PSB.
+ * Not written: 16/32-bit, other colour modes, layer masks, PSB.  Groups, text and effects only as
+ * blocks kept from a file.
  * PSD caps each side at 30000 px; larger documents are refused (MINIPSD_ERR_SIZE).
  *
  * \par Output
@@ -169,6 +172,31 @@ enum {
 };
 
 /**
+ * \brief A read-only run of bytes inside a buffer the caller owns.
+ *
+ * Every view the reader hands out points into the buffer given to minipsd_reader_init, and is valid
+ * for as long as that buffer is unchanged.  Nothing is copied.  In a document, it is content kept
+ * from a file and written back as it is, borrowed like every other pointer there.
+ */
+typedef struct minipsd_bytes {
+    const uint8_t *data; /*!< The first byte; NULL for a view that does not exist.  */
+    size_t         size; /*!< How many bytes.                                       */
+} minipsd_bytes;
+
+/** \brief One image resource: a numbered block of the file, such as 1036, the embedded thumbnail. */
+typedef struct minipsd_resource {
+    uint16_t      id;   /*!< The resource's number.                                    */
+    minipsd_bytes data; /*!< Its bytes, without the padding.                           */
+    minipsd_bytes name; /*!< Its name, raw bytes of a Pascal string; usually empty.     */
+} minipsd_resource;
+
+/** \brief One tagged block of a layer's additional information ('luni', 'lsct', 'tySh', ...). */
+typedef struct minipsd_block {
+    char          key[5]; /*!< The four-character key, then a NUL.  */
+    minipsd_bytes data;   /*!< The block's bytes.                   */
+} minipsd_block;
+
+/**
  * \brief One layer of a document.
  *
  * Every pointer is borrowed: it must stay valid for the duration of the write call, and minipsd
@@ -184,6 +212,17 @@ typedef struct minipsd_layer {
                                  minipsd_layer_view; all four zero: the full canvas.  It may reach
                                  past the canvas, or lie wholly outside it.  An empty layer's has
                                  no area.                                                       */
+    char           blend[4]; /*!< The blend mode's four-character key, such as "mul "; all zero:
+                                 "norm".  Written as given; the composed composite draws every
+                                 mode as normal.                                                */
+    uint8_t        clipping; /*!< Non-zero: clipped to the layer below.  Written as given.        */
+    uint8_t        flags;    /*!< The record's other flag bits, written as given: 0x01 transparency
+                                 locked, 0x08 and 0x10 pixel data irrelevant (groups' markers).
+                                 Bit 0x02 is ignored: hidden says it.                           */
+    minipsd_bytes  extra;    /*!< Additional-information blocks kept from a file (text, effects,
+                                 groups, ...), as minipsd_layer_view.extra holds them: written
+                                 after the layer's own name, except a 'luni' block, since name
+                                 wins.                                                          */
 } minipsd_layer;
 
 /**
@@ -209,6 +248,15 @@ typedef struct minipsd_doc {
                                               minipsd_decode_composite gives with keep_matte),
                                               and is written as it is.  Ignored without
                                               composite.                                     */
+    const minipsd_resource *resources;   /*!< Image resources kept from a file (thumbnail, guides,
+                                              ...), written in order after the resolution and the
+                                              ICC profile, except 1005 and 1039: dpi and icc
+                                              win.                                           */
+    size_t               resource_count; /*!< How many resources.                            */
+    minipsd_bytes        layer_tail;     /*!< The rest of the layer and mask section kept from a
+                                              file (minipsd_info.layer_tail): the global layer
+                                              mask and the global blocks, written as they are.
+                                              Empty: no global mask, no blocks.               */
 } minipsd_doc;
 
 /**
@@ -222,11 +270,12 @@ typedef struct minipsd_doc {
  * \return MINIPSD_OK or an error code.
  *
  * \retval MINIPSD_ERR_ARG  doc is NULL, there are no layers (or more than 32767), dpi is outside
- *                          (0, 65536), icc_size is set without icc, a layer's rectangle is
- *                          inverted, or an empty layer's has an area.
+ *                          (0, 65536), a size is set without its data (icc, a resource, a name,
+ *                          extra, layer_tail), a layer's rectangle is inverted, an empty layer's
+ *                          has an area, or extra is not a run of well-formed blocks.
  * \retval MINIPSD_ERR_SIZE A side of the canvas or of a layer is 0 or above MINIPSD_MAX_SIDE (a
- *                          layer's may be 0), or the ICC profile does not fit a 32-bit section
- *                          length.
+ *                          layer's may be 0), a resource name is longer than 255 bytes, or the
+ *                          resources or a layer's extra data do not fit a 32-bit length.
  */
 MINIPSDDEF int minipsd_doc_check(const minipsd_doc *doc);
 
@@ -339,17 +388,6 @@ MINIPSDDEF int minipsd_writer_fill(minipsd_writer *w, void *buf, size_t cap, siz
 /* --- Reader -------------------------------------------------------------------------------- */
 
 /**
- * \brief A read-only run of bytes inside a buffer the caller owns.
- *
- * Every view the reader hands out points into the buffer given to minipsd_reader_init, and is valid
- * for as long as that buffer is unchanged.  Nothing is copied.
- */
-typedef struct minipsd_bytes {
-    const uint8_t *data; /*!< The first byte; NULL for a view that does not exist.  */
-    size_t         size; /*!< How many bytes.                                       */
-} minipsd_bytes;
-
-/**
  * \brief What the reader refuses to look at.  Zero fields keep the format's own limits.
  *
  * Fields are only ever added at the end, and zero keeps the previous behaviour.
@@ -380,19 +418,10 @@ typedef struct minipsd_info {
     size_t        layer_count;         /*!< Layers in the file.                                        */
     int           composite_has_alpha; /*!< Non-zero: the composite's first extra channel is transparency
                                             (the file's layer count is negative).                      */
+    minipsd_bytes layer_tail;          /*!< The layer and mask section after the layer info: the global
+                                            layer mask and the global blocks.  data is NULL with a size
+                                            when the buffer ends before its end.                       */
 } minipsd_info;
-
-/** \brief One image resource: a numbered block of the file, such as 1036, the embedded thumbnail. */
-typedef struct minipsd_resource {
-    uint16_t      id;   /*!< The resource's number.               */
-    minipsd_bytes data; /*!< Its bytes, without the padding.      */
-} minipsd_resource;
-
-/** \brief One tagged block of a layer's additional information ('luni', 'lsct', 'tySh', ...). */
-typedef struct minipsd_block {
-    char          key[5]; /*!< The four-character key, then a NUL.  */
-    minipsd_bytes data;   /*!< The block's bytes.                   */
-} minipsd_block;
 
 /** \brief The index of a colour channel in minipsd_layer_view.channel. */
 enum {
@@ -430,6 +459,8 @@ typedef struct minipsd_layer_view {
                                                  absent one): a buffer holds the channel once it reaches
                                                  channel_offset + size.                                */
     uint16_t      other_channels;           /*!< Channels the reader does not read (masks, ...).       */
+    uint8_t       clipping;                 /*!< Non-zero: clipped to the layer below.                 */
+    uint8_t       flags;                    /*!< The record's flag bits as stored (0x02 is hidden).    */
 } minipsd_layer_view;
 
 /**
@@ -654,15 +685,11 @@ MINIPSDDEF int minipsd_decode_composite(minipsd_reader *r, const minipsd_target 
  * description of it) at the project's address.
  */
 enum {
-    MINIPSD_LOST_MASK            = 1, /*!< Layer or vector masks: mask data and mask channels.     */
+    MINIPSD_LOST_MASK            = 1, /*!< Layer masks: mask data and mask channels.  Vector masks
+                                           are blocks, kept.                                         */
     MINIPSD_LOST_BLENDING_RANGES = 2, /*!< A layer's blending ranges ("Blend If") not left alone.  */
-    MINIPSD_LOST_CHANNELS        = 4, /*!< Channels beyond R, G, B, transparency and masks: alpha
+    MINIPSD_LOST_CHANNELS        = 4  /*!< Channels beyond R, G, B, transparency and masks: alpha
                                            and spot channels, of a layer or of the composite.     */
-    MINIPSD_LOST_EXTRA           = 8  /*!< Content the document has no field for yet: a blend mode
-                                           other than normal, clipping, a layer's additional blocks
-                                           other than its name (text, effects, groups' markers),
-                                           resources other than resolution and ICC, the global
-                                           layer mask and global blocks.                         */
 };
 
 /**
@@ -680,9 +707,10 @@ MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_li
 /**
  * \brief Reads a whole file into one block of the caller's: a document the writer accepts as it is.
  *
- * Everything is copied into the block (names, pixels, the composite, the ICC profile), so data may
- * be freed as soon as the call returns; the document lives as long as the block.  Each layer comes
- * with its rectangle, opacity, visibility and decoded pixels; the composite as the file stores it,
+ * Everything is copied into the block (names, pixels, the composite, the ICC profile, kept
+ * blocks, resources and the layer tail), so data may be freed as soon as the call returns; the
+ * document lives as long as the block.  Each layer comes with its rectangle, opacity, visibility,
+ * blend key, clipping, flags, decoded pixels and its blocks as they are; the composite as the file stores it,
  * with composite_matted set, so writing the document gives the same image back.  A file without
  * layers gets one, "Background", holding its image.  A file without a resolution gets 72 dpi.
  *

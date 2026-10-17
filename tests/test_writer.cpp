@@ -150,6 +150,78 @@ TEST(MinipsdWriterTest, ASuppliedCompositeIsMattedAndWrittenWithoutComposing)
     }
 }
 
+namespace {
+
+// One block of a layer's additional information, as a file stores it.
+Bytes tagged(const char *key, const Bytes &data)
+{
+    Bytes b = {'8', 'B', 'I', 'M'};
+    b.insert(b.end(), key, key + 4);
+    const auto n = static_cast<std::uint32_t>(data.size());
+    for (int shift : {24, 16, 8, 0}) b.push_back(static_cast<std::uint8_t>(n >> shift));
+    b.insert(b.end(), data.begin(), data.end());
+    return b;
+}
+
+Bytes operator+(Bytes a, const Bytes &b) { a.insert(a.end(), b.begin(), b.end()); return a; }
+
+minipsd_bytes view(const Bytes &b) { return {b.data(), b.size()}; }
+
+} // namespace
+
+TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
+{
+    const Bytes px = testImage(2, 2);
+    const Bytes lsct = tagged("lsct", {0, 0, 0, 1}), tysh = tagged("TySh", Bytes(6, 7));
+    const Bytes extra = tagged("luni", {0, 0, 0, 1, 0, 'X', 0, 0}) + lsct + tysh;   // a stale name, then two blocks
+    const minipsd_layer layer{.name = "Mine", .rgba = px.data(), .opacity = 200, .hidden = 1,
+                              .blend = {'m', 'u', 'l', ' '}, .clipping = 1, .flags = 0x09, .extra = view(extra)};
+    const Bytes cm = {0, 150, 0, 0, 0, 1, 0, 2, 0, 150, 0, 0, 0, 1, 0, 2};   // 150 dpi, shown in centimetres
+    const Bytes thumb = {1, 2, 3}, oldIcc = {9, 9}, icc = {5, 6, 7}, nm = {'n', 'm'};
+    const minipsd_resource resources[3] = {{1005, view(cm), {}}, {1036, view(thumb), view(nm)}, {1039, view(oldIcc), {}}};
+    const Bytes tail = Bytes{0, 0, 0, 0} + tagged("Patt", Bytes(4, 1));
+    minipsd_doc d = docOf(2, 2, &layer, 1);
+    d.dpi = 150; d.icc = icc.data(); d.icc_size = icc.size();
+    d.resources = resources; d.resource_count = 3; d.layer_tail = view(tail);
+    const Bytes file = write(d);
+    EXPECT_EQ(pull(d, 7), file);
+    EXPECT_EQ(pullTotal(d), file.size());
+
+    Bytes workspace(256);
+    minipsd_reader *r = nullptr;
+    minipsd_info info{};
+    ASSERT_EQ(minipsd_reader_init(&r, file.data(), file.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
+    EXPECT_EQ(Bytes(info.icc.data, info.icc.data + info.icc.size), icc) << "icc wins over a kept 1039";
+    EXPECT_EQ(Bytes(info.layer_tail.data, info.layer_tail.data + info.layer_tail.size), tail);
+    minipsd_resource res;
+    std::vector<int> ids;
+    while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE) {
+        ids.push_back(res.id);
+        if (res.id == 1005) { EXPECT_EQ(Bytes(res.data.data, res.data.data + 16), cm) << "the same dpi: kept, units too"; }
+        if (res.id == 1036) { EXPECT_EQ(Bytes(res.name.data, res.name.data + res.name.size), nm); }
+    }
+    EXPECT_EQ(ids, (std::vector<int>{1005, 1039, 1036}));
+    minipsd_layer_view v;
+    ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
+    EXPECT_STREQ(v.blend, "mul ");
+    EXPECT_EQ(v.clipping, 1);
+    EXPECT_EQ(v.flags, 0x0B) << "0x09 as given, 0x02 from hidden";
+    char name[8];
+    ASSERT_EQ(minipsd_layer_name(&v, name, sizeof name, nullptr), MINIPSD_OK);
+    EXPECT_STREQ(name, "Mine") << "the name wins over a kept 'luni'";
+    const Bytes blocks(v.extra.data, v.extra.data + v.extra.size);
+    EXPECT_EQ(Bytes(blocks.end() - static_cast<std::ptrdiff_t>(lsct.size() + tysh.size()), blocks.end()), lsct + tysh)
+        << "kept blocks follow the writer's own 'luni', in order";
+
+    // Another dpi: the writer's own resolution, in inches.
+    d.dpi = 72;
+    const Bytes other = write(d);
+    ASSERT_EQ(minipsd_reader_init(&r, other.data(), other.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
+    EXPECT_EQ(info.dpi, 72.0);
+    ASSERT_EQ(minipsd_reader_next_resource(r, &res), MINIPSD_MORE);
+    EXPECT_EQ(res.data.data[7], 1) << "shown in inches";
+}
+
 // How the composite is computed is tested in test_composite.cpp; here, what the records keep.
 TEST(MinipsdWriterTest, RecordsKeepOpacityVisibilityAndPixelsAsGiven)
 {

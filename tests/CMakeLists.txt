@@ -211,7 +211,8 @@ elseif(_psd_tools_rc EQUAL 0)
     endif()
     add_test(NAME psd-tools-roundtrip
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/psd_tools/roundtrip.py"
-                "$<TARGET_FILE:minipsd-shared>" "${CMAKE_CURRENT_BINARY_DIR}/psd-tools")
+                "$<TARGET_FILE:minipsd-shared>" "${CMAKE_CURRENT_BINARY_DIR}/psd-tools"
+                "${_minipsd_psd_tools_files}")
 elseif(MINIPSD_REQUIRE_PSD_TOOLS)
     message(FATAL_ERROR "psd-tools is required but not importable by '${Python3_EXECUTABLE}' "
                         "(pip install -r tests/requirements.txt)")
