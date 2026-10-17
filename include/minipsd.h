@@ -11,6 +11,7 @@
  * - Document
  * - Writer
  * - Reader
+ * - Document from a file
  *
  * \par Usage
  * In exactly one C or C++ file:
@@ -34,8 +35,9 @@
  * Define before the implementation include:
  * - \c MINIPSD_STATIC: make every function static (private to that file);
  * - \c MINIPSD_MALLOC / \c MINIPSD_FREE: replace malloc / free (define both);
- * - \c MINIPSD_NO_MALLOC: leave out every allocation: minipsd_write goes (and <stdlib.h>); the
- *   pull writer, on the caller's memory, stays.
+ * - \c MINIPSD_NO_MALLOC: leave out every allocation: minipsd_write, minipsd_read and
+ *   minipsd_doc_free go (and <stdlib.h>); the pull writer, the reader and minipsd_read_into, on
+ *   the caller's memory, stay.
  *
  * minipsd does no I/O of its own and includes no <stdio.h>: files, pipes and sockets are the
  * caller's, fed by minipsd_write or minipsd_writer_fill (examples/ in the repository has each).
@@ -642,6 +644,81 @@ MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view 
  */
 MINIPSDDEF int minipsd_decode_composite(minipsd_reader *r, const minipsd_target *target, const minipsd_decode_opts *opts);
 
+/* --- Document from a file ------------------------------------------------------------------ */
+
+/**
+ * \brief What a document read from a file could not carry, as bits of minipsd_read's lost.
+ *
+ * 0 is the expected value.  Anything else is a loud warning: writing the document back drops that
+ * content.  Each bit is open work; please report a file that sets one (an issue with the file or a
+ * description of it) at the project's address.
+ */
+enum {
+    MINIPSD_LOST_MASK            = 1, /*!< Layer or vector masks: mask data and mask channels.     */
+    MINIPSD_LOST_BLENDING_RANGES = 2, /*!< A layer's blending ranges ("Blend If") not left alone.  */
+    MINIPSD_LOST_CHANNELS        = 4, /*!< Channels beyond R, G, B, transparency and masks: alpha
+                                           and spot channels, of a layer or of the composite.     */
+    MINIPSD_LOST_EXTRA           = 8  /*!< Content the document has no field for yet: a blend mode
+                                           other than normal, clipping, a layer's additional blocks
+                                           other than its name (text, effects, groups' markers),
+                                           resources other than resolution and ICC, the global
+                                           layer mask and global blocks.                         */
+};
+
+/**
+ * \brief How many bytes minipsd_read_into needs for a file: the document and all it holds.
+ *
+ * \param data       The whole file.
+ * \param size       How many bytes data holds.
+ * \param limits     As for minipsd_reader_init; max_decoded_bytes bounds all the pixels decoded,
+ *                   every layer and the composite together.  NULL keeps the format's limits.
+ * \param block_size Receives the size in bytes, alignment slack included.
+ * \return MINIPSD_OK or an error code: as minipsd_read.
+ */
+MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_limits *limits, size_t *block_size);
+
+/**
+ * \brief Reads a whole file into one block of the caller's: a document the writer accepts as it is.
+ *
+ * Everything is copied into the block (names, pixels, the composite, the ICC profile), so data may
+ * be freed as soon as the call returns; the document lives as long as the block.  Each layer comes
+ * with its rectangle, opacity, visibility and decoded pixels; the composite as the file stores it,
+ * with composite_matted set, so writing the document gives the same image back.  A file without
+ * layers gets one, "Background", holding its image.  A file without a resolution gets 72 dpi.
+ *
+ * \param data       The whole file.
+ * \param size       How many bytes data holds.
+ * \param limits     As for minipsd_read_size.
+ * \param block      At least minipsd_read_size bytes, any alignment.
+ * \param block_size The size of block in bytes.
+ * \param doc        Receives the document, inside block; NULL on failure.
+ * \param lost       Receives MINIPSD_LOST_* bits, 0 when the document carries everything; may be
+ *                   NULL.
+ * \return MINIPSD_OK or an error code.
+ *
+ * \retval MINIPSD_ERR_ARG         doc or block is NULL, or block_size is too small.
+ * \retval MINIPSD_ERR_UNSUPPORTED Not 8-bit RGB, ZIP-compressed pixels, a PSB, or a layer wider or
+ *                                 taller than MINIPSD_MAX_SIDE.
+ * \retval MINIPSD_ERR_SIZE        The document does not fit in memory (a block above SIZE_MAX).
+ * \retval MINIPSD_ERR_FORMAT, MINIPSD_ERR_SHORT, MINIPSD_ERR_LIMIT  As the reader.
+ */
+MINIPSDDEF int minipsd_read_into(const void *data, size_t size, const minipsd_limits *limits, void *block,
+                                 size_t block_size, minipsd_doc **doc, uint32_t *lost);
+
+#ifndef MINIPSD_NO_MALLOC
+/**
+ * \brief Reads a whole file into a document in one MINIPSD_MALLOC block; minipsd_doc_free frees it.
+ *
+ * minipsd_read_size and minipsd_read_into on a block of its own: the same document, the same
+ * return codes, and MINIPSD_ERR_ALLOC when the allocation fails.
+ */
+MINIPSDDEF int minipsd_read(const void *data, size_t size, const minipsd_limits *limits, minipsd_doc **doc,
+                            uint32_t *lost);
+
+/** \brief Frees a document from minipsd_read, through MINIPSD_FREE.  NULL does nothing. */
+MINIPSDDEF void minipsd_doc_free(minipsd_doc *doc);
+#endif
+
 #endif /* MINIPSD_H */
 
 /* ============================================================================================== */
@@ -650,6 +727,7 @@ MINIPSDDEF int minipsd_decode_composite(minipsd_reader *r, const minipsd_target 
 #include "minipsd/base.h"
 #include "minipsd/writer.h"
 #include "minipsd/reader.h"
+#include "minipsd/read.h"
 #endif
 
 /*

@@ -27,6 +27,12 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   `minipsd_doc`. The writer writes that image, matted against white unless marked as already
   matted, and composes nothing. Without one the layers are composed as before, now documented as
   a best effort.
+- `minipsd_read`: a whole 8-bit RGB file into a `minipsd_doc` that `minipsd_write` takes as it
+  is, every byte copied into one block so the file can be freed at once; `minipsd_doc_free`;
+  `minipsd_read_size` and `minipsd_read_into` for the caller's own memory. `lost`
+  (`MINIPSD_LOST_*`) says what the document could not carry: masks, blending ranges, extra
+  channels, and for now blend modes, clipping, blocks and resources.
+- `examples/read_file.c` also reads the file as a document and prints what it would lose.
 - Return codes `MINIPSD_ERR_FORMAT`, `MINIPSD_ERR_UNSUPPORTED`, `MINIPSD_ERR_SHORT`,
   `MINIPSD_ERR_LIMIT`, and `minipsd_limits` for untrusted files: the largest side (canvas, and
   layers when set), the most layers, the most bytes one decode call writes.

@@ -91,7 +91,8 @@ include/
   minipsd/
     base.h                     return-code texts
     writer.h                   the encoder (pull), plus the 0.1-compatible minipsd_write (push)
-    reader.h                   the decoder (later stage)
+    reader.h                   the decoder: views into the caller's bytes
+    read.h                     minipsd_read: a whole file into one standalone document, on the reader
     detail/
       bytes.h                  big-endian put/get on uint8_t pointers, bounds-checked cursor
       utf.h                    UTF-8 <-> UTF-16 for layer names
@@ -118,6 +119,7 @@ tools/
 | Document | `minipsd_doc`, `minipsd_layer` (unchanged from 0.1) | `minipsd_doc_check(doc)`: the validation `minipsd_write` does today, now callable on its own | `writer.h` today; its own file if the reader shares it |
 | Writer | `minipsd_writer` (opaque, built in the workspace) | `minipsd_writer_workspace_size`, `_init`, `_total`, `_fill`; `minipsd_write` | `writer.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
 | Reader | `minipsd_reader` (opaque, like the writer), `minipsd_info`, `minipsd_resource`, `minipsd_layer_view`, `minipsd_target` (of `minipsd_plane`), `minipsd_decode_opts`, `minipsd_limits` | `minipsd_reader_workspace_size`, `_init`, `_needed`, `_next_resource`, `_next_layer`, `minipsd_layer_name`, `minipsd_decode_layer`, `minipsd_decode_composite`, `minipsd_target_rgba` | `reader.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
+| Document from a file | `MINIPSD_LOST_*` | `minipsd_read_size`, `minipsd_read_into`, `minipsd_read`, `minipsd_doc_free` | `read.h`, on the public reader (and its record offsets, to tell what is lost) |
 
 Rules for the split:
 
@@ -514,17 +516,19 @@ Bytes to a document, the mirror of `minipsd_write`, built on the public reader:
 
 ```c
 /* Two phases: the caller owns the memory. */
-int minipsd_read_size(const void *data, size_t size, const minipsd_limits *limits,
-                      const minipsd_read_opts *opts, size_t *block_size);
+int minipsd_read_size(const void *data, size_t size, const minipsd_limits *limits, size_t *block_size);
 int minipsd_read_into(const void *data, size_t size, const minipsd_limits *limits,
-                      const minipsd_read_opts *opts, void *block, size_t block_size,
-                      minipsd_doc **doc, uint32_t *lost);
+                      void *block, size_t block_size, minipsd_doc **doc, uint32_t *lost);
 
 /* One call, through MINIPSD_MALLOC; gone with MINIPSD_NO_MALLOC, like minipsd_write. */
 int  minipsd_read    (const void *data, size_t size, const minipsd_limits *limits,
-                      const minipsd_read_opts *opts, minipsd_doc **doc, uint32_t *lost);
+                      minipsd_doc **doc, uint32_t *lost);
 void minipsd_doc_free(minipsd_doc *doc);   /* MINIPSD_FREE, so a replaced allocator stays right */
+```
 
+The pass-through step (S5.6) adds `const minipsd_read_opts *opts` after `limits` to all three:
+
+```c
 typedef struct minipsd_read_opts {
     int stored;   /* non-zero: each layer keeps its stored channels (stored) instead of pixels */
 } minipsd_read_opts;   /* NULL: decode every layer */
@@ -542,14 +546,19 @@ typedef struct minipsd_read_opts {
 
   | In the block | Size |
   |---|---|
-  | the `minipsd_doc`, the `minipsd_layer` array | `sizeof`; `layer_count` entries |
+  | the `minipsd_doc`, the `minipsd_layer` array (aligned) | `sizeof`; `layer_count` entries |
   | names, UTF-8 with their NUL | each name's `needed` |
   | each layer's pixels, or with `opts->stored` its stored channels | `w * h * 4`, or the channels' stored size |
   | the composite, as stored (matted), `composite_matted` set | `width * height * 4` |
   | `extra` blobs, resources, `layer_tail`, the ICC profile | their stored size |
 
   Non-pixel data is usually kilobytes (text, effects, a thumbnail); an embedded smart object can
-  reach megabytes and is copied too, the price of a document that stands alone.
+  reach megabytes and is copied too, the price of a document that stands alone. One function
+  lays the block out twice: measuring (`minipsd_read_size`), then placing and decoding.
+- **What the writer needs, the reader fills in.** A file without layers gets one, "Background",
+  the composite un-matted over the full canvas; a file without a resolution gets 72 dpi;
+  `compression` follows the composite's. A layer side above `MINIPSD_MAX_SIDE` is
+  `MINIPSD_ERR_UNSUPPORTED`, since the writer could not take it.
 - **`opts->stored`** decodes nothing: each layer keeps its compressed channels, a fraction of its
   pixels' size. The caller decodes the one layer it edits through the reader, from the same
   file, sets that layer's `rgba` and clears its `stored`, then writes. Untouched layers are never
@@ -569,15 +578,17 @@ typedef struct minipsd_read_opts {
 |---|---|
 | `MINIPSD_LOST_MASK` | layer and vector masks: the record's mask data and its mask channels |
 | `MINIPSD_LOST_BLENDING_RANGES` | the record's blending ranges ("Blend If") |
-| `MINIPSD_LOST_CHANNELS` | channels other than R, G, B, transparency and masks |
+| `MINIPSD_LOST_CHANNELS` | channels other than R, G, B, transparency and masks, of a layer or of the composite (a positive layer count makes a fourth composite channel an alpha channel) |
+| `MINIPSD_LOST_EXTRA` | until S5.5: a blend key other than `norm`, clipping, a layer's blocks other than `luni`, resources other than 1005 and 1039, a non-empty rest of the layer and mask section |
 
 - **Every known loss is tracked.** The code that sets a bit carries a `TODO` naming the ROADMAP
   step that will carry the content, so the list of bits is the list of open work.
 - **A loud warning, and a request.** The MANUAL asks whoever sees a non-zero `lost` to open an
   issue with the file or a description of it; the bits make the report precise.
-- **Not loss:** groups (their `lsct` blocks are in `extra`, the dividers are empty layers), text,
-  effects, smart objects and adjustments (blocks and `layer_tail`), blend keys and clipping
-  (fields), the composite (copied).
+- **Not loss once S5.5 lands:** groups (their `lsct` blocks are in `extra`, the dividers are
+  empty layers), text, effects, smart objects and adjustments (blocks and `layer_tail`), blend
+  keys and clipping (fields). The composite is copied, never lost. Blending ranges left at their
+  default (`0 0 255 255` for every pair) are not loss either.
 - **Document-wide.** Which layer has a mask, the reader tells; a per-layer list is an addition
   when a caller needs it.
 

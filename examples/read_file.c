@@ -1,6 +1,7 @@
 /**
  * \file
- * \brief Example: what a PSD holds, printed; every layer and the composite decoded once.
+ * \brief Example: what a PSD holds, printed; every layer and the composite decoded once; then
+ *        what a document read from it (minipsd_read) could not carry.
  *
  * The file is read whole into memory, then walked in place: the reader allocates nothing, and its
  * workspace sits on the stack.  Pixels are decoded into one buffer per image, to count how many
@@ -130,6 +131,19 @@ int main(int argc, char **argv)
     printf("composite:\n");
     if (info.depth != 8 || info.color_mode != 3) printf("      not 8-bit RGB: described, not decoded\n");
     else if (show_pixels(r, NULL, info.width, info.height) != MINIPSD_OK) failed = 1;
+
+    /* The same file as a document, which minipsd_write takes back: anything lost is worth an issue. */
+    if (info.depth == 8 && info.color_mode == 3) {
+        minipsd_doc *doc;
+        uint32_t     lost = 0;
+        rc = minipsd_read(data, size, NULL, &doc, &lost);
+        if (rc != MINIPSD_OK) { printf("as a document: %s\n", minipsd_error_string(rc)); failed = 1; }
+        else if (!lost)       printf("as a document: everything kept\n");
+        else printf("as a document, lost:%s%s%s%s\n", lost & MINIPSD_LOST_MASK ? " masks" : "",
+                    lost & MINIPSD_LOST_BLENDING_RANGES ? " blending-ranges" : "",
+                    lost & MINIPSD_LOST_CHANNELS ? " channels" : "", lost & MINIPSD_LOST_EXTRA ? " extra" : "");
+        minipsd_doc_free(doc);
+    }
     free(data);
     return failed;
 }

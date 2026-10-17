@@ -417,8 +417,9 @@ The byte limit is per call, so a layer larger than it can still be decoded in ba
 
 ## Memory and ownership
 
-minipsd allocates only inside `minipsd_write`, and frees it before returning. Everything else is
-yours, and minipsd only borrows it:
+minipsd allocates only inside `minipsd_write`, which frees it before returning, and
+`minipsd_read`, whose document you free with `minipsd_doc_free` (or read into your own block
+with `minipsd_read_into`). Everything else is yours, and minipsd only borrows it:
 
 | You provide | How much | Must live |
 |---|---|---|

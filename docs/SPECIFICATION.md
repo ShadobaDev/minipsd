@@ -111,6 +111,9 @@ The declarations, with every parameter and return code, are in
 | `minipsd_target_rgba(&target, rgba, row_stride)` | a target for interleaved RGBA, the common case |
 | `minipsd_decode_layer(r, layer, target, opts)` | a layer's pixels, or a band of its rows, as stored (opacity and visibility not applied), into the caller's planes; 8-bit RGB, raw or PackBits |
 | `minipsd_decode_composite(r, target, opts)` | the composite (merged) image, or a band of its rows, un-matted to straight alpha unless `keep_matte` |
+| `minipsd_read_size(data, size, limits, &block_size)` | the block `minipsd_read_into` needs for a whole file |
+| `minipsd_read_into(data, size, limits, block, block_size, &doc, &lost)` | a whole file into a document in the caller's block, everything copied, so the file may go; `lost` says what it could not carry |
+| `minipsd_read(data, size, limits, &doc, &lost)`, `minipsd_doc_free(doc)` | the same in one `MINIPSD_MALLOC` block, and its free; absent under `MINIPSD_NO_MALLOC` |
 | `minipsd_error_string(code)` | a short English text for a return code |
 
 The reader describes any version-1 PSD, whatever its colour mode or depth; it decodes the pixels
@@ -263,6 +266,11 @@ them; nothing is copied or allocated. Results on real files from other programs:
   decodes as opaque.
 - **Not read:** the colour mode data (palettes), the global layer mask information and the
   global additional-information blocks that follow the layer records.
+- **As a document** (`minipsd_read`): 8-bit RGB files; each layer's rectangle, name, opacity,
+  visibility and decoded pixels, the composite as stored (`composite_matted`), the dpi (72 when
+  none is stored) and the ICC profile, all copied into one block. A file without layers gets one,
+  "Background", holding its image. Anything else is reported in `lost` (`MINIPSD_LOST_*`), never
+  dropped silently.
 - **A prefix is enough** for what lies inside it: `MINIPSD_ERR_SHORT` with
   `minipsd_reader_needed` says how much more a call needs.
 - **Limits:** every length is checked against the buffer and the section it lies in; the

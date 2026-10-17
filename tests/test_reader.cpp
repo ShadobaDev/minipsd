@@ -1,7 +1,7 @@
 /**
  * \file
  * \brief Tests for minipsd/reader.h: the file's description, its resources, its layer records,
- *        their pixels and the composite.
+ *        their pixels and the composite; and for minipsd/read.h, a whole file into a document.
  *        Files come from the writer, and from the small PSD builder below, which also makes the
  *        malformed ones and the ones the writer never writes (other colour modes, masks, other
  *        channels, other blocks).
@@ -22,6 +22,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <tuple>
 #include <utility>
 
@@ -1536,6 +1537,168 @@ TEST(MinipsdReaderTest, ADecodeOverTheBytesLimitIsRefusedBeforeWriting)
 }
 
 // ---------------------------------------------------------------------------------------------------
+// minipsd_read: a whole file into one standalone document
+// ---------------------------------------------------------------------------------------------------
+
+namespace {
+
+using Doc = std::unique_ptr<minipsd_doc, void (*)(minipsd_doc *)>;
+
+Doc readDoc(const Bytes &file, std::uint32_t *lost, int expected = MINIPSD_OK, const minipsd_limits *limits = nullptr)
+{
+    minipsd_doc *d = reinterpret_cast<minipsd_doc *>(1);
+    EXPECT_EQ(minipsd_read(file.data(), file.size(), limits, &d, lost), expected);
+    if (expected != MINIPSD_OK) { EXPECT_EQ(d, nullptr); }
+    return Doc(d, minipsd_doc_free);
+}
+
+// The composite of a built file: raw, every channel `fill`.
+Bytes rawImage(unsigned channels, std::uint32_t w, std::uint32_t h, unsigned fill)
+{
+    Out o;
+    o.u16(0).raw(Bytes(std::size_t(channels) * w * h, static_cast<std::uint8_t>(fill)));
+    return o.b;
+}
+
+} // namespace
+
+TEST(MinipsdReadTest, AFileBecomesADocumentThatStandsAlone)
+{
+    const Bytes px = testImage(5, 3), icc = {1, 2, 3, 4, 5};
+    const minipsd_layer layers[3] = {
+        {.name = "\xC5\xBB\xC3\xB3\xC5\x82w", .rgba = px.data(), .opacity = 128, .hidden = 1, .top = -1, .left = 4, .bottom = 2, .right = 9},
+        {.name = "Empty", .rgba = nullptr, .opacity = 255, .top = 3, .left = 3, .bottom = 3, .right = 6},
+        {.name = nullptr, .rgba = px.data(), .opacity = 255, .top = 0, .left = 0, .bottom = 3, .right = 5}};
+    minipsd_doc d = docOf(7, 4, layers, 3);
+    d.dpi = 72.5; d.icc = icc.data(); d.icc_size = icc.size(); d.compression = MINIPSD_RAW;
+    const Bytes original = write(d);
+
+    // Into the caller's block, at an odd address; from a copy of the file, wiped before writing.
+    Bytes file = original;
+    std::size_t need = 0;
+    ASSERT_EQ(minipsd_read_size(file.data(), file.size(), nullptr, &need), MINIPSD_OK);
+    Bytes block(need + 3);
+    minipsd_doc *r = nullptr;
+    std::uint32_t lost = 99;
+    EXPECT_EQ(minipsd_read_into(file.data(), file.size(), nullptr, block.data() + 3, need - 1, &r, &lost), MINIPSD_ERR_ARG)
+        << "a block too small";
+    EXPECT_EQ(r, nullptr);
+    ASSERT_EQ(minipsd_read_into(file.data(), file.size(), nullptr, block.data() + 3, need, &r, &lost), MINIPSD_OK);
+    std::fill(file.begin(), file.end(), 0xEE);
+    EXPECT_EQ(lost, 0u);
+    EXPECT_GE(reinterpret_cast<std::uint8_t *>(r), block.data() + 3);
+
+    EXPECT_EQ(r->width, 7u);
+    EXPECT_EQ(r->height, 4u);
+    EXPECT_EQ(r->dpi, 72.5);
+    EXPECT_EQ(Bytes(r->icc, r->icc + r->icc_size), icc);
+    EXPECT_EQ(r->compression, MINIPSD_RAW);
+    ASSERT_EQ(r->layer_count, 3u);
+    EXPECT_STREQ(r->layers[0].name, layers[0].name);
+    EXPECT_STREQ(r->layers[2].name, "");
+    for (std::size_t i = 0; i < 3; ++i) {
+        const minipsd_layer &a = r->layers[i], &b = layers[i];
+        SCOPED_TRACE(i);
+        EXPECT_EQ(a.opacity, b.opacity);
+        EXPECT_EQ(a.hidden, b.hidden);
+        EXPECT_EQ(std::tie(a.top, a.left, a.bottom, a.right), std::tie(b.top, b.left, b.bottom, b.right));
+        EXPECT_EQ(a.rgba == nullptr, b.rgba == nullptr);
+        if (a.rgba) { EXPECT_EQ(Bytes(a.rgba, a.rgba + px.size()), px); }
+    }
+    EXPECT_EQ(r->composite_matted, 1);
+    EXPECT_EQ(Bytes(r->composite, r->composite + 7 * 4 * 4), read(original).composite) << "as stored";
+    EXPECT_EQ(write(*r), original) << "written back: the same bytes";
+
+    EXPECT_EQ(minipsd_read_into(original.data(), original.size(), nullptr, nullptr, need, &r, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_read_into(original.data(), original.size(), nullptr, block.data(), need, nullptr, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_read_size(original.data(), original.size(), nullptr, nullptr), MINIPSD_ERR_ARG);
+    minipsd_doc_free(nullptr);
+}
+
+TEST(MinipsdReadTest, ItRefusesWhatTheReaderRefusesAndWhatItCannotHold)
+{
+    const Bytes px = testImage(4, 4);
+    const minipsd_layer layer{"L", px.data(), 255, 0};
+    const Bytes file = write(docOf(4, 4, &layer, 1));
+    std::uint32_t lost = 0;
+    readDoc(Bytes(file.begin(), file.end() - 1), &lost, MINIPSD_ERR_SHORT);
+    readDoc(Bytes(4, 0), &lost, MINIPSD_ERR_FORMAT);
+    minipsd_limits lim{};
+    lim.max_decoded_bytes = 2 * 4 * 4 * 4 - 1;   // the layer and the composite together
+    readDoc(file, &lost, MINIPSD_ERR_LIMIT, &lim);
+    lim.max_decoded_bytes += 1;
+    readDoc(file, &lost, MINIPSD_OK, &lim);
+
+    Spec s;
+    s.depth = 16;
+    s.layers = {simpleRec()};
+    s.count = -1;
+    readDoc(build(s).bytes, &lost, MINIPSD_ERR_UNSUPPORTED);
+}
+
+TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
+{
+    Spec s;
+    s.channels = 3;
+    s.count = 0;
+    s.resources = {};
+    s.image = rawImage(3, 2, 2, 0x40);
+    std::uint32_t lost = 99;
+    const Doc d = readDoc(build(s).bytes, &lost);
+    ASSERT_TRUE(d);
+    EXPECT_EQ(lost, 0u);
+    EXPECT_EQ(d->dpi, 72.0) << "no resolution stored";
+    ASSERT_EQ(d->layer_count, 1u);
+    EXPECT_STREQ(d->layers[0].name, "Background");
+    EXPECT_EQ(Bytes(d->layers[0].rgba, d->layers[0].rgba + 16), (Bytes{0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255,
+                                                                     0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255}));
+    EXPECT_EQ(minipsd_doc_check(d.get()), MINIPSD_OK) << "the writer takes it as it is";
+}
+
+TEST(MinipsdReadTest, LostSaysWhatTheDocumentCannotCarry)
+{
+    struct Case {
+        const char   *what;
+        std::uint32_t lost;
+        void        (*change)(Spec &, Rec &);
+    };
+    const Case cases[] = {
+        {"nothing", 0, [](Spec &, Rec &) {}},
+        {"layer mask data", MINIPSD_LOST_MASK, [](Spec &, Rec &r) { r.mask = Bytes(20, 0); }},
+        {"a mask channel", MINIPSD_LOST_MASK, [](Spec &, Rec &r) { r.channels.push_back(chan(-2, 2, 0)); }},
+        {"a channel beyond RGBA", MINIPSD_LOST_CHANNELS, [](Spec &, Rec &r) { r.channels.push_back(chan(3, 6, 0)); }},
+        {"an alpha channel of the composite", MINIPSD_LOST_CHANNELS,
+         [](Spec &s, Rec &) { s.channels = 5; s.image = rawImage(5, 2, 2, 0); }},
+        {"a blend mode", MINIPSD_LOST_EXTRA, [](Spec &, Rec &r) { r.blendKey = "mul "; }},
+        {"a block other than the name", MINIPSD_LOST_EXTRA, [](Spec &, Rec &r) { r.blocks = block("lsct", Bytes(4, 0)); }},
+        {"a vector mask", MINIPSD_LOST_MASK | MINIPSD_LOST_EXTRA, [](Spec &, Rec &r) { r.blocks = block("vmsk", Bytes(8, 0)); }},
+        {"a resource other than resolution and ICC", MINIPSD_LOST_EXTRA,
+         [](Spec &s, Rec &) { s.resources = resource(1036, Bytes(8, 1)); }},
+        {"blending ranges", MINIPSD_LOST_BLENDING_RANGES, [](Spec &, Rec &r) {
+             Out x;   // no mask; one range pair that is not "0 0 255 255"; the name "L"
+             x.u32(0).u32(8).u8(10).u8(0).u8(255).u8(255).u8(0).u8(0).u8(255).u8(255).u8(1).str("L").zeros(2);
+             r.hasRawExtra = true; r.rawExtra = x.b; }},
+        {"blending ranges left alone", 0, [](Spec &, Rec &r) {
+             Out x;
+             x.u32(0).u32(8).u8(0).u8(0).u8(255).u8(255).u8(0).u8(0).u8(255).u8(255).u8(1).str("L").zeros(2);
+             r.hasRawExtra = true; r.rawExtra = x.b; }},
+    };
+    for (const Case &c : cases) {
+        SCOPED_TRACE(c.what);
+        Spec s;
+        Rec r = simpleRec();
+        s.image = rawImage(4, 2, 2, 0x80);
+        c.change(s, r);
+        s.layers = {r};
+        s.count = -1;
+        std::uint32_t lost = 99;
+        const Doc d = readDoc(build(s).bytes, &lost);
+        EXPECT_EQ(lost, c.lost);
+        if (d) { EXPECT_EQ(write(*d).empty(), false) << "the document is still written"; }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
 // Files from other programs: tests/data (committed, origin and licence in its README),
 // tests/fixtures (local only, never committed) and, with MINIPSD_PSD_TOOLS_FILES, psd-tools' own
 // test files (fetched, every subdirectory)
@@ -1591,11 +1754,13 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
         const bool rgb8 = o.info.depth == 8 && o.info.color_mode == 3;
         const std::uint32_t w = o.info.width, h = o.info.height;
         std::size_t layers = 0;
+        bool otherChannels = o.info.channels > 3u + (o.info.composite_has_alpha ? 1u : 0u);
         minipsd_layer_view v;
         Bytes px;
         while (minipsd_reader_next_layer(o.r, &v) == MINIPSD_MORE) {
             ++layers;
             nameOf(v);
+            otherChannels = otherChannels || v.other_channels;
             if (!rgb8) continue;
             const auto lw = static_cast<std::uint32_t>(v.right - v.left), lh = static_cast<std::uint32_t>(v.bottom - v.top);
             px.assign(std::size_t(lw) * lh * 4, 0);
@@ -1613,6 +1778,31 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
         if (rgb8) {
             EXPECT_EQ(decodeComposite(o.r, w, composite), MINIPSD_OK);
             EXPECT_EQ(decodeComposite(o.r, w, stored, 0, 0, 1), MINIPSD_OK);
+
+            // As a document: what the reader sees left out is reported lost, and the document
+            // writes a file that reads back as the same document.
+            std::uint32_t lost = 0;
+            const Doc d = readDoc(file, &lost);
+            ASSERT_TRUE(d);
+            if (otherChannels) { EXPECT_NE(lost & (MINIPSD_LOST_MASK | MINIPSD_LOST_CHANNELS), 0u) << "lost " << lost; }
+            EXPECT_EQ(Bytes(d->composite, d->composite + composite.size()), stored);
+            const Bytes again = write(*d);
+            std::uint32_t lostAgain = 99;
+            const Doc e = readDoc(again, &lostAgain);
+            ASSERT_TRUE(e);
+            EXPECT_EQ(lostAgain, 0u) << "what minipsd writes, it carries";
+            ASSERT_EQ(e->layer_count, d->layer_count);
+            for (std::size_t i = 0; i < d->layer_count; ++i) {
+                const minipsd_layer &a = d->layers[i], &b = e->layers[i];
+                SCOPED_TRACE(i);
+                EXPECT_STREQ(a.name, b.name);
+                EXPECT_EQ(std::tie(a.opacity, a.hidden, a.top, a.left, a.bottom, a.right),
+                          std::tie(b.opacity, b.hidden, b.top, b.left, b.bottom, b.right));
+                const std::size_t n = std::size_t(a.right - a.left) * std::size_t(a.bottom - a.top) * 4;
+                EXPECT_EQ(a.rgba == nullptr, b.rgba == nullptr);
+                if (a.rgba && b.rgba) { EXPECT_TRUE(std::equal(a.rgba, a.rgba + n, b.rgba)); }
+            }
+            EXPECT_TRUE(std::equal(d->composite, d->composite + composite.size(), e->composite));
         }
 
         // In parts, as a download or a file manager would: grow the prefix to exactly what `needed`

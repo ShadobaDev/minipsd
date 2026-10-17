@@ -67,8 +67,9 @@ Not written (yet): masks, groups, blend modes other than normal, 16-bit, PSB. Th
 
 Any PSD (not PSB): its size, colour mode, depth, dpi, ICC profile, resources, and every layer
 with its name, rectangle, opacity, visibility, blend mode and raw additional data. Pixels of
-8-bit RGB files decode, layers and composite, into memory of any layout. A file can be read from
-its start only, and untrusted files are bounded by caller limits. How it does on 315 files from
+8-bit RGB files decode, layers and composite, into memory of any layout, or whole into a
+document that `minipsd_write` takes back. A file can be read from its start only, and untrusted
+files are bounded by caller limits. How it does on 315 files from
 other programs: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
 ## Adding it to a project

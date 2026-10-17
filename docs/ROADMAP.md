@@ -215,7 +215,7 @@ whatever cannot be carried is reported.
       `NULL` keeps today's composed composite, documented as a best effort.
       *Done when:* golden test unchanged; a supplied composite equal to the composed one gives
       the same bytes; a matted one is written as it is; composing is skipped (counted in a test).
-- [ ] **S5.4** `minipsd_read` (`R7`), into a `minipsd_doc` the writer accepts as it is:
+- [x] **S5.4** `minipsd_read` (`R7`), into a `minipsd_doc` the writer accepts as it is:
       - `minipsd_read_size` and `minipsd_read_into`, the caller's block;
       - `minipsd_read` through `MINIPSD_MALLOC`, `minipsd_doc_free`;
       - everything copied, so the file's buffer can be freed at once; the file's composite kept
@@ -227,12 +227,14 @@ whatever cannot be carried is reported.
 - [ ] **S5.5** Unknown content kept (`E2`): `blend`, `clipping` and `extra` on the layer,
       `resources` and `layer_tail` on the document, written back as given; the reader gains
       `clipping` in the view and `layer_tail` in `minipsd_info`; the document's fields win over
-      kept data with the same key (`luni`, 1005, 1039).
+      kept data with the same key (`luni`, 1005, 1039). `MINIPSD_LOST_EXTRA` is no longer set,
+      and goes if no release had it.
       *Done when:* a file of psd-tools' set with a text layer survives `minipsd_read` and
       `minipsd_write`: every kept block identical byte for byte (checked by `psd-tools`), the
       text shown by Photoshop or Photopea, checked by hand once.
 - [ ] **S5.6** Pass-through re-save (`E1`): `stored` on the layer and `opts->stored` in
-      `minipsd_read`. The writer copies stored channels instead of encoding pixels.
+      `minipsd_read`; `opts` is a new parameter of the three read functions, so a breaking change
+      if a release had them without it. The writer copies stored channels instead of encoding pixels.
       *Done when:* reading a file with `stored`, changing one layer and writing again encodes
       only that layer (counted in a test); the untouched layers' channel bytes are identical to
       the input's.
@@ -290,6 +292,9 @@ feature; a supplied composite needs nothing. See
 - [ ] **S6.4** Layer masks.
 - [ ] **S6.5** 16-bit channels.
 - [ ] **S6.6** PSB (version 2).
+- [ ] **S6.7** Blending ranges ("Blend If") kept on the layer; until then `MINIPSD_LOST_BLENDING_RANGES`.
+- [ ] **S6.8** Channels beyond RGBA (alpha and spot channels, of layers and of the composite)
+      kept; until then `MINIPSD_LOST_CHANNELS`.
 
 ## 7. Interoperability
 

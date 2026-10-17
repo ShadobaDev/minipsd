@@ -78,7 +78,9 @@ set_tests_properties(example.read_file PROPERTIES
 ]*
  +empty
 composite:
- +[0-9]+ visible pixels"
+ +[0-9]+ visible pixels[^
+]*
+as a document: everything kept"
     FAIL_REGULAR_EXPRESSION "not decoded")
 file(GLOB _other_psds "${PROJECT_SOURCE_DIR}/tests/data/*.psd" "${PROJECT_SOURCE_DIR}/tests/fixtures/*.psd")
 foreach(_psd IN LISTS _other_psds)

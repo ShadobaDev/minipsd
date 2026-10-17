@@ -102,5 +102,23 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
             || minipsd_reader_next_layer(rd, &lv) != MINIPSD_OK)
             return -106;
     }
+
+    /* The document read back from a copy of the file, whole and standalone: with the copy wiped,
+       it writes the same bytes. */
+    {
+        minipsd_doc *rdoc;
+        uint32_t     lost = 1;
+        uint8_t      copy[1024], back[1024];
+        smoke_buf    c;
+        memcpy(copy, b.data, b.size);
+        if (minipsd_read(copy, b.size, NULL, &rdoc, &lost) != MINIPSD_OK || lost != 0)
+            return -109;
+        memset(copy, 0, sizeof copy);
+        c.data = back; c.size = 0; c.capacity = sizeof back;
+        rc = minipsd_write(rdoc, smoke_out, &c);
+        minipsd_doc_free(rdoc);
+        if (rc != MINIPSD_OK || c.size != b.size || memcmp(back, b.data, b.size) != 0)
+            return -110;
+    }
     return MINIPSD_OK;
 }
