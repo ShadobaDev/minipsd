@@ -17,7 +17,7 @@ The order of work from 0.1.0 to the design in [CODE-ARCH.md](CODE-ARCH.md). Case
   `master` with no release.
 - **There are only two planned releases:**
   - **S3.4**, which releases 0.2.0 (stages 1 to 3);
-  - **S4.9**, which releases the reader.
+  - **S4.10**, which releases the reader, when the maintainer decides.
 
   After that, stages 5 and 6 are released in batches, when there is enough to ship and the
   maintainer decides. Version numbers follow the semver rules in [TODO.md](TODO.md): pre-1.0, a break
@@ -35,9 +35,9 @@ The order of work from 0.1.0 to the design in [CODE-ARCH.md](CODE-ARCH.md). Case
 | [1. Module split](#1-module-split) | the API stays in `minipsd.h`, the implementation becomes modules | 0.2.0, at S3.4 |
 | [2. Pull writer](#2-pull-writer) | non-blocking, heap-free writing | 0.2.0, at S3.4 |
 | [3. I/O out of the core](#3-io-out-of-the-core) | stdio leaves the library; examples instead | **0.2.0**, at S3.4 (breaking) |
-| [4. Reader](#4-reader) | buffer to structure, for minipsd's own subset | the next release, at S4.9 |
-| [5. Round trip and conveniences](#5-round-trip-and-conveniences) | full import, cheap re-save, kept unknown content | batched, when decided |
-| [6. Format features](#6-format-features) | rectangles, blend modes, groups, masks, 16-bit, PSB | batched, when decided |
+| [4. Reader](#4-reader) | buffer to structure, for minipsd's own subset | the next release, at S4.10 |
+| [5. Round trip and conveniences](#5-round-trip-and-conveniences) | layer rectangles, full import, cheap re-save, kept unknown content | batched, when decided |
+| [6. Format features](#6-format-features) | blend modes, groups, masks, 16-bit, PSB | batched, when decided |
 | [Not scheduled](#not-scheduled) | large cases, only on real demand | — |
 
 ---
@@ -174,28 +174,89 @@ Additive. See [Reader](CODE-ARCH.md#reader).
       which the ordinary tests replay on every toolchain.
       *Done when:* a local run of a fixed time (an hour) ends with no finding. Done: an hour,
       5.3 million inputs, none failed.
-- [ ] **S4.9** Docs: the spec gains the reader. Release: 0.3.0 if anything above broke
-      the API, otherwise 0.2.1.
+- [x] **S4.9** Docs: the spec gains the reader:
+      - Purpose: writes and reads, no hidden state in place of "stateless", no "writer only";
+      - a new section, What is read: which files are described and which decoded, what each
+        record gives, what is not read;
+      - Extensibility rules: the reader needs no opt-in macro;
+      - README (what it reads), the header's brief, the CMake description (SBOM, `.pc`,
+        packages), USE-CASES (what is done), CODE-ARCH (stages).
+- [ ] **S4.10** Release **0.2.1** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md): nothing since
+      0.2.0 broke the API, so it is a PATCH under the pre-1.0 rules. Before it: regenerate
+      [COMPATIBILITY.md](COMPATIBILITY.md) with the new version, and decide whether CI fetches
+      psd-tools' files (`MINIPSD_PSD_TOOLS_FILES`).
 
 ## 5. Round trip and conveniences
 
-Built on the reader and the pull writer.
+Built on the reader and the pull writer: a file read, changed and written again. Every addition
+to the document is a field at the end of `minipsd_layer` or `minipsd_doc` whose zero keeps
+today's bytes ([Extensibility rules](SPECIFICATION.md#extensibility-rules)), so the stage breaks
+no API and the golden test holds throughout.
 
-- [ ] **S5.1** *design.* The passed allocator (`X1` b) and the arena (`X1` c): which one, the
-      struct, who frees what. *Done when:* reviewed.
-- [ ] **S5.2** Full import, `R7`, in both forms:
-      - two phases: sizes, then fill into caller memory;
-      - a complete structure through the allocator from S5.1, freed by one call.
-      *Done when:* the structure is a `minipsd_doc`, so the writer accepts it as-is.
-- [ ] **S5.3** Pass-through re-save (`E1`): a layer source holding compressed channel bytes. The
-      writer copies them and does not compress them again.
-      *Done when:* reading a file, changing one layer and writing again re-encodes only that
-      layer and the composite (counted in a test).
-- [ ] **S5.4** Unknown content kept (`E2`): the writer accepts opaque blocks per layer and per
-      document and writes them back unchanged.
-      *Done when:* a Photopea file with a text layer survives a round trip and Photopea still
-      shows the text.
-- [ ] **S5.5** Composite supplied by the caller (`W7`): a buffer in place of blending.
+What the reader already gives, and the order follows from:
+- **Import is possible today, by hand:** walk the layers, allocate each rectangle, decode into
+  it. What is missing is the one call that turns a file into a `minipsd_doc`.
+- **The document cannot hold a real file yet.** A `minipsd_layer` covers the whole canvas or
+  nothing; files from other programs have layers smaller than the canvas, or reaching past it,
+  almost always. So layer rectangles in the writer come first (S5.2, moved here from stage 6).
+- **The writer's composite is only as good as its blending.** Re-saving a file with blend modes,
+  masks or groups would replace a correct composite with a wrong one, and pass-through layers
+  would have to be decoded only to blend them. So the composite supplied by the caller (S5.3)
+  comes before import and pass-through.
+- **Loss is reported, never silent.** Whatever a file holds that the document cannot carry, the
+  import says so; a re-save must not quietly turn a `mul ` layer into `norm`.
+
+- [ ] **S5.1** *design.* In [CODE-ARCH.md](CODE-ARCH.md):
+      - **memory of an import:** the workspace idiom used by the writer and the reader serves as
+        the arena (`X1` c): a size query, one block from the caller, carved by the library and
+        freed by the caller at once. The one-call form allocates that block through
+        `MINIPSD_MALLOC`, as `minipsd_write` does, and goes with `MINIPSD_NO_MALLOC`. A passed
+        allocator (`X1` b) is not added: a third way to get memory, with no caller asking;
+      - **what the document must carry for a round trip:** the layer rectangle, the blend key,
+        the layer's additional blocks, the document's resources, a supplied composite, a layer
+        source of compressed channels; each a field at the end, zero meaning today;
+      - **how loss is reported:** per layer and per document, and which features count as
+        loss (masks, groups, blend modes other than `norm`, other colour modes and depths);
+      - **duplicates:** the writer writes `luni`, 1005 and 1039 itself; kept blocks and
+        resources with the same keys either replace them or are skipped, decided here.
+      *Done when:* reviewed.
+- [ ] **S5.2** Layer rectangles in the writer and its composite: a layer of any size, anywhere,
+      also partly or wholly off the canvas; the composite clips to the canvas. Moved from S6.1;
+      the reader already returns the rectangle.
+      *Done when:* golden test unchanged with every rectangle zero; `psd-tools` reads the
+      rectangles and the composite of a test set (smaller, offset, off the canvas, empty);
+      Photoshop or Photopea shows the layers in place, checked by hand once.
+- [ ] **S5.3** Composite supplied by the caller (`W7`): a buffer (any `minipsd_plane` layout,
+      straight alpha; the writer mattes it) in place of blending.
+      *Done when:* the supplied composite comes out byte for byte as the writer would have
+      written it from the same pixels; blending is skipped (counted in a test).
+- [ ] **S5.4** Full import (`R7`), into a `minipsd_doc` the writer accepts as it is:
+      - two phases: `minipsd_import_size` gives the block, `minipsd_import` fills it (names,
+        layer array, pixels, the composite);
+      - one call, through `MINIPSD_MALLOC`, freed by one `free`;
+      - loss reported as decided in S5.1; `minipsd_limits` apply.
+      *Done when:* every file of the golden set imports and writes back to the same bytes
+      (`E4` through the import); every 8-bit RGB file of psd-tools' set imports, its loss
+      reported matches what `examples/read_file.c` lists for it.
+- [ ] **S5.5** Unknown content kept (`E2`):
+      - the writer takes a layer's additional blocks as one opaque blob (the reader's `extra`
+        view) and the document's resources as a list, and writes them back unchanged; the blend
+        key is written as given;
+      - the reader gains the global layer mask information and the global additional blocks
+        (after the layer records; `Txt2`, `Patt`, `Lr16`, ...), which it skips today, and the
+        writer takes them back.
+      *Done when:* a file of psd-tools' set with a text layer survives import and write: every
+      kept block identical byte for byte (checked by `psd-tools`), the text shown by Photoshop
+      or Photopea, checked by hand once.
+- [ ] **S5.6** Pass-through re-save (`E1`): a layer source of compressed channel data (the
+      reader's channel views, compression marker and row counts included). The writer copies it
+      and does not compress it again; with a supplied composite (S5.3) it does not decode it
+      either.
+      *Done when:* reading a file, changing one layer and writing again encodes only that layer
+      (counted in a test); the untouched layers' channel bytes are identical to the input's.
+- [ ] **S5.7** Docs: a Round trip chapter in [MANUAL.md](MANUAL.md) with
+      `examples/resave.c` (read, change one layer, write), built and run by CI; the spec's
+      What goes into the file and Memory and ownership.
 
 ## 6. Format features
 
@@ -203,8 +264,7 @@ Each step covers the document model, writer, reader and composite, and is verifi
 `psd-tools` and by hand in one real application. See
 [Features through the modules](CODE-ARCH.md#features-through-the-modules).
 
-- [ ] **S6.1** Layers smaller than the canvas. It comes first because masks and groups need
-      bounds.
+- [x] **S6.1** Layers smaller than the canvas: moved to S5.2, which the round trip needs first.
 - [ ] **S6.2** Blend modes. They come before groups, which add the pass-through mode. Each mode
       is a four-character key in the layer record: the writer writes it, the reader already
       returns it in `minipsd_layer_view.blend`, and the composite blends with it. Every mode is

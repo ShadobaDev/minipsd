@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief A small, dependency-free Photoshop (PSD) writer.  Header-only, C99, also valid C++.
+ * \brief A small, dependency-free Photoshop (PSD) writer and reader.  Header-only, C99, also valid C++.
  *
  * This file is the whole public API: every type, constant and function a caller can use.  The
  * implementation lives in minipsd/ and comes in only with MINIPSD_IMPLEMENTATION; copy the whole

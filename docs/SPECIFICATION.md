@@ -1,6 +1,6 @@
 # Specification
 
-The current contract of minipsd: what it is, what it writes, and what must not break.
+The current contract of minipsd: what it is, what it writes and reads, and what must not break.
 This file describes the **current state** only; history goes to [CHANGELOG.md](CHANGELOG.md),
 planned work to [TODO.md](TODO.md).
 
@@ -12,6 +12,7 @@ planned work to [TODO.md](TODO.md).
 | [API](#api) | types, functions, defaults, error codes |
 | [Memory and ownership](#memory-and-ownership) | whose each buffer is, its size, lifetime and where it may live |
 | [What goes into the file](#what-goes-into-the-file) | the exact PSD subset written |
+| [What is read](#what-is-read) | which files are described, which decoded, and what is left as raw data |
 | [Consumer requirements](#consumer-requirements) | guarantees Platemaker depends on |
 | [Verification](#verification) | how a format change is proven correct |
 | [Distribution and SBOM](#distribution-and-sbom) | how consumers obtain and declare minipsd |
@@ -21,14 +22,17 @@ planned work to [TODO.md](TODO.md).
 
 ## Purpose
 
-minipsd is a **header-only, stateless, dependency-free C99 library that writes layered
+minipsd is a **header-only, dependency-free C99 library that writes and reads layered
 Photoshop (PSD) files**. It exists because no header-only PSD writer was available; it was
 extracted from [Platemaker](https://github.com/ShadobaDev/PlateMaker), which uses it to save
 canvas templates.
 
-- **Stateless:** every call takes a complete document description and produces a complete file.
-  No handles, no global state, no init/shutdown.
-- **Writer only.** Reading is out of scope today (see [TODO.md](TODO.md)).
+- **No hidden state:** the writer and the reader live in memory the caller lends them (a
+  workspace) and hold nothing else; there is no global state and nothing to initialise or shut
+  down. `minipsd_write` takes a complete document and produces a complete file in one call.
+- **Writes a subset, reads any PSD:** it writes 8-bit RGB documents
+  ([What goes into the file](#what-goes-into-the-file)); it describes every PSD of version 1 and
+  decodes the pixels of 8-bit RGB ones ([What is read](#what-is-read)).
 - **Lightweight first, extensible second:** a feature is added only when it can be added
   without making the simple case harder.
 
@@ -219,6 +223,43 @@ caller's memory:
     otherwise `MINIPSD_ERR_SIZE`. Example: two full 30 000 x 30 000 layers in RAW are about
     7.2 GB and are refused; the same in RLE usually fits. The composite has no length field.
 
+## What is read
+
+The reader works on bytes the caller holds, the whole file or its start, and hands out views of
+them; nothing is copied or allocated. Results on real files from other programs:
+[COMPATIBILITY.md](COMPATIBILITY.md).
+
+- **Which files:**
+  - every PSD of version 1 is described, whatever its colour mode (bitmap, grey, indexed, RGB,
+    CMYK, multichannel, duotone, Lab) or depth (1, 8, 16, 32 bits);
+  - pixels are decoded from 8-bit RGB files only, raw or PackBits; any other file, and a
+    ZIP-compressed channel, gives `MINIPSD_ERR_UNSUPPORTED` from the decode call;
+  - a PSB (version 2) is refused by `minipsd_reader_init` with `MINIPSD_ERR_UNSUPPORTED`; four
+    wrong bytes at the start are `MINIPSD_ERR_FORMAT`.
+- **Header and resources:** size, channels, depth, colour mode; dpi from resource 1005
+  (horizontal, 0 without it); the ICC profile from 1039. Every resource, these two included, is
+  also returned as a raw view, in file order.
+- **Layer records**, bottom first:
+  - the rectangle; one stored inverted (Photoshop's fill layers) comes back empty;
+  - opacity, visibility, the blend mode's key, as stored;
+  - the name: the `luni` block when there is one, otherwise the legacy name read as Latin-1;
+    an unpaired surrogate becomes U+FFFD and a U+0000 ends the name;
+  - the channels red, green, blue and transparency as views of their stored data; any other
+    channel (masks, ...) is counted, not read;
+  - every additional-information block as a raw view (key and bytes), the known ones included.
+- **Pixels come as stored:** a layer's opacity, visibility, blend mode and mask are not applied;
+  they are in its view. Groups are blocks (`lsct`) like any other.
+- **The composite:** un-matted to straight alpha (see [API](#api)), or as stored with
+  `keep_matte`; a file whose layer count is positive has no transparency in it, and its composite
+  decodes as opaque.
+- **Not read:** the colour mode data (palettes), the global layer mask information and the
+  global additional-information blocks that follow the layer records.
+- **A prefix is enough** for what lies inside it: `MINIPSD_ERR_SHORT` with
+  `minipsd_reader_needed` says how much more a call needs.
+- **Limits:** every length is checked against the buffer and the section it lies in; the
+  caller's `minipsd_limits` add the canvas's and the layers' side, the layer count and the bytes
+  one decode call writes, all checked before anything is decoded.
+
 ## Consumer requirements
 
 Platemaker is the first consumer. Breaking any of these breaks it:
@@ -333,4 +374,5 @@ Rules for adding features without breaking existing callers:
   masks, groups) must also be reflected in the composite, or be documented as invisible to
   composite-only readers.
 - **Optional subsystems hide behind macros**, the way `MINIPSD_NO_MALLOC` does, so the minimal
-  build stays minimal. Reading, if it comes, is a separate opt-in implementation block.
+  build stays minimal. The reader needs none: it allocates nothing, and a function the program
+  does not call costs nothing once linked.

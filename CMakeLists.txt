@@ -20,7 +20,7 @@ list(JOIN _minipsd_version "." _minipsd_version)
 # LANGUAGES NONE: a header-only library costs a consumer nothing, not even a compiler check.
 project(minipsd
     VERSION      ${_minipsd_version}
-    DESCRIPTION  "Header-only, dependency-free C99 writer of layered Photoshop (PSD) files"
+    DESCRIPTION  "Header-only, dependency-free C99 writer and reader of layered Photoshop (PSD) files"
     HOMEPAGE_URL "https://github.com/ShadobaDev/minipsd"
     LANGUAGES    NONE
 )

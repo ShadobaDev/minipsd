@@ -161,13 +161,11 @@ Conclusions:
 This is not the roadmap, just where each case fits against the current plan in
 [CODE-ARCH.md](CODE-ARCH.md):
 
-- **Already covered by the plan:** W1-W5, W10 (total), R6, E4.
-- **Cheap on top of the plan** (mostly views and offsets that the reader computes anyway):
-  - R1 (including prefix reads), R2, R3, R5, R10;
-  - X2 as the decode target;
-  - X4, X7.
-- **Moderate:** a separate design step each:
-  - R4 (row ranges);
+- **Done:**
+  - writer: W1-W5, W10 (total);
+  - reader: R1 (prefix reads included), R2-R6, R8, R10;
+  - E4; X2 as the decode target, X3, X4, X7.
+- **Moderate:** a separate design step each ([ROADMAP.md](ROADMAP.md), stage 5):
   - R7 (both complete variants);
   - W7 (supplied composite);
   - E1 (pass-through);

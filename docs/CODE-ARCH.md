@@ -484,8 +484,9 @@ commit message. [ROADMAP.md](ROADMAP.md) turns these into numbered steps.
 | **1. Split** | the files above, code moved verbatim, amalgamation, double CI build; golden test unchanged | 0.1.x |
 | **2. Pull writer** | `minipsd_writer_*`, `minipsd_doc_check`, `minipsd_write` on top; a test with random `cap` and a fake non-blocking target that matches the golden bytes | 0.1.x |
 | **3. I/O out of the core** | `examples/` with the three writers; `minipsd_write_file` removed; spec, INSTALL and README updated | **0.2.0** |
-| **4. Reader** | `reader.h` for the own subset, then real-application files; fuzzing | 0.2.x |
-| **5. Features** | one row of the table above per stage, writer and reader together | 0.2.x |
+| **4. Reader** | `reader.h` for the own subset, then real-application files; fuzzing | 0.2.1 |
+| **5. Round trip** | layer rectangles in the writer, a supplied composite, full import, kept unknown content, pass-through | 0.2.x |
+| **6. Features** | one row of the table above per stage, writer and reader together | 0.2.x |
 
 Every stage follows these rules:
 
