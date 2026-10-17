@@ -30,7 +30,8 @@ class Layer(ctypes.Structure):
 class Doc(ctypes.Structure):
     _fields_ = [("width", ctypes.c_uint32), ("height", ctypes.c_uint32), ("dpi", ctypes.c_double),
                 ("layers", ctypes.POINTER(Layer)), ("layer_count", ctypes.c_size_t),
-                ("icc", ctypes.c_void_p), ("icc_size", ctypes.c_size_t), ("compression", ctypes.c_int)]
+                ("icc", ctypes.c_void_p), ("icc_size", ctypes.c_size_t), ("compression", ctypes.c_int),
+                ("composite", ctypes.c_void_p), ("composite_matted", ctypes.c_int)]
 
 
 # --- the documents --------------------------------------------------------------------------------

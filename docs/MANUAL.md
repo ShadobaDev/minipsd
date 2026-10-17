@@ -192,6 +192,18 @@ minipsd_layer logo = { .name = "Logo", .rgba = logo_rgba, .opacity = 255,
                        .top = 10, .left = 20, .bottom = 42, .right = 84 };
 ```
 
+The composite, the flattened image that viewers and thumbnails show, is yours to render when
+the layers use anything beyond plain "over" (libvips does most of it, see
+[Working with libvips](SPECIFICATION.md#working-with-libvips)). Give it in straight alpha, the
+full canvas; the writer mattes it as the file stores it:
+
+```c
+doc.composite = flattened;   /* width * height * 4, straight alpha; NULL: composed, a best effort */
+```
+
+Without one, the writer composes the visible layers with "over" at their opacity: enough for a
+preview, with no guarantee for anything else.
+
 The document, its pixels and the workspace must stay valid, and unchanged, until the last byte
 is out: the writer sized everything from them at the start.
 

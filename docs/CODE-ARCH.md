@@ -597,7 +597,8 @@ feature is serialization: written and read as data. The composite composed as a 
 | **Reader, own subset** | — | — | new | `bytes`, `utf`, `packbits`, `composite` (un-matte) | 8-bit RGB, full-canvas or empty layers |
 | **Layers smaller than the canvas** | done: `top, left, bottom, right` on `minipsd_layer`, as in the view; all zero = full canvas | done: bounds, row tables | done: the view's rectangle | done: `composite`: offset blend, clipped to the canvas | |
 | **Blend modes** | `blend[4]`; zero = `norm` | key in the record | done: the view's key | — | the composed composite draws every mode as `norm` |
-| **Round trip** | `clipping`, `extra`, `stored`; `composite`, `composite_matted`, `resources`, `layer_tail` | kept data written back | `clipping`, `layer_tail`; `minipsd_read` | — | see [Round trip](#round-trip) |
+| **Supplied composite** | done: `composite`, `composite_matted`; NULL = composed | done: matted unless marked, composing skipped | — | `composite`: the row source | `W7` |
+| **Round trip** | `clipping`, `extra`, `stored`; `resources`, `layer_tail` | kept data written back | `clipping`, `layer_tail`; `minipsd_read` | — | see [Round trip](#round-trip) |
 | **Layer groups (`lsct`)** | `kind`: layer / group open / group close; zero = layer | divider records, `lsct` block | group structure in the view | — | kept today as `lsct` blocks in `extra` |
 | **Layer masks** | optional mask (rect + bytes) per layer | mask record, channel `-2` | mask view | — | until then `MINIPSD_LOST_MASK` |
 | **16-bit channels** | `depth` on `minipsd_doc`; zero = 8 | 2-byte samples | 2-byte samples | `packbits` over byte planes, `composite` in 16-bit | |

@@ -47,11 +47,12 @@
  * - one or more layers, bottom first, each a rectangle anywhere on or off the canvas (by default
  *   the full canvas) or empty, with a name, opacity and visibility; names go out both as a legacy
  *   Pascal string (ASCII) and as Unicode ('luni');
- * - the composite (merged) image, the layers blended with straight-alpha "over" at their
- *   rectangles and clipped to the canvas, which is what a
- *   reader that ignores layers shows; its transparency rides as the first extra channel, flagged by
- *   a negative layer count, and its colour is matted against white (c * a + 255 * (1 - a)), as
- *   Photoshop stores it and readers expect to undo;
+ * - the composite (merged) image, which is what a reader that ignores layers shows: the caller's
+ *   own render (minipsd_doc.composite), the right way, since flattening layers is rendering; or,
+ *   without one, a best effort with no guarantee: the visible layers blended with straight-alpha
+ *   "over" at their rectangles, clipped to the canvas.  Its transparency rides as the first extra
+ *   channel, flagged by a negative layer count, and its colour is matted against white
+ *   (c * a + 255 * (1 - a)), as Photoshop stores it and readers expect to undo;
  * - the resolution, in pixels per inch (resource 1005);
  * - an optional ICC profile (resource 1039); without one, readers assume sRGB.
  *
@@ -65,7 +66,8 @@
  * pulled by the caller into its own buffer (minipsd_writer_fill), or pushed to a callback
  * (minipsd_write).  The pull writer allocates nothing; its workspace, from the caller, holds a
  * size table (layer_count * 4 numbers), the composite's row sizes and one composite row.
- * minipsd_write allocates that workspace once.  Layer pixels are read in place, never copied.
+ * minipsd_write allocates that workspace once.  Layer pixels and a supplied composite are read
+ * in place, never copied whole.
  *
  * \par Project
  * https://github.com/ShadobaDev/minipsd
@@ -196,6 +198,15 @@ typedef struct minipsd_doc {
     const uint8_t       *icc;            /*!< Optional ICC profile; NULL means none (sRGB).  */
     size_t               icc_size;       /*!< Size of icc in bytes; 0 when icc is NULL.      */
     int                  compression;    /*!< MINIPSD_RLE or MINIPSD_RAW.                    */
+    const uint8_t       *composite;      /*!< The composite (merged) image: width * height * 4
+                                              bytes, rows top down, straight alpha, written
+                                              whatever the layers hold.  NULL: composed from the
+                                              layers, a best effort (see "What it writes").  */
+    int                  composite_matted; /*!< Non-zero: composite is already matted against
+                                              white, as the file stores it (what
+                                              minipsd_decode_composite gives with keep_matte),
+                                              and is written as it is.  Ignored without
+                                              composite.                                     */
 } minipsd_doc;
 
 /**

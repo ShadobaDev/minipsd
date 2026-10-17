@@ -23,6 +23,10 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
 - Layers of any size, anywhere: `top, left, bottom, right` at the end of `minipsd_layer`, as in
   `minipsd_layer_view`; all zero keeps the full canvas, and the same bytes. The composite blends
   each layer at its rectangle, clipped to the canvas.
+- A composite supplied by the caller: `composite` and `composite_matted` at the end of
+  `minipsd_doc`. The writer writes that image, matted against white unless marked as already
+  matted, and composes nothing. Without one the layers are composed as before, now documented as
+  a best effort.
 - Return codes `MINIPSD_ERR_FORMAT`, `MINIPSD_ERR_UNSUPPORTED`, `MINIPSD_ERR_SHORT`,
   `MINIPSD_ERR_LIMIT`, and `minipsd_limits` for untrusted files: the largest side (canvas, and
   layers when set), the most layers, the most bytes one decode call writes.

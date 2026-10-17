@@ -1,7 +1,8 @@
 /**
  * \file
- * \brief Internal: the composite, the layers blended "over" and matted against white, one row at a
- *        time (the writer); the matte undone again (the reader).  Also a layer's rectangle.
+ * \brief Internal: the composite one row at a time, supplied or the layers blended "over", matted
+ *        against white (the writer); the matte undone again (the reader).  Also a layer's
+ *        rectangle.
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
@@ -47,12 +48,18 @@ static void mpsd__composite_init(mpsd__composite *c, const minipsd_doc *d, uint8
     c->row = row;
 }
 
-static const uint8_t *mpsd__composite_row(mpsd__composite *c, uint32_t y)
+/* Tests count the rows composed from the layers by defining this before the implementation. */
+#ifndef MPSD__COMPOSED
+#  define MPSD__COMPOSED() ((void)0)
+#endif
+
+/* The visible layers' row y blended "over" into row, straight alpha: the best effort. */
+static void mpsd__compose(const minipsd_doc *d, uint8_t *row, uint32_t y)
 {
-    const minipsd_doc *d = c->doc;
     size_t i;
     int64_t x;
-    memset(c->row, 0, (size_t)d->width * 4);
+    MPSD__COMPOSED();
+    memset(row, 0, (size_t)d->width * 4);
     for (i = 0; i < d->layer_count; ++i) {      /* each layer at its offset, clipped to the canvas */
         const minipsd_layer *l  = &d->layers[i];
         const mpsd__rect     r  = mpsd__layer_rect(d, l);
@@ -63,7 +70,7 @@ static const uint8_t *mpsd__composite_row(mpsd__composite *c, uint32_t y)
         if (!mpsd__contributes(l) || ly < 0 || ly >= (int64_t)r.height) continue;
         src = l->rgba + (size_t)ly * r.width * 4;
         for (x = x0; x < x1; ++x) {
-            uint8_t       *o  = c->row + (size_t)x * 4;
+            uint8_t       *o  = row + (size_t)x * 4;
             const uint8_t *px = src + (size_t)(x - r.left) * 4;
             const float sa = px[3] / 255.0f * (l->opacity / 255.0f);
             const float da = o[3] / 255.0f;
@@ -75,7 +82,19 @@ static const uint8_t *mpsd__composite_row(mpsd__composite *c, uint32_t y)
             o[3] = (uint8_t)(oa * 255.0f + 0.5f);
         }
     }
-    for (x = 0; x < (int64_t)d->width; ++x) {   /* the merged image is stored over white */
+}
+
+/* The composite's row y as the file stores it, matted against white: a supplied row that is
+   already matted as it is; otherwise the supplied row copied, or the layers composed, into the
+   caller's row, then matted there. */
+static const uint8_t *mpsd__composite_row(mpsd__composite *c, uint32_t y)
+{
+    const minipsd_doc *d = c->doc;
+    uint32_t x;
+    if (!d->composite)              mpsd__compose(d, c->row, y);
+    else if (d->composite_matted)   return d->composite + (size_t)y * d->width * 4;
+    else                            memcpy(c->row, d->composite + (size_t)y * d->width * 4, (size_t)d->width * 4);
+    for (x = 0; x < d->width; ++x) {          /* the merged image is stored over white */
         uint8_t *o = c->row + (size_t)x * 4;
         const unsigned a = o[3];
         int k;

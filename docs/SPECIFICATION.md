@@ -204,12 +204,16 @@ caller's memory:
   - visibility: flag bit `0x02` set means hidden;
   - blend mode `norm` only.
 - **Composite image:**
-  - the visible layers combined with straight-alpha "over", each at its rectangle, clipped to
-    the canvas;
+  - the caller's `composite` when set (the full canvas, straight alpha), whatever the layers
+    hold: flattening layers is rendering, the caller's domain;
+  - otherwise composed as a **best effort, with no guarantee**: the visible layers combined with
+    straight-alpha "over", each at its rectangle, clipped to the canvas. Blend modes, masks,
+    clipping, groups and effects are not drawn;
   - transparency is the first extra channel, signalled by writing the layer count as a
     **negative** number, as the format specifies;
   - **colour is matted against white:** `c*a + 255*(1-a)`. Photoshop stores it this way and
-    readers subtract the white back out.
+    readers subtract the white back out. The writer mattes, a supplied composite too, unless
+    `composite_matted` says it already is: then it is written byte for byte.
 - **Image resources:**
   - 1005 ResolutionInfo: dpi as 16.16 fixed point, unit inches;
   - 1039 ICC profile, only when `icc` is set;

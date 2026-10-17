@@ -9,6 +9,10 @@
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
  */
 
+// How many composite rows the writer composed from the layers (composite.h's test hook).
+static int composedRows = 0;
+#define MPSD__COMPOSED() (++composedRows)
+
 #define MINIPSD_STATIC
 #define MINIPSD_IMPLEMENTATION
 #include "minipsd.h"
@@ -109,6 +113,40 @@ TEST(MinipsdWriterTest, ALayerIsWrittenAtItsRectangle)
         EXPECT_EQ(p.layers[2].rgba, outside);
         EXPECT_TRUE(p.layers[3].rgba.empty());
         EXPECT_EQ(p.composite.size(), 8u * 4 * 4) << "the composite stays the canvas";
+    }
+}
+
+TEST(MinipsdWriterTest, ASuppliedCompositeIsMattedAndWrittenWithoutComposing)
+{
+    const Bytes px = testImage(37, 5);
+    const minipsd_layer layers[2] = {{"Template", px.data(), 255, 0},
+                                     {.name = "Offset", .rgba = px.data(), .opacity = 128, .top = 2, .left = -9, .bottom = 7, .right = 28}};
+    for (int compression : {MINIPSD_RLE, MINIPSD_RAW}) {
+        SCOPED_TRACE(compression);
+        minipsd_doc d = docOf(37, 5, layers, 2);
+        d.compression = compression;
+        composedRows = 0;
+        const Bytes composed = write(d);
+        EXPECT_GT(composedRows, 0) << "without a composite, the layers are composed";
+
+        // The layers' own blend, straight alpha, supplied: the writer mattes it, the same bytes.
+        Bytes straight(px.size());
+        for (std::uint32_t y = 0; y < 5; ++y) mpsd__compose(&d, straight.data() + std::size_t(y) * 37 * 4, y);
+        d.composite = straight.data();
+        composedRows = 0;
+        EXPECT_EQ(write(d), composed) << "a supplied composite equal to the composed one";
+        EXPECT_EQ(pull(d, 7), composed) << "the pull writer, too";
+        EXPECT_EQ(composedRows, 0) << "nothing composed";
+
+        // Any image, whatever the layers hold; matted by the writer, or as it is when marked matted.
+        const Bytes other(px.rbegin(), px.rend());
+        d.composite = other.data();
+        EXPECT_EQ(read(write(d)).composite, matted(other));
+        d.composite_matted = 1;
+        EXPECT_EQ(read(write(d)).composite, other) << "already matted: written as it is";
+        EXPECT_EQ(pull(d, 7), write(d));
+        EXPECT_EQ(pullTotal(d), write(d).size());
+        EXPECT_EQ(composedRows, 0);
     }
 }
 

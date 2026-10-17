@@ -210,7 +210,7 @@ whatever cannot be carried is reported.
       *Done when:* golden test unchanged with every rectangle zero; `psd-tools` reads the
       rectangles and the composite of a test set (smaller, offset, off the canvas, empty);
       a real application shows the layers in place, checked by hand once (GIMP).
-- [ ] **S5.3** Composite supplied by the caller (`W7`): `composite` and `composite_matted`; the
+- [x] **S5.3** Composite supplied by the caller (`W7`): `composite` and `composite_matted`; the
       writer mattes a supplied composite unless it is marked matted, and skips composing.
       `NULL` keeps today's composed composite, documented as a best effort.
       *Done when:* golden test unchanged; a supplied composite equal to the composed one gives

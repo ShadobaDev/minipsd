@@ -252,7 +252,8 @@ struct minipsd_writer {
     int                channel;           /* 0..3: PSD order in layers, RGBA offset in the composite */
     uint32_t           row;
     uint64_t           offset;            /* bytes of the current piece already handed out */
-    uint32_t           composite_y;       /* the row composite_row holds; MPSD__NO_ROW for none */
+    uint32_t           composite_y;       /* the row composite_at holds; MPSD__NO_ROW for none */
+    const uint8_t     *composite_at;      /* that row: composite_row, or a matted supplied row */
 };
 
 #define MPSD__NO_ROW 0xFFFFFFFFu
@@ -358,16 +359,16 @@ static int mpsd__window_out(void *user, const void *data, size_t size)
     return win->taken < win->room;            /* full: the rest is only counted */
 }
 
-/* The composite row y, blended once and kept while pieces of it are produced. */
+/* The composite row y, built once and kept while pieces of it are produced. */
 static const uint8_t *mpsd__writer_composite(minipsd_writer *w, uint32_t y)
 {
     if (w->composite_y != y) {
         mpsd__composite c;
         mpsd__composite_init(&c, w->doc, w->composite_row);
-        mpsd__composite_row(&c, y);
-        w->composite_y = y;
+        w->composite_at = mpsd__composite_row(&c, y);
+        w->composite_y  = y;
     }
-    return w->composite_row;
+    return w->composite_at;
 }
 
 /* Produces the current piece, whole, into s. */
