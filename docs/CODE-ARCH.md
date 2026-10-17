@@ -493,7 +493,7 @@ int            composite_matted;   /* non-zero: composite is already matted, wri
 | `uint8_t clipping` | not clipped | written as given |
 | `uint8_t flags` | none | the record's other flag bits (0x01 transparency locked, 0x08 and 0x10 pixel data irrelevant), written as given; 0x02 comes from `hidden` |
 | `minipsd_bytes extra` | no extra blocks | the layer's additional-information blocks as one blob, in the format of the reader's `extra` view; written after the writer's own blocks. `minipsd_doc_check` walks them: a malformed run is `MINIPSD_ERR_ARG` |
-| `const minipsd_bytes *stored` | encode `rgba` | four channel blobs (R, G, B, A, as `minipsd_layer_view.channel`), each the stored data with its compression marker and row counts. The writer copies them instead of encoding `rgba`; the sizing pass takes their sizes. Name, opacity, visibility, blend, clipping and `extra` still come from the layer |
+| `const minipsd_bytes *stored` | encode `rgba` | four channel blobs (R, G, B, A, as `minipsd_layer_view.channel`), each the stored data with its compression marker and row counts. The writer copies each as one piece instead of encoding `rgba`; the sizing pass takes their sizes. `minipsd_doc_check` checks each against the rectangle (raw rows, or RLE counts adding up within the blob; ZIP passes as it is); a layer with `stored` and no `rgba` needs a supplied `composite`, since nothing could compose it. Name, opacity, visibility, blend, clipping and `extra` still come from the layer |
 
 `minipsd_doc`, at the end, after `composite` and `composite_matted`:
 
@@ -521,19 +521,17 @@ Bytes to a document, the mirror of `minipsd_write`, built on the public reader:
 
 ```c
 /* Two phases: the caller owns the memory. */
-int minipsd_read_size(const void *data, size_t size, const minipsd_limits *limits, size_t *block_size);
+int minipsd_read_size(const void *data, size_t size, const minipsd_limits *limits,
+                      const minipsd_read_opts *opts, size_t *block_size);
 int minipsd_read_into(const void *data, size_t size, const minipsd_limits *limits,
-                      void *block, size_t block_size, minipsd_doc **doc, uint32_t *lost);
+                      const minipsd_read_opts *opts, void *block, size_t block_size,
+                      minipsd_doc **doc, uint32_t *lost);
 
 /* One call, through MINIPSD_MALLOC; gone with MINIPSD_NO_MALLOC, like minipsd_write. */
 int  minipsd_read    (const void *data, size_t size, const minipsd_limits *limits,
-                      minipsd_doc **doc, uint32_t *lost);
+                      const minipsd_read_opts *opts, minipsd_doc **doc, uint32_t *lost);
 void minipsd_doc_free(minipsd_doc *doc);   /* MINIPSD_FREE, so a replaced allocator stays right */
-```
 
-The pass-through step (S5.6) adds `const minipsd_read_opts *opts` after `limits` to all three:
-
-```c
 typedef struct minipsd_read_opts {
     int stored;   /* non-zero: each layer keeps its stored channels (stored) instead of pixels */
 } minipsd_read_opts;   /* NULL: decode every layer */
@@ -567,7 +565,8 @@ typedef struct minipsd_read_opts {
 - **`opts->stored`** decodes nothing: each layer keeps its compressed channels, a fraction of its
   pixels' size. The caller decodes the one layer it edits through the reader, from the same
   file, sets that layer's `rgba` and clears its `stored`, then writes. Untouched layers are never
-  decoded nor encoded again, and the file's own composite needs no rendering (`E1`).
+  decoded nor encoded again, and the file's own composite needs no rendering (`E1`). A layer
+  without a transparency channel is decoded all the same: the writer writes four channels.
 - **Limits:** `minipsd_limits` as in the reader; `max_decoded_bytes` bounds the sum of the call's
   decoded pixels. A block larger than `SIZE_MAX` is `MINIPSD_ERR_SIZE`.
 - **What it accepts:** 8-bit RGB, as the decoder; anything else is `MINIPSD_ERR_UNSUPPORTED`
@@ -613,7 +612,7 @@ feature is serialization: written and read as data. The composite composed as a 
 | **Layers smaller than the canvas** | done: `top, left, bottom, right` on `minipsd_layer`, as in the view; all zero = full canvas | done: bounds, row tables | done: the view's rectangle | done: `composite`: offset blend, clipped to the canvas | |
 | **Blend modes** | done: `blend[4]`; zero = `norm` | done: key in the record | done: the view's key | — | the composed composite draws every mode as `norm` |
 | **Supplied composite** | done: `composite`, `composite_matted`; NULL = composed | done: matted unless marked, composing skipped | — | `composite`: the row source | `W7` |
-| **Round trip** | done: `blend`, `clipping`, `flags`, `extra`; `resources`, `layer_tail`. Next: `stored` | done: kept data written back | done: `clipping`, `flags`, resource names, `layer_tail`; `minipsd_read` | `bytes`: the block walker, shared | see [Round trip](#round-trip) |
+| **Round trip** | done: `blend`, `clipping`, `flags`, `extra`, `stored`; `resources`, `layer_tail` | done: kept data written back, stored channels copied | done: `clipping`, `flags`, resource names, `layer_tail`; `minipsd_read` with `opts->stored` | `bytes`: the block walker, shared | see [Round trip](#round-trip) |
 | **Layer groups (`lsct`)** | `kind`: layer / group open / group close; zero = layer | divider records, `lsct` block | group structure in the view | — | kept today as `lsct` blocks in `extra` |
 | **Layer masks** | optional mask (rect + bytes) per layer | mask record, channel `-2` | mask view | — | until then `MINIPSD_LOST_MASK` |
 | **16-bit channels** | `depth` on `minipsd_doc`; zero = 8 | 2-byte samples | 2-byte samples | `packbits` over byte planes, `composite` in 16-bit | |

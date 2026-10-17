@@ -103,8 +103,8 @@ static int mpsd__read_resources(minipsd_reader **r, const void *data, size_t siz
 }
 
 /* The document in a, measured or placed; on MINIPSD_OK with a block, *out and *lost are set. */
-static int mpsd__read(const void *data, size_t size, const minipsd_limits *limits, mpsd__arena *a,
-                      minipsd_doc **out, uint32_t *lost)
+static int mpsd__read(const void *data, size_t size, const minipsd_limits *limits, const minipsd_read_opts *opts,
+                      mpsd__arena *a, minipsd_doc **out, uint32_t *lost)
 {
     uint8_t             workspace[sizeof(minipsd_reader) + 2 * MPSD__ALIGN];
     minipsd_reader     *r;
@@ -141,7 +141,8 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         const uint64_t at = r->record_next;
         uint64_t       w, h;
         char          *name;
-        minipsd_bytes  extra;
+        minipsd_bytes  extra, copies[4], *stored = NULL;
+        int            k, keep;
         rc = minipsd_reader_next_layer(r, &v);
         if (rc != MINIPSD_MORE) return rc == MINIPSD_OK ? MINIPSD_ERR_FORMAT : rc;
         loss |= mpsd__record_loss(r, at);
@@ -150,9 +151,17 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         if (w > MINIPSD_MAX_SIDE || h > MINIPSD_MAX_SIDE) return MINIPSD_ERR_UNSUPPORTED;   /* the writer's limit */
         (void)minipsd_layer_name(&v, NULL, 0, &n);
         name   = (char *)mpsd__take(a, n, 0);
-        pixels = w && h ? (uint8_t *)mpsd__take(a, w * h * 4, 0) : NULL;
+        /* Stored: every channel copied as it is, never decoded; a layer without transparency is
+           decoded, since the writer writes four channels. */
+        keep = opts && opts->stored && w && h;
+        for (k = 0; k < 4; ++k) keep = keep && v.channel[k].size;
+        if (keep) {
+            stored = (minipsd_bytes *)mpsd__take(a, 4 * sizeof *stored, 1);
+            for (k = 0; k < 4; ++k) copies[k] = mpsd__copy(a, v.channel[k]);
+        }
+        pixels = w && h && !keep ? (uint8_t *)mpsd__take(a, w * h * 4, 0) : NULL;
         extra  = mpsd__copy(a, v.extra);                        /* every block, 'luni' too */
-        decoded += w * h * 4;
+        if (pixels) decoded += w * h * 4;
         if (max && decoded > max) return MINIPSD_ERR_LIMIT;
         if (!d) continue;
         (void)minipsd_layer_name(&v, name, n, NULL);
@@ -171,6 +180,10 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         layers[i].clipping = v.clipping;
         layers[i].flags    = (uint8_t)(v.flags & ~0x02u);
         layers[i].extra    = extra;
+        if (stored) {
+            for (k = 0; k < 4; ++k) stored[k] = copies[k];
+            layers[i].stored = stored;
+        }
     }
 
     /* The composite as stored, matted, so it is written back exactly; a flat file's image also
@@ -222,7 +235,8 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     return MINIPSD_OK;
 }
 
-MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_limits *limits, size_t *block_size)
+MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_limits *limits,
+                                 const minipsd_read_opts *opts, size_t *block_size)
 {
     mpsd__arena a;
     int         rc;
@@ -230,13 +244,14 @@ MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_li
     *block_size = 0;
     a.base = NULL;
     a.used = 0;
-    rc = mpsd__read(data, size, limits, &a, NULL, NULL);
+    rc = mpsd__read(data, size, limits, opts, &a, NULL, NULL);
     if (rc == MINIPSD_OK) *block_size = (size_t)a.used + MPSD__ALIGN - 1;   /* any alignment will do */
     return rc;
 }
 
-MINIPSDDEF int minipsd_read_into(const void *data, size_t size, const minipsd_limits *limits, void *block,
-                                 size_t block_size, minipsd_doc **doc, uint32_t *lost)
+MINIPSDDEF int minipsd_read_into(const void *data, size_t size, const minipsd_limits *limits,
+                                 const minipsd_read_opts *opts, void *block, size_t block_size,
+                                 minipsd_doc **doc, uint32_t *lost)
 {
     mpsd__arena a;
     size_t      need = 0;
@@ -245,20 +260,20 @@ MINIPSDDEF int minipsd_read_into(const void *data, size_t size, const minipsd_li
     *doc = NULL;
     if (lost) *lost = 0;
     if (!block) return MINIPSD_ERR_ARG;
-    rc = minipsd_read_size(data, size, limits, &need);
+    rc = minipsd_read_size(data, size, limits, opts, &need);
     if (rc != MINIPSD_OK) return rc;
     if (block_size < need) return MINIPSD_ERR_ARG;
     a.base = (uint8_t *)block + (MPSD__ALIGN - (uintptr_t)block % MPSD__ALIGN) % MPSD__ALIGN;
     a.used = 0;
-    rc = mpsd__read(data, size, limits, &a, doc, lost);
+    rc = mpsd__read(data, size, limits, opts, &a, doc, lost);
     if (rc != MINIPSD_OK) *doc = NULL;
     return rc;
 }
 
 #ifndef MINIPSD_NO_MALLOC
 
-MINIPSDDEF int minipsd_read(const void *data, size_t size, const minipsd_limits *limits, minipsd_doc **doc,
-                            uint32_t *lost)
+MINIPSDDEF int minipsd_read(const void *data, size_t size, const minipsd_limits *limits,
+                            const minipsd_read_opts *opts, minipsd_doc **doc, uint32_t *lost)
 {
     size_t need = 0;
     void  *block;
@@ -266,11 +281,11 @@ MINIPSDDEF int minipsd_read(const void *data, size_t size, const minipsd_limits 
     if (!doc) return MINIPSD_ERR_ARG;
     *doc = NULL;
     if (lost) *lost = 0;
-    rc = minipsd_read_size(data, size, limits, &need);
+    rc = minipsd_read_size(data, size, limits, opts, &need);
     if (rc != MINIPSD_OK) return rc;
     block = MINIPSD_MALLOC(need);
     if (!block) return MINIPSD_ERR_ALLOC;
-    rc = minipsd_read_into(data, size, limits, block, need, doc, lost);
+    rc = minipsd_read_into(data, size, limits, opts, block, need, doc, lost);
     if (rc != MINIPSD_OK || (void *)*doc != block) {           /* malloc aligns: the document is at its start */
         MINIPSD_FREE(block);
         *doc = NULL;

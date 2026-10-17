@@ -223,6 +223,12 @@ typedef struct minipsd_layer {
                                  groups, ...), as minipsd_layer_view.extra holds them: written
                                  after the layer's own name, except a 'luni' block, since name
                                  wins.                                                          */
+    const minipsd_bytes *stored; /*!< NULL: rgba is encoded.  Otherwise four channels as a file
+                                 stores them (R, G, B, transparency, as minipsd_layer_view.channel:
+                                 the compression marker, then the rows), copied as they are
+                                 instead of encoding rgba: a layer never decoded is never encoded
+                                 again.  Each is checked against the rectangle.  rgba may then be
+                                 NULL, as long as the document supplies its composite.          */
 } minipsd_layer;
 
 /**
@@ -272,7 +278,9 @@ typedef struct minipsd_doc {
  * \retval MINIPSD_ERR_ARG  doc is NULL, there are no layers (or more than 32767), dpi is outside
  *                          (0, 65536), a size is set without its data (icc, a resource, a name,
  *                          extra, layer_tail), a layer's rectangle is inverted, an empty layer's
- *                          has an area, or extra is not a run of well-formed blocks.
+ *                          has an area, extra is not a run of well-formed blocks, a stored
+ *                          channel does not match its rectangle, or a layer has only stored
+ *                          channels while the composite is to be composed.
  * \retval MINIPSD_ERR_SIZE A side of the canvas or of a layer is 0 or above MINIPSD_MAX_SIDE (a
  *                          layer's may be 0), a resource name is longer than 255 bytes, or the
  *                          resources or a layer's extra data do not fit a 32-bit length.
@@ -693,16 +701,29 @@ enum {
 };
 
 /**
+ * \brief How minipsd_read builds the document.  NULL options decode every layer.
+ *
+ * Fields are only ever added at the end, and zero keeps the previous behaviour.
+ */
+typedef struct minipsd_read_opts {
+    int stored; /*!< Non-zero: each layer keeps its channels as stored (minipsd_layer.stored), not
+                     decoded, so writing it back copies them: a fraction of the memory, and no
+                     encoding.  A layer without a transparency channel is decoded all the same. */
+} minipsd_read_opts;
+
+/**
  * \brief How many bytes minipsd_read_into needs for a file: the document and all it holds.
  *
  * \param data       The whole file.
  * \param size       How many bytes data holds.
  * \param limits     As for minipsd_reader_init; max_decoded_bytes bounds all the pixels decoded,
  *                   every layer and the composite together.  NULL keeps the format's limits.
+ * \param opts       How to build the document; NULL decodes every layer.
  * \param block_size Receives the size in bytes, alignment slack included.
  * \return MINIPSD_OK or an error code: as minipsd_read.
  */
-MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_limits *limits, size_t *block_size);
+MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_limits *limits,
+                                 const minipsd_read_opts *opts, size_t *block_size);
 
 /**
  * \brief Reads a whole file into one block of the caller's: a document the writer accepts as it is.
@@ -710,13 +731,15 @@ MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_li
  * Everything is copied into the block (names, pixels, the composite, the ICC profile, kept
  * blocks, resources and the layer tail), so data may be freed as soon as the call returns; the
  * document lives as long as the block.  Each layer comes with its rectangle, opacity, visibility,
- * blend key, clipping, flags, decoded pixels and its blocks as they are; the composite as the file stores it,
- * with composite_matted set, so writing the document gives the same image back.  A file without
+ * blend key, clipping, flags, decoded pixels (with opts->stored, its channels as stored) and its
+ * blocks as they are; the composite as the file stores it, with composite_matted set, so writing
+ * the document gives the same image back.  A file without
  * layers gets one, "Background", holding its image.  A file without a resolution gets 72 dpi.
  *
  * \param data       The whole file.
  * \param size       How many bytes data holds.
  * \param limits     As for minipsd_read_size.
+ * \param opts       As for minipsd_read_size; the same as given there.
  * \param block      At least minipsd_read_size bytes, any alignment.
  * \param block_size The size of block in bytes.
  * \param doc        Receives the document, inside block; NULL on failure.
@@ -730,8 +753,9 @@ MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_li
  * \retval MINIPSD_ERR_SIZE        The document does not fit in memory (a block above SIZE_MAX).
  * \retval MINIPSD_ERR_FORMAT, MINIPSD_ERR_SHORT, MINIPSD_ERR_LIMIT  As the reader.
  */
-MINIPSDDEF int minipsd_read_into(const void *data, size_t size, const minipsd_limits *limits, void *block,
-                                 size_t block_size, minipsd_doc **doc, uint32_t *lost);
+MINIPSDDEF int minipsd_read_into(const void *data, size_t size, const minipsd_limits *limits,
+                                 const minipsd_read_opts *opts, void *block, size_t block_size,
+                                 minipsd_doc **doc, uint32_t *lost);
 
 #ifndef MINIPSD_NO_MALLOC
 /**
@@ -740,8 +764,8 @@ MINIPSDDEF int minipsd_read_into(const void *data, size_t size, const minipsd_li
  * minipsd_read_size and minipsd_read_into on a block of its own: the same document, the same
  * return codes, and MINIPSD_ERR_ALLOC when the allocation fails.
  */
-MINIPSDDEF int minipsd_read(const void *data, size_t size, const minipsd_limits *limits, minipsd_doc **doc,
-                            uint32_t *lost);
+MINIPSDDEF int minipsd_read(const void *data, size_t size, const minipsd_limits *limits,
+                            const minipsd_read_opts *opts, minipsd_doc **doc, uint32_t *lost);
 
 /** \brief Frees a document from minipsd_read, through MINIPSD_FREE.  NULL does nothing. */
 MINIPSDDEF void minipsd_doc_free(minipsd_doc *doc);

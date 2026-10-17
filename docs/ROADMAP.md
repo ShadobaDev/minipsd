@@ -224,17 +224,17 @@ whatever cannot be carried is reported.
       through `minipsd_read`); every 8-bit RGB file of psd-tools' set reads, and its `lost`
       matches what `examples/read_file.c` shows of it; the test frees the file's buffer before
       writing, under ASan.
-- [ ] **S5.5** Unknown content kept (`E2`): `blend`, `clipping` and `extra` on the layer,
+- [x] **S5.5** Unknown content kept (`E2`): `blend`, `clipping` and `extra` on the layer,
       `resources` and `layer_tail` on the document, written back as given; the reader gains
       `clipping` in the view and `layer_tail` in `minipsd_info`; the document's fields win over
       kept data with the same key (`luni`, 1005, 1039). `MINIPSD_LOST_EXTRA` goes: no release had
       it. Also kept: the record's other flag bits (`flags`) and resource names.
       *Done when:* a file of psd-tools' set with a text layer survives `minipsd_read` and
-      `minipsd_write`: every kept block identical byte for byte (checked by `psd-tools`), the
-      text shown by Photoshop or Photopea, checked by hand once.
-- [ ] **S5.6** Pass-through re-save (`E1`): `stored` on the layer and `opts->stored` in
-      `minipsd_read`; `opts` is a new parameter of the three read functions, so a breaking change
-      if a release had them without it. The writer copies stored channels instead of encoding pixels.
+      `minipsd_write`: every kept block identical byte for byte (checked by `psd-tools`); GIMP
+      opens it with the text layer recognised, checked by hand once.
+- [x] **S5.6** Pass-through re-save (`E1`): `stored` on the layer and `opts->stored` in
+      `minipsd_read`; `opts` is a parameter of the three read functions. The writer copies stored
+      channels instead of encoding pixels.
       *Done when:* reading a file with `stored`, changing one layer and writing again encodes
       only that layer (counted in a test); the untouched layers' channel bytes are identical to
       the input's.

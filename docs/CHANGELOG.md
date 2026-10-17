@@ -32,6 +32,9 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   `minipsd_read_size` and `minipsd_read_into` for the caller's own memory. `lost`
   (`MINIPSD_LOST_*`) says what the document could not carry: layer masks, blending ranges,
   extra channels.
+- Pass-through re-save: `minipsd_read_opts.stored` keeps each layer's channels as the file
+  stores them (`minipsd_layer.stored`), and the writer copies them instead of encoding pixels, so
+  changing one layer encodes only that one.
 - Content kept from a file and written back as it is: `blend`, `clipping`, `flags` and `extra`
   (additional-information blocks: text, effects, groups, smart objects) on `minipsd_layer`;
   `resources` and `layer_tail` (global layer mask and blocks) on `minipsd_doc`. The document's

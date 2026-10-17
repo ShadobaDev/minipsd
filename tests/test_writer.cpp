@@ -9,9 +9,15 @@
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
  */
 
-// How many composite rows the writer composed from the layers (composite.h's test hook).
+#include <set>
+#include <string>
+
+// How many composite rows the writer composed from the layers (composite.h's test hook), and
+// which layers it encoded (writer.h's).
 static int composedRows = 0;
+static std::set<std::string> encodedLayers;
 #define MPSD__COMPOSED() (++composedRows)
+#define MPSD__ENCODED(layer) (encodedLayers.insert((layer)->name ? (layer)->name : ""))
 
 #define MINIPSD_STATIC
 #define MINIPSD_IMPLEMENTATION
@@ -220,6 +226,62 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     EXPECT_EQ(info.dpi, 72.0);
     ASSERT_EQ(minipsd_reader_next_resource(r, &res), MINIPSD_MORE);
     EXPECT_EQ(res.data.data[7], 1) << "shown in inches";
+}
+
+TEST(MinipsdWriterTest, PassThroughEncodesOnlyTheLayerThatChanged)
+{
+    const Bytes a = testImage(37, 5), b = testImage(20, 3), c = testImage(37, 5);
+    const Bytes fresh(std::size_t(20) * 3 * 4, 0x55);
+    const minipsd_layer layers[3] = {{"A", a.data(), 255, 0},
+                                     {.name = "B", .rgba = b.data(), .opacity = 255, .top = 1, .left = 2, .bottom = 4, .right = 22},
+                                     {"C", c.data(), 128, 1}};
+    // Each layer's four channels as the file stores them, through the reader.
+    auto channels = [](const Bytes &file) {
+        Bytes workspace(256);
+        minipsd_reader *r = nullptr;
+        minipsd_info info{};
+        EXPECT_EQ(minipsd_reader_init(&r, file.data(), file.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
+        std::vector<std::vector<Bytes>> out;
+        minipsd_layer_view v;
+        while (minipsd_reader_next_layer(r, &v) == MINIPSD_MORE) {
+            out.emplace_back();
+            for (const minipsd_bytes &ch : v.channel) out.back().emplace_back(ch.data, ch.data + ch.size);
+        }
+        return out;
+    };
+    for (int compression : {MINIPSD_RLE, MINIPSD_RAW}) {
+        SCOPED_TRACE(compression);
+        minipsd_doc d = docOf(37, 5, layers, 3);
+        d.compression = compression;
+        const Bytes file = write(d);
+
+        const minipsd_read_opts keep{1};
+        minipsd_doc *r = nullptr;
+        ASSERT_EQ(minipsd_read(file.data(), file.size(), nullptr, &keep, &r, nullptr), MINIPSD_OK);
+        ASSERT_NE(r->layers[1].stored, nullptr);
+        EXPECT_EQ(r->layers[1].rgba, nullptr) << "nothing decoded";
+        encodedLayers.clear();
+        EXPECT_EQ(write(*r), file) << "copied as stored: the same bytes";
+        EXPECT_TRUE(encodedLayers.empty()) << "and nothing encoded";
+
+        // Layer B changes: only it is encoded; the others' channels are the input's, byte for byte.
+        std::vector<minipsd_layer> edited(r->layers, r->layers + 3);
+        edited[1].rgba = fresh.data();
+        edited[1].stored = nullptr;
+        minipsd_doc e = *r;
+        e.layers = edited.data();
+        encodedLayers.clear();
+        const Bytes out = write(e);
+        EXPECT_EQ(encodedLayers, std::set<std::string>{"B"});
+        EXPECT_EQ(pull(e, 7), out);
+        EXPECT_EQ(pullTotal(e), out.size());
+        const auto before = channels(file), after = channels(out);
+        ASSERT_EQ(after.size(), 3u);
+        EXPECT_EQ(after[0], before[0]);
+        EXPECT_EQ(after[2], before[2]);
+        EXPECT_EQ(read(out).layers[1].rgba, fresh);
+        minipsd_doc_free(r);
+    }
 }
 
 // How the composite is computed is tested in test_composite.cpp; here, what the records keep.

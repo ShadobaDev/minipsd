@@ -111,7 +111,7 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
         uint8_t      copy[1024], back[1024];
         smoke_buf    c;
         memcpy(copy, b.data, b.size);
-        if (minipsd_read(copy, b.size, NULL, &rdoc, &lost) != MINIPSD_OK || lost != 0)
+        if (minipsd_read(copy, b.size, NULL, NULL, &rdoc, &lost) != MINIPSD_OK || lost != 0)
             return -109;
         memset(copy, 0, sizeof copy);
         c.data = back; c.size = 0; c.capacity = sizeof back;

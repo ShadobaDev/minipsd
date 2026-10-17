@@ -144,10 +144,14 @@ TEST(MinipsdGoldenTest, OutputMatchesTheBytesOf010)
         auto file = std::make_unique<Bytes>(out);
         minipsd_doc *back = nullptr;
         std::uint32_t lost = 99;
-        ASSERT_EQ(minipsd_read(file->data(), file->size(), nullptr, &back, &lost), MINIPSD_OK);
+        ASSERT_EQ(minipsd_read(file->data(), file->size(), nullptr, nullptr, &back, &lost), MINIPSD_OK);
         file.reset();
         EXPECT_EQ(lost, 0u);
         EXPECT_EQ(write(*back), out) << "read and written back: the same bytes";
+        minipsd_doc_free(back);
+        const minipsd_read_opts stored{1};
+        ASSERT_EQ(minipsd_read(out.data(), out.size(), nullptr, &stored, &back, nullptr), MINIPSD_OK);
+        EXPECT_EQ(write(*back), out) << "channels copied as stored: the same bytes";
         minipsd_doc_free(back);
         EXPECT_EQ(pullTotal(t.doc), out.size()) << "the pull writer knows the size before writing";
         for (std::size_t cap : {std::size_t(1), std::size_t(7), std::size_t(4096), out.size(), std::size_t(0)})

@@ -89,6 +89,26 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
         EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_ARG) << "extra of " << extra.size << " bytes";
     }
 
+    // Stored channels: each must fit the rectangle, and a layer with only them needs a composite.
+    const Bytes raw4 = {0, 0, 1, 2, 3, 4}, raw3 = {0, 0, 1, 2, 3}, rle = {0, 1, 0, 3, 0, 3, 0x01, 7, 7, 0x01, 7, 7};
+    const Bytes zip = {0, 2, 9}, bad = {0, 9, 0, 0, 0, 0};
+    auto storedDoc = [&](const Bytes &ch, const std::uint8_t *rgba, const std::uint8_t *composite) {
+        static minipsd_bytes four[4];
+        static minipsd_layer l;
+        for (minipsd_bytes &c : four) c = {ch.data(), ch.size()};
+        l = {.name = "S", .rgba = rgba, .opacity = 255, .top = 0, .left = 0, .bottom = 2, .right = 2, .stored = four};
+        minipsd_doc s = docOf(2, 2, &l, 1);
+        s.composite = composite;
+        return minipsd_doc_check(&s);
+    };
+    EXPECT_EQ(storedDoc(raw4, nullptr, px.data()), MINIPSD_OK);
+    EXPECT_EQ(storedDoc(rle, nullptr, px.data()), MINIPSD_OK);
+    EXPECT_EQ(storedDoc(zip, nullptr, px.data()), MINIPSD_OK) << "ZIP is copied, not looked into";
+    EXPECT_EQ(storedDoc(raw4, px.data(), nullptr), MINIPSD_OK) << "the pixels compose it";
+    EXPECT_EQ(storedDoc(raw4, nullptr, nullptr), MINIPSD_ERR_ARG) << "nothing to compose the composite from";
+    EXPECT_EQ(storedDoc(raw3, nullptr, px.data()), MINIPSD_ERR_ARG) << "raw rows short of the rectangle";
+    EXPECT_EQ(storedDoc(bad, nullptr, px.data()), MINIPSD_ERR_ARG) << "an unknown compression";
+
     // The resources' length is 32-bit; the ICC size alone decides it, so no ICC byte is read and a
     // 4-byte buffer stands in for 4 GiB.
     const std::uint8_t stand_in[4] = {};

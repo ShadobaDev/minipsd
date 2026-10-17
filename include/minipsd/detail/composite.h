@@ -21,8 +21,8 @@ typedef struct mpsd__composite {
 static int mpsd__contributes(const minipsd_layer *l) { return l->rgba && !l->hidden && l->opacity; }
 
 /* A layer's rectangle as written, and the size of its pixels: 0 by 0 for a layer without pixels or
-   without area.  All four sides zero with pixels is the full canvas.  Valid after
-   minipsd_doc_check, which keeps width and height within MINIPSD_MAX_SIDE. */
+   without area.  All four sides zero with pixels (rgba or stored channels) is the full canvas.
+   Valid after minipsd_doc_check, which keeps width and height within MINIPSD_MAX_SIDE. */
 typedef struct mpsd__rect {
     int32_t  top, left, bottom, right;
     uint32_t width, height;
@@ -32,13 +32,13 @@ static mpsd__rect mpsd__layer_rect(const minipsd_doc *d, const minipsd_layer *l)
 {
     mpsd__rect r;
     r.top = l->top; r.left = l->left; r.bottom = l->bottom; r.right = l->right;
-    if (l->rgba && !(r.top | r.left | r.bottom | r.right)) {
+    if ((l->rgba || l->stored) && !(r.top | r.left | r.bottom | r.right)) {
         r.bottom = (int32_t)d->height;
         r.right  = (int32_t)d->width;
     }
     r.width  = (uint32_t)((int64_t)r.right - r.left);
     r.height = (uint32_t)((int64_t)r.bottom - r.top);
-    if (!l->rgba || !r.width || !r.height) r.width = r.height = 0;
+    if ((!l->rgba && !l->stored) || !r.width || !r.height) r.width = r.height = 0;
     return r;
 }
 

@@ -1548,10 +1548,11 @@ namespace {
 
 using Doc = std::unique_ptr<minipsd_doc, void (*)(minipsd_doc *)>;
 
-Doc readDoc(const Bytes &file, std::uint32_t *lost, int expected = MINIPSD_OK, const minipsd_limits *limits = nullptr)
+Doc readDoc(const Bytes &file, std::uint32_t *lost, int expected = MINIPSD_OK, const minipsd_limits *limits = nullptr,
+            const minipsd_read_opts *opts = nullptr)
 {
     minipsd_doc *d = reinterpret_cast<minipsd_doc *>(1);
-    EXPECT_EQ(minipsd_read(file.data(), file.size(), limits, &d, lost), expected);
+    EXPECT_EQ(minipsd_read(file.data(), file.size(), limits, opts, &d, lost), expected);
     if (expected != MINIPSD_OK) { EXPECT_EQ(d, nullptr); }
     return Doc(d, minipsd_doc_free);
 }
@@ -1580,14 +1581,14 @@ TEST(MinipsdReadTest, AFileBecomesADocumentThatStandsAlone)
     // Into the caller's block, at an odd address; from a copy of the file, wiped before writing.
     Bytes file = original;
     std::size_t need = 0;
-    ASSERT_EQ(minipsd_read_size(file.data(), file.size(), nullptr, &need), MINIPSD_OK);
+    ASSERT_EQ(minipsd_read_size(file.data(), file.size(), nullptr, nullptr, &need), MINIPSD_OK);
     Bytes block(need + 3);
     minipsd_doc *r = nullptr;
     std::uint32_t lost = 99;
-    EXPECT_EQ(minipsd_read_into(file.data(), file.size(), nullptr, block.data() + 3, need - 1, &r, &lost), MINIPSD_ERR_ARG)
+    EXPECT_EQ(minipsd_read_into(file.data(), file.size(), nullptr, nullptr, block.data() + 3, need - 1, &r, &lost), MINIPSD_ERR_ARG)
         << "a block too small";
     EXPECT_EQ(r, nullptr);
-    ASSERT_EQ(minipsd_read_into(file.data(), file.size(), nullptr, block.data() + 3, need, &r, &lost), MINIPSD_OK);
+    ASSERT_EQ(minipsd_read_into(file.data(), file.size(), nullptr, nullptr, block.data() + 3, need, &r, &lost), MINIPSD_OK);
     std::fill(file.begin(), file.end(), 0xEE);
     EXPECT_EQ(lost, 0u);
     EXPECT_GE(reinterpret_cast<std::uint8_t *>(r), block.data() + 3);
@@ -1613,9 +1614,9 @@ TEST(MinipsdReadTest, AFileBecomesADocumentThatStandsAlone)
     EXPECT_EQ(Bytes(r->composite, r->composite + 7 * 4 * 4), read(original).composite) << "as stored";
     EXPECT_EQ(write(*r), original) << "written back: the same bytes";
 
-    EXPECT_EQ(minipsd_read_into(original.data(), original.size(), nullptr, nullptr, need, &r, nullptr), MINIPSD_ERR_ARG);
-    EXPECT_EQ(minipsd_read_into(original.data(), original.size(), nullptr, block.data(), need, nullptr, nullptr), MINIPSD_ERR_ARG);
-    EXPECT_EQ(minipsd_read_size(original.data(), original.size(), nullptr, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_read_into(original.data(), original.size(), nullptr, nullptr, nullptr, need, &r, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_read_into(original.data(), original.size(), nullptr, nullptr, block.data(), need, nullptr, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_read_size(original.data(), original.size(), nullptr, nullptr, nullptr), MINIPSD_ERR_ARG);
     minipsd_doc_free(nullptr);
 }
 
@@ -1847,6 +1848,21 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
             }
             EXPECT_TRUE(std::equal(d->composite, d->composite + composite.size(), e->composite));
             expectKeptAlike(file, again);
+
+            // Stored: no layer decoded, yet the file written from it decodes to the same pixels.
+            const minipsd_read_opts keep{1};
+            const Doc s = readDoc(file, &lost, MINIPSD_OK, nullptr, &keep);
+            ASSERT_TRUE(s);
+            const Doc f = readDoc(write(*s), &lostAgain);
+            ASSERT_TRUE(f);
+            ASSERT_EQ(f->layer_count, d->layer_count);
+            for (std::size_t i = 0; i < d->layer_count; ++i) {
+                const minipsd_layer &a = d->layers[i], &b = f->layers[i];
+                SCOPED_TRACE(i);
+                const std::size_t n = std::size_t(a.right - a.left) * std::size_t(a.bottom - a.top) * 4;
+                EXPECT_EQ(a.rgba == nullptr, b.rgba == nullptr);
+                if (a.rgba && b.rgba) { EXPECT_TRUE(std::equal(a.rgba, a.rgba + n, b.rgba)); }
+            }
         }
 
         // In parts, as a download or a file manager would: grow the prefix to exactly what `needed`

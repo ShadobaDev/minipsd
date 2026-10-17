@@ -111,9 +111,9 @@ The declarations, with every parameter and return code, are in
 | `minipsd_target_rgba(&target, rgba, row_stride)` | a target for interleaved RGBA, the common case |
 | `minipsd_decode_layer(r, layer, target, opts)` | a layer's pixels, or a band of its rows, as stored (opacity and visibility not applied), into the caller's planes; 8-bit RGB, raw or PackBits |
 | `minipsd_decode_composite(r, target, opts)` | the composite (merged) image, or a band of its rows, un-matted to straight alpha unless `keep_matte` |
-| `minipsd_read_size(data, size, limits, &block_size)` | the block `minipsd_read_into` needs for a whole file |
-| `minipsd_read_into(data, size, limits, block, block_size, &doc, &lost)` | a whole file into a document in the caller's block, everything copied, so the file may go; `lost` says what it could not carry |
-| `minipsd_read(data, size, limits, &doc, &lost)`, `minipsd_doc_free(doc)` | the same in one `MINIPSD_MALLOC` block, and its free; absent under `MINIPSD_NO_MALLOC` |
+| `minipsd_read_size(data, size, limits, opts, &block_size)` | the block `minipsd_read_into` needs for a whole file |
+| `minipsd_read_into(data, size, limits, opts, block, block_size, &doc, &lost)` | a whole file into a document in the caller's block, everything copied, so the file may go; `lost` says what it could not carry; `opts->stored` keeps each layer's channels as stored instead of decoding them |
+| `minipsd_read(data, size, limits, opts, &doc, &lost)`, `minipsd_doc_free(doc)` | the same in one `MINIPSD_MALLOC` block, and its free; absent under `MINIPSD_NO_MALLOC` |
 | `minipsd_error_string(code)` | a short English text for a return code |
 
 The reader describes any version-1 PSD, whatever its colour mode or depth; it decodes the pixels
@@ -207,7 +207,9 @@ caller's memory:
   - visibility: flag bit `0x02` set means hidden; the other flag bits as given (`flags`);
   - the blend key as given, `norm` by default, and clipping as given;
   - after the writer's own `luni`, the blocks kept from a file (`extra`), as they are, except a
-    kept `luni`: the name wins.
+    kept `luni`: the name wins;
+  - channel data encoded from `rgba`, or copied as it is from `stored` (any compression the
+    file had, ZIP included), so a layer that was not changed is not encoded again.
 - **Composite image:**
   - the caller's `composite` when set (the full canvas, straight alpha), whatever the layers
     hold: flattening layers is rendering, the caller's domain;
@@ -275,7 +277,8 @@ them; nothing is copied or allocated. Results on real files from other programs:
   blocks that follow the layer info, as one raw view (`minipsd_info.layer_tail`).
 - **Not read:** the colour mode data (palettes).
 - **As a document** (`minipsd_read`): 8-bit RGB files; each layer's rectangle, name, opacity,
-  visibility, blend key, clipping, flags, decoded pixels and blocks, the composite as stored
+  visibility, blend key, clipping, flags, decoded pixels (or, with `opts->stored`, its channels
+  as stored) and blocks, the composite as stored
   (`composite_matted`), the dpi (72 when none is stored), the ICC profile, every resource and the
   layer tail, all copied into one block. A file without layers gets one,
   "Background", holding its image. Anything else is reported in `lost` (`MINIPSD_LOST_*`), never

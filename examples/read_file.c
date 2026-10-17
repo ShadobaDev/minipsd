@@ -136,7 +136,7 @@ int main(int argc, char **argv)
     if (info.depth == 8 && info.color_mode == 3) {
         minipsd_doc *doc;
         uint32_t     lost = 0;
-        rc = minipsd_read(data, size, NULL, &doc, &lost);
+        rc = minipsd_read(data, size, NULL, NULL, &doc, &lost);
         if (rc != MINIPSD_OK) { printf("as a document: %s\n", minipsd_error_string(rc)); failed = 1; }
         else if (!lost)       printf("as a document: everything kept\n");
         else printf("as a document, lost:%s%s%s\n", lost & MINIPSD_LOST_MASK ? " masks" : "",

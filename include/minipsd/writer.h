@@ -102,14 +102,21 @@ static void mpsd__layer_extra(mpsd__sink *s, const minipsd_layer *l)
 
 /* --- the layer section --- */
 
+/* Tests count the layers whose pixels are encoded by defining this before the implementation. */
+#ifndef MPSD__ENCODED
+#  define MPSD__ENCODED(layer) ((void)0)
+#endif
+
 /* What a layer channel's data takes: its compression, then (RLE) the row byte counts, then the
-   rows. */
+   rows; or the stored channel, as it is. */
 static uint64_t mpsd__layer_channel_size(const minipsd_doc *d, const minipsd_layer *l, int channel)
 {
     const mpsd__rect r = mpsd__layer_rect(d, l);
     uint64_t size = 2;
     uint32_t y;
+    if (l->stored) return l->stored[channel].size;
     if (!r.height) return size;
+    MPSD__ENCODED(l);
     if (d->compression == MINIPSD_RAW) return size + (uint64_t)r.width * r.height;
     for (y = 0; y < r.height; ++y)
         size += 2 + mpsd__row_size(d, l->rgba + (size_t)y * r.width * 4, channel, r.width);
@@ -181,6 +188,28 @@ static const uint8_t *mpsd__kept_resolution(const minipsd_doc *d)
     return NULL;
 }
 
+/* A stored channel that fits a width x height rectangle: the compression marker, then raw rows,
+   or (RLE) a byte count per row and rows no longer than they add up to.  ZIP passes as it is. */
+static int mpsd__stored_ok(minipsd_bytes c, uint32_t width, uint32_t height)
+{
+    uint64_t left, sum = 0;
+    uint32_t y;
+    if (!c.data || c.size < 2) return 0;
+    left = c.size - 2;
+    switch (mpsd__get16(c.data)) {
+    case 0:
+        return (uint64_t)width * height <= left;
+    case 1:
+        if (2 * (uint64_t)height > left) return 0;
+        for (y = 0; y < height; ++y) sum += mpsd__get16(c.data + 2 + 2 * (size_t)y);
+        return sum <= left - 2 * (uint64_t)height;
+    case 2: case 3:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 /* What follows the layer info in its section: the kept tail, or an empty global layer mask. */
 static uint64_t mpsd__tail_size(const minipsd_doc *d) { return d->layer_tail.size ? d->layer_tail.size : 4; }
 
@@ -223,9 +252,16 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *d)
     for (i = 0; i < d->layer_count; ++i) {    /* RLE row counts are 16 bits: a side fits 30000 */
         const minipsd_layer *l = &d->layers[i];
         const int64_t w = (int64_t)l->right - l->left, h = (int64_t)l->bottom - l->top;
-        if (w < 0 || h < 0 || (!l->rgba && w && h)) return MINIPSD_ERR_ARG;
+        int k;
+        if (w < 0 || h < 0 || (!l->rgba && !l->stored && w && h)) return MINIPSD_ERR_ARG;
         if (w > MINIPSD_MAX_SIDE || h > MINIPSD_MAX_SIDE) return MINIPSD_ERR_SIZE;
         if (mpsd__layer_extra_size(l) > MPSD__MAX_SECTION) return MINIPSD_ERR_SIZE;
+        if (!l->stored) continue;
+        if (!l->rgba && !d->composite) return MINIPSD_ERR_ARG;   /* nothing to compose it from */
+        for (k = 0; k < 4; ++k) {
+            const mpsd__rect r = mpsd__layer_rect(d, l);
+            if (!mpsd__stored_ok(l->stored[k], r.width, r.height)) return MINIPSD_ERR_ARG;
+        }
     }
     return MINIPSD_OK;
 }
@@ -316,6 +352,7 @@ enum {
     MPSD__COMPRESSION,       /* a layer channel's compression      (layer, k) */
     MPSD__COUNT,             /* a layer row's byte count, RLE      (layer, k, row) */
     MPSD__ROW,               /* a layer row                        (layer, k, row) */
+    MPSD__STORED,            /* a stored layer channel, whole      (layer, k) */
     MPSD__TAIL,              /* mpsd__tail                                    */
     MPSD__COMPOSITE_COUNT,   /* a composite row's byte count, RLE  (k, row)   */
     MPSD__COMPOSITE_ROW,     /* a composite row                    (k, row)   */
@@ -460,17 +497,24 @@ static void mpsd__writer_piece(minipsd_writer *w, mpsd__sink *s)
     const minipsd_doc   *d = w->doc;
     const minipsd_layer *l = &d->layers[w->layer];   /* always valid: 0 outside the layer section */
     const mpsd__rect     r = mpsd__layer_rect(d, l);
-    const uint8_t       *row = r.height ? l->rgba + (size_t)w->row * r.width * 4 : NULL;
+    const uint8_t       *row = r.height && l->rgba ? l->rgba + (size_t)w->row * r.width * 4 : NULL;
     switch (w->piece) {
     case MPSD__HEAD:            mpsd__head(s, d, w->info); break;
     case MPSD__RECORD:          mpsd__layer_record(s, d, l, w->channel_sizes + w->layer * 4); break;
     case MPSD__COMPRESSION:     mpsd__u16(s, d->compression == MINIPSD_RAW ? 0 : 1); break;
     case MPSD__COUNT:           mpsd__u16(s, (unsigned)mpsd__row_size(d, row, mpsd__channel_of[w->channel], r.width)); break;
     case MPSD__ROW:             mpsd__row(s, d, row, mpsd__channel_of[w->channel], r.width); break;
+    case MPSD__STORED:          mpsd__put(s, l->stored[mpsd__channel_of[w->channel]].data, l->stored[mpsd__channel_of[w->channel]].size); break;
     case MPSD__TAIL:            mpsd__tail(s, d, w->content, w->info); break;
     case MPSD__COMPOSITE_COUNT: mpsd__u16(s, w->composite_sizes[(size_t)w->channel * d->height + w->row]); break;
     default:                    mpsd__row(s, d, mpsd__writer_composite(w, w->row), w->channel, d->width); break;
     }
+}
+
+/* The first piece of the current layer channel: copied whole when stored, else encoded. */
+static int mpsd__channel_piece(const minipsd_writer *w)
+{
+    return w->doc->layers[w->layer].stored ? MPSD__STORED : MPSD__COMPRESSION;
 }
 
 /* Moves the cursor to the piece after the current one, in file order. */
@@ -487,7 +531,7 @@ static void mpsd__writer_next(minipsd_writer *w)
     case MPSD__RECORD:
         if (++w->layer < d->layer_count) return;
         w->layer = 0;
-        w->piece = MPSD__COMPRESSION;
+        w->piece = mpsd__channel_piece(w);
         return;
     case MPSD__COMPRESSION:                   /* rows follow, unless the layer is empty */
         if (rows) { w->piece = rle ? MPSD__COUNT : MPSD__ROW; return; }
@@ -501,6 +545,8 @@ static void mpsd__writer_next(minipsd_writer *w)
         if (++w->row < rows) return;
         w->row = 0;
         break;
+    case MPSD__STORED:
+        break;
     case MPSD__TAIL:
         w->piece = rle ? MPSD__COMPOSITE_COUNT : MPSD__COMPOSITE_ROW;
         return;
@@ -513,10 +559,9 @@ static void mpsd__writer_next(minipsd_writer *w)
         return;
     }
     /* A layer channel is complete: the next channel, the next layer, or the tail. */
-    w->piece = MPSD__COMPRESSION;
-    if (++w->channel < 4) return;
+    if (++w->channel < 4) { w->piece = mpsd__channel_piece(w); return; }
     w->channel = 0;
-    if (++w->layer < d->layer_count) return;
+    if (++w->layer < d->layer_count) { w->piece = mpsd__channel_piece(w); return; }
     w->layer = 0;
     w->piece = MPSD__TAIL;
 }

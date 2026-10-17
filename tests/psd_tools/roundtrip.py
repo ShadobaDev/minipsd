@@ -33,7 +33,7 @@ class Layer(ctypes.Structure):
                 ("top", ctypes.c_int32), ("left", ctypes.c_int32),
                 ("bottom", ctypes.c_int32), ("right", ctypes.c_int32),
                 ("blend", ctypes.c_char * 4), ("clipping", ctypes.c_uint8), ("flags", ctypes.c_uint8),
-                ("extra", Bytes)]
+                ("extra", Bytes), ("stored", ctypes.c_void_p)]
 
 
 class Doc(ctypes.Structure):
@@ -220,7 +220,7 @@ def resave(lib, source, path):
     data = source.read_bytes()
     doc = ctypes.POINTER(Doc)()
     lost = ctypes.c_uint32(0)
-    rc = lib.minipsd_read(data, len(data), None, ctypes.byref(doc), ctypes.byref(lost))
+    rc = lib.minipsd_read(data, len(data), None, None, ctypes.byref(doc), ctypes.byref(lost))
     if rc != MINIPSD_OK:
         return rc, 0
     out = bytearray()
@@ -267,7 +267,7 @@ def main():
     lib = ctypes.CDLL(sys.argv[1])
     lib.minipsd_write.argtypes = [ctypes.POINTER(Doc), WRITE_FN, ctypes.c_void_p]
     lib.minipsd_write.restype = ctypes.c_int
-    lib.minipsd_read.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_void_p,
+    lib.minipsd_read.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p,
                                  ctypes.POINTER(ctypes.POINTER(Doc)), ctypes.POINTER(ctypes.c_uint32)]
     lib.minipsd_read.restype = ctypes.c_int
     lib.minipsd_doc_free.argtypes = [ctypes.POINTER(Doc)]
