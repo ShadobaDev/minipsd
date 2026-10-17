@@ -238,7 +238,7 @@ whatever cannot be carried is reported.
       *Done when:* reading a file with `stored`, changing one layer and writing again encodes
       only that layer (counted in a test); the untouched layers' channel bytes are identical to
       the input's.
-- [ ] **S5.7** Docs: a Round trip chapter in [MANUAL.md](MANUAL.md) with
+- [x] **S5.7** Docs: a Round trip chapter in [MANUAL.md](MANUAL.md) with
       `examples/resave.c` (read, change one layer, write), built and run by CI, and the request
       to report a non-zero `lost`; the spec's What goes into the file and Memory and ownership.
 

@@ -41,6 +41,8 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   own fields win over kept data that says the same (`name`, `dpi`, `icc`). The reader gives
   `clipping` and `flags` in the layer view, resource names, and `layer_tail` in `minipsd_info`.
 - `examples/read_file.c` also reads the file as a document and prints what it would lose.
+- `examples/resave.c` and a Round trip chapter in [MANUAL.md](MANUAL.md): a file read, one layer
+  changed, the others copied as stored, written back.
 - Return codes `MINIPSD_ERR_FORMAT`, `MINIPSD_ERR_UNSUPPORTED`, `MINIPSD_ERR_SHORT`,
   `MINIPSD_ERR_LIMIT`, and `minipsd_limits` for untrusted files: the largest side (canvas, and
   layers when set), the most layers, the most bytes one decode call writes.

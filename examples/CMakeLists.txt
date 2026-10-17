@@ -10,9 +10,10 @@
 #   write_memory       the pull writer into one buffer of the exact size
 #   write_nonblocking  the pull writer into an O_NONBLOCK pipe, with poll          (POSIX only)
 #   read_file          a PSD read whole, described, every layer and the composite decoded
+#   resave             a PSD read as a document, one layer changed, written again   (round trip)
 # ---------------------------------------------------------------------------
 
-set(_examples hello_write hello_read write_file write_memory read_file)
+set(_examples hello_write hello_read write_file write_memory read_file resave)
 if(UNIX)
     list(APPEND _examples write_nonblocking)
 endif()
@@ -87,4 +88,24 @@ foreach(_psd IN LISTS _other_psds)
     get_filename_component(_name "${_psd}" NAME_WE)
     add_test(NAME example.read_file.${_name} COMMAND read_file "${_psd}")
     set_tests_properties(example.read_file.${_name} PROPERTIES FAIL_REGULAR_EXPRESSION "not decoded")
+endforeach()
+
+# resave: what write_memory wrote, its bottom layer inverted; read_file then reads the result and
+# finds nothing lost.  On files from other programs, it must write something read_file decodes.
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/out-resave")
+add_test(NAME example.resave COMMAND resave "${CMAKE_CURRENT_BINARY_DIR}/out-write_memory/out.psd"
+                                            "${CMAKE_CURRENT_BINARY_DIR}/out-resave/resaved.psd")
+set_tests_properties(example.resave PROPERTIES
+    FIXTURES_REQUIRED minipsd-example-psd FIXTURES_SETUP minipsd-resaved-psd
+    PASS_REGULAR_EXPRESSION "layer 0 'Template' inverted; 0 other layers copied as stored")
+add_test(NAME example.resave.read COMMAND read_file "${CMAKE_CURRENT_BINARY_DIR}/out-resave/resaved.psd")
+set_tests_properties(example.resave.read PROPERTIES
+    FIXTURES_REQUIRED minipsd-resaved-psd
+    PASS_REGULAR_EXPRESSION "0 'Template'.*as a document: everything kept"
+    FAIL_REGULAR_EXPRESSION "not decoded")
+foreach(_psd IN LISTS _other_psds)
+    get_filename_component(_name "${_psd}" NAME_WE)
+    add_test(NAME example.resave.${_name}
+        COMMAND resave "${_psd}" "${CMAKE_CURRENT_BINARY_DIR}/out-resave/${_name}.psd")
+    set_tests_properties(example.resave.${_name} PROPERTIES PASS_REGULAR_EXPRESSION "inverted")
 endforeach()

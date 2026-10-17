@@ -105,6 +105,7 @@ examples/                      the I/O implementations; built and run in CI, nev
   write_memory.c               exact-size buffer from minipsd_writer_total
   write_nonblocking.c          O_NONBLOCK pipe + poll (POSIX)
   read_file.c                  whole file into memory, described, every layer and the composite decoded
+  resave.c                     minipsd_read with stored, one layer changed, written back: the round trip
 tests/
   test_<module>.cpp            one file per module; detail modules are tested directly
   fuzz/                        the reader's libFuzzer target, run locally (linux-fuzz preset);

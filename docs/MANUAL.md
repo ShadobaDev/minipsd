@@ -10,6 +10,7 @@ complete programs here are in [examples/](../examples/), which CI builds and run
 | [Getting started](#getting-started) | adding minipsd, a PSD written and read in a page of code |
 | [Writing](#writing) | the order of calls; to memory, to a blocking stream, to a non-blocking one |
 | [Reading](#reading) | the order of calls; a file read in parts; pixels; the composite; untrusted files |
+| [Round trip](#round-trip) | a file read into a document, changed, written back; what is kept, what is lost |
 | [Memory and ownership](#memory-and-ownership) | what you allocate, how long it must live |
 | [Return codes](#return-codes) | `MINIPSD_OK`, `MINIPSD_MORE`, errors |
 | [Configuration](#configuration) | `MINIPSD_STATIC`, the allocator, a build without allocation |
@@ -415,6 +416,76 @@ malformed file:
 
 The byte limit is per call, so a layer larger than it can still be decoded in bands of rows.
 
+## Round trip
+
+`minipsd_read` is the mirror of `minipsd_write`: a whole file in, a `minipsd_doc` out, which
+`minipsd_write` takes back as it is. Change what you need in between: a layer's pixels, its name,
+opacity or visibility, the dpi, the order of the layers.
+
+```c
+minipsd_doc *doc;
+uint32_t     lost;
+int rc = minipsd_read(data, size, NULL, NULL, &doc, &lost);   /* limits, options: defaults */
+free(data);                     /* allowed: the document holds copies of everything */
+/* ... change the document: doc->layers points into it, every layer is yours to edit ... */
+rc = minipsd_write(doc, to_file, f);
+minipsd_doc_free(doc);
+```
+
+The document lives in one block: from `MINIPSD_MALLOC`, freed by `minipsd_doc_free`, or in
+memory of yours with `minipsd_read_size` and `minipsd_read_into`. Nothing in it points into the
+file, so the file's bytes can go as soon as the call returns.
+
+**What comes back.** Every layer with its rectangle, name, opacity, visibility, blend mode,
+clipping and flags, and its pixels; the blocks a layer carries (text, effects, groups, vector
+masks, smart objects) and the file's resources and global blocks, byte for byte, so a program
+that understands them finds them as they were. The document's own fields win over kept data that says the same
+thing: rename a layer with `name`, change the resolution with `dpi`, replace the profile with
+`icc`.
+
+**The composite is the file's own**, as stored, so writing the document gives the same merged
+image back. After a change it is stale: a viewer that ignores layers still shows the old image.
+Render a new one and set `composite` (libvips does it, see
+[Working with libvips](SPECIFICATION.md#working-with-libvips)), or set it to `NULL` and let the
+writer compose the layers as a best effort. Stale too, and yours to drop: the thumbnail (resource
+1036), for one.
+
+**Change one layer, copy the rest.** With `opts.stored` set, layers are not decoded: each keeps
+its channels as the file stores them, and the writer copies them back. Decode the one layer you
+change through the reader, from the same bytes, give it pixels, and only that layer is encoded
+again: a fraction of the memory and the time for a large file.
+
+```mermaid
+flowchart TD
+    read["minipsd_read(data, ..., &opts, &doc, &lost)<br>opts.stored = 1"]
+    read -. "every layer's channels, copied as stored" .-> doc["doc"]
+    doc --> pick["the layer to change:<br>minipsd_reader_init, minipsd_reader_next_layer,<br>minipsd_decode_layer, from the same data"]
+    pick --> set["layer.rgba = new pixels<br>layer.stored = NULL"]
+    set --> write["minipsd_write(doc, callback, user)"]
+    write -. "that layer encoded, the others copied" .-> out["the file"]
+    classDef minipsd stroke-dasharray: 5 5
+    class out minipsd
+```
+
+[examples/resave.c](../examples/resave.c) is the whole program: it inverts the colours of one
+layer, copies every other one, and frees the file's bytes before writing. A layer that has no
+transparency channel, and the one layer of a file without layers, come decoded even with
+`stored`: there is nothing to copy for them.
+
+**What is lost, and a request.** `lost` is 0 when the document carries everything. Otherwise its
+bits say what writing the document back would drop:
+
+| Bit | What |
+|---|---|
+| `MINIPSD_LOST_MASK` | layer masks (vector masks are blocks, kept) |
+| `MINIPSD_LOST_BLENDING_RANGES` | "Blend If" ranges that are not left at their default |
+| `MINIPSD_LOST_CHANNELS` | alpha and spot channels, of a layer or of the composite |
+
+Each is planned work. If a file of yours sets one, please
+[open an issue](https://github.com/ShadobaDev/minipsd/issues) with the file, or with what
+made it (the program, and the feature you used): that is what sets the order of the work.
+[examples/read_file.c](../examples/read_file.c) prints the bits of any file.
+
 ## Memory and ownership
 
 minipsd allocates only inside `minipsd_write`, which frees it before returning, and
@@ -429,6 +500,7 @@ with `minipsd_read_into`). Everything else is yours, and minipsd only borrows it
 | the PSD's bytes (reader) | the file, or its start | while the reader or anything it returned is used |
 | the reader's workspace | `minipsd_reader_workspace_size`, the same for every file (256 bytes is enough) | while the reader is used |
 | the decoded pixels | the layer's rectangle, or the band | the call |
+| the block of `minipsd_read_into` (or none: `minipsd_read` allocates it) | `minipsd_read_size` | while the document is used |
 
 There is nothing to release: the writer and the reader live inside their workspaces, so freeing
 or reusing the workspace ends them. Any memory will do (stack, static, heap, a pool), at any
