@@ -9,6 +9,7 @@
 #   minipsd-include-check  compile-only: minipsd.h alone, then its implementation, as C
 #   minipsd-no-malloc-check  compile-only: the build with MINIPSD_NO_MALLOC, as C
 #   example.<name>     each program in examples/, its output checked against the golden bytes
+#   fuzz.replay.<file> the reader's fuzz target on each input in fuzz/regressions/ (see fuzz/)
 #   consumer-<mode>    a tiny project using minipsd each supported way (see consumer/)
 # ---------------------------------------------------------------------------
 
@@ -135,6 +136,39 @@ foreach(_check include no-malloc)
     target_compile_options(minipsd-${_check}-check PRIVATE ${MINIPSD_WARNINGS})
     set_target_properties(minipsd-${_check}-check PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 endforeach()
+
+# The reader's fuzz target (fuzz/): replayed here on every file in fuzz/regressions/, which are
+# inputs that once failed; with MINIPSD_FUZZ (the linux-fuzz preset, clang) also built as a
+# libFuzzer target, run by hand and never by CI.
+option(MINIPSD_FUZZ "Build the reader's libFuzzer target (clang)" OFF)
+add_executable(minipsd-fuzz-replay fuzz/replay.c fuzz/fuzz_reader.c)
+if(MINIPSD_FUZZ)
+    add_executable(minipsd-fuzz-reader fuzz/fuzz_reader.c)
+    target_compile_options(minipsd-fuzz-reader PRIVATE -fsanitize=fuzzer)
+    target_link_options(minipsd-fuzz-reader PRIVATE -fsanitize=fuzzer)
+endif()
+foreach(_fuzz minipsd-fuzz-replay minipsd-fuzz-reader)
+    if(TARGET ${_fuzz})
+        target_link_libraries(${_fuzz} PRIVATE minipsd::minipsd)
+        target_compile_options(${_fuzz} PRIVATE ${MINIPSD_WARNINGS})
+        set_target_properties(${_fuzz} PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    endif()
+endforeach()
+if(MSVC)
+    target_compile_definitions(minipsd-fuzz-replay PRIVATE _CRT_SECURE_NO_WARNINGS)   # plain fopen
+endif()
+if(MINGW)
+    target_link_options(minipsd-fuzz-replay PRIVATE -static)
+endif()
+file(GLOB _fuzz_regressions "${CMAKE_CURRENT_SOURCE_DIR}/fuzz/regressions/*")
+list(FILTER _fuzz_regressions EXCLUDE REGEX "README\\.md$")
+foreach(_input IN LISTS _fuzz_regressions)
+    get_filename_component(_name "${_input}" NAME)
+    add_test(NAME fuzz.replay.${_name} COMMAND minipsd-fuzz-replay "${_input}")
+endforeach()
+# And on a valid file, which takes it through every call: what write_memory wrote.
+add_test(NAME fuzz.replay.example COMMAND minipsd-fuzz-replay "${PROJECT_BINARY_DIR}/examples/out-write_memory/out.psd")
+set_tests_properties(fuzz.replay.example PROPERTIES FIXTURES_REQUIRED minipsd-example-psd)
 
 # The examples (examples/), built with the same warnings and run as tests.
 add_subdirectory("${PROJECT_SOURCE_DIR}/examples" "${PROJECT_BINARY_DIR}/examples")

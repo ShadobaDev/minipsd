@@ -271,6 +271,9 @@ Platemaker is the first consumer. Breaking any of these breaks it:
   layer and the composite of an 8-bit RGB one must decode; `examples/read_file.c` runs on each.
   With `MINIPSD_PSD_TOOLS_FILES` the same test reads psd-tools' 279 test files, fetched at a
   pinned release; a file known to be malformed is listed with the error it must give.
+- **Fuzzing:** a libFuzzer target takes any bytes through every reader call under ASan and UBSan,
+  run locally (the `linux-fuzz` preset), never in CI. Each input it ever failed on is kept in
+  `tests/fuzz/regressions/` and replayed by the ordinary tests on every toolchain.
 
 ## Distribution and SBOM
 

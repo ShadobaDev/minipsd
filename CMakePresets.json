@@ -64,6 +64,18 @@
       }
     },
     {
+      "name": "linux-fuzz",
+      "displayName": "Linux · Clang + libFuzzer, AddressSanitizer/UBSan (local only)",
+      "inherits": "linux-clang",
+      "cacheVariables": {
+        "MINIPSD_FUZZ": "ON",
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
+    },
+    {
       "name": "linux-tidy",
       "displayName": "Linux · Clang + clang-tidy (.clang-tidy)",
       "inherits": "linux-clang",
@@ -89,6 +101,7 @@
     { "name": "linux-clang", "configurePreset": "linux-clang" },
     { "name": "linux-asan",     "configurePreset": "linux-asan" },
     { "name": "linux-tidy",     "configurePreset": "linux-tidy" },
+    { "name": "linux-fuzz",     "configurePreset": "linux-fuzz" },
     { "name": "linux-coverage", "configurePreset": "linux-coverage" }
   ],
 
@@ -104,6 +117,7 @@
     { "name": "linux-clang", "inherits": "base", "configurePreset": "linux-clang" },
     { "name": "linux-asan",     "inherits": "base", "configurePreset": "linux-asan" },
     { "name": "linux-tidy",     "inherits": "base", "configurePreset": "linux-tidy" },
+    { "name": "linux-fuzz",     "inherits": "base", "configurePreset": "linux-fuzz" },
     { "name": "linux-coverage", "inherits": "base", "configurePreset": "linux-coverage" }
   ]
 }

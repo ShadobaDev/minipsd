@@ -13,6 +13,7 @@ consumers, so there is nothing to ship from a build.
 | `linux-asan` | Linux / WSL | GCC + AddressSanitizer and UBSan (no round trip) |
 | `linux-tidy` | Linux / WSL | Clang + clang-tidy on the tests and the header |
 | `linux-coverage` | Linux / WSL | GCC + `--coverage`; report with gcovr below |
+| `linux-fuzz` | Linux / WSL | Clang + libFuzzer, ASan and UBSan; local only, see [Fuzzing](#fuzzing) |
 
 ```bash
 cmake --preset mingw
@@ -49,6 +50,34 @@ gcovr --root . --filter include/ --merge-lines --exclude-throw-branches \
 Coverage data adds up across runs: delete `build/linux-coverage` for a clean report. CI fails
 below 100 % of lines or 95 % of branches and publishes the report to Coveralls. Branches stop
 just short of 100 % where gcovr keeps the C and C++ copies of a function apart.
+
+## Fuzzing
+
+A tool for finding bugs, not a test: it runs locally for as long as you like and never in CI.
+`tests/fuzz/fuzz_reader.c` takes any bytes through the whole reader (init, resources, layers,
+names, blocks, every decode, whole and a band) and also aborts when the API breaks a promise: a
+`MINIPSD_ERR_SHORT` that does not ask for more than the buffer holds, a decode over the limit that
+succeeds, an inverted layer rectangle.
+
+```bash
+cmake --preset linux-fuzz -DMINIPSD_PSD_TOOLS_FILES=ON && cmake --build --preset linux-fuzz
+ctest --preset linux-fuzz      # writes the example file, the first seed
+cd build/linux-fuzz && mkdir -p fuzz-corpus findings
+tests/minipsd-fuzz-reader -max_total_time=3600 -artifact_prefix=findings/ fuzz-corpus \
+    examples/out-write_memory ../../tests/data ../../tests/fixtures \
+    _deps/minipsd_psd_tools_files-src/tests/psd_files
+```
+
+The first directory is the corpus libFuzzer grows; the others are seeds, read only: the writer's
+own file, the committed and local test files, and psd-tools' files. A finding lands in `findings/`
+with the input that causes it; replay it with `tests/minipsd-fuzz-reader findings/<file>`. Once
+fixed, the input goes to `tests/fuzz/regressions/`, where the ordinary tests replay it on every
+toolchain (`fuzz.replay.<file>`).
+
+clang-15's sanitizers crash at random on recent kernels (6.x, WSL2 included) whose address-space
+randomisation they do not expect: a `SEGFAULT` in an unrelated test or at startup. Run under
+`setarch -R` (no randomisation): `setarch -R ctest --preset linux-fuzz`, and the same before the
+fuzzer.
 
 ## The single-file header
 

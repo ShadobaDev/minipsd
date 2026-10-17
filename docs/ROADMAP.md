@@ -167,11 +167,13 @@ Additive. See [Reader](CODE-ARCH.md#reader).
         locally in `tests/fixtures/`. Files saved by Krita and Photopea are still missing: they
         go to `tests/data/` with their origin and licence when someone saves them;
       - `examples/read_file.c`.
-- [ ] **S4.8** Fuzzing, a local tool and not a CI job: a libFuzzer target under ASan and
-      UBSan, seeded from `tests/data/` and from the writer's own files, built by its own preset
-      and run by hand for as long as wanted. CI keeps to tests that guard against regressions:
-      each finding, once fixed, is kept as an input file that the ordinary tests replay.
-      *Done when:* a local run of a fixed time (an hour) ends with no finding.
+- [x] **S4.8** Fuzzing, a local tool and not a CI job: a libFuzzer target under ASan and
+      UBSan (`tests/fuzz/`, the `linux-fuzz` preset), seeded from `tests/data/`, the writer's
+      own file and psd-tools' files, run by hand for as long as wanted. CI keeps to tests that
+      guard against regressions: each finding, once fixed, is kept in `tests/fuzz/regressions/`,
+      which the ordinary tests replay on every toolchain.
+      *Done when:* a local run of a fixed time (an hour) ends with no finding. Done: an hour,
+      5.3 million inputs, none failed.
 - [ ] **S4.9** Docs: the spec gains the reader. Release: 0.3.0 if anything above broke
       the API, otherwise 0.2.1.
 
