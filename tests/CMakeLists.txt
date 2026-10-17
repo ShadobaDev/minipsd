@@ -27,6 +27,22 @@ if(NOT GTest_FOUND)
 endif()
 include(GoogleTest)
 
+# psd-tools' own test files (MIT): 279 PSDs from Photoshop and others, every colour mode and depth,
+# masks, groups, effects, blend modes.  Fetched at configure time, pinned by tag and hash, never
+# committed or installed; read by the same test as tests/data.  Off by default: about 22 MB.
+option(MINIPSD_PSD_TOOLS_FILES "Fetch psd-tools' test PSDs and read every one of them" OFF)
+set(_minipsd_psd_tools_files "")
+if(MINIPSD_PSD_TOOLS_FILES)
+    include(FetchContent)
+    FetchContent_Declare(minipsd_psd_tools_files
+        URL https://github.com/psd-tools/psd-tools/archive/refs/tags/v1.25.0.tar.gz
+        URL_HASH SHA256=7a53e58ca232134b6a18ae361cff540d6eaa27ef707599474c5e4819a83b99a5
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        SOURCE_SUBDIR no-cmake-project)   # files only: nothing to add as a subproject
+    FetchContent_MakeAvailable(minipsd_psd_tools_files)
+    set(_minipsd_psd_tools_files "${minipsd_psd_tools_files_SOURCE_DIR}/tests/psd_files")
+endif()
+
 if(MSVC)
     set(MINIPSD_WARNINGS /W4 /WX /permissive-)
 else()
@@ -71,10 +87,12 @@ function(minipsd_add_test_executable target)
     add_executable(${target} ${ARGN})
     target_link_libraries(${target} PRIVATE GTest::gtest GTest::gtest_main)
     target_compile_options(${target} PRIVATE ${MINIPSD_WARNINGS} ${_minipsd_test_only_warnings})
-    # PSD files from other programs: tests/data is committed, tests/fixtures is local and ignored.
+    # PSD files from other programs: tests/data is committed, tests/fixtures is local and ignored,
+    # psd-tools' files are fetched (empty when MINIPSD_PSD_TOOLS_FILES is off).
     target_compile_definitions(${target} PRIVATE
         MINIPSD_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
-        MINIPSD_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+        MINIPSD_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+        MINIPSD_TEST_PSD_TOOLS_DIR="${_minipsd_psd_tools_files}")
     set_target_properties(${target} PROPERTIES
         C_STANDARD   99 C_STANDARD_REQUIRED   ON C_EXTENSIONS   OFF
         CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF   # the tests use std::u8string

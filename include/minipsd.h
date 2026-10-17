@@ -388,7 +388,9 @@ enum {
  */
 typedef struct minipsd_layer_view {
     int32_t       top, left, bottom, right; /*!< The layer's rectangle on the canvas; all zero for an
-                                                 empty layer.                                          */
+                                                 empty layer.  Never inverted: one stored with bottom
+                                                 above top or right left of left (Photoshop's fill
+                                                 layers) comes back empty, bottom = top, right = left. */
     uint8_t       opacity;                  /*!< 255 is opaque.                                        */
     uint8_t       hidden;                   /*!< Non-zero: the layer is hidden.                        */
     char          blend[5];                 /*!< The blend mode's four-character key ("norm"), then a NUL. */

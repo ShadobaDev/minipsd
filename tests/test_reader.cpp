@@ -863,9 +863,7 @@ TEST(MinipsdReaderTest, MalformedRecordsAreRefused)
 {
     EXPECT_EQ(firstLayerOf(simpleRec()), MINIPSD_MORE);
 
-    Rec r = simpleRec(); r.bottom = -1;                   EXPECT_EQ(firstLayerOf(r), MINIPSD_ERR_FORMAT) << "bottom above top";
-    r = simpleRec();     r.right = -1;                    EXPECT_EQ(firstLayerOf(r), MINIPSD_ERR_FORMAT) << "right of left";
-    r = simpleRec();     r.channels[1].data.resize(1);    EXPECT_EQ(firstLayerOf(r), MINIPSD_ERR_FORMAT) << "a channel of one byte";
+    Rec r = simpleRec(); r.channels[1].data.resize(1);    EXPECT_EQ(firstLayerOf(r), MINIPSD_ERR_FORMAT) << "a channel of one byte";
     r = simpleRec();     r.channels[2].id = 0;            EXPECT_EQ(firstLayerOf(r), MINIPSD_ERR_FORMAT) << "red twice";
     r = simpleRec();     r.blendSig = "XXXX";             EXPECT_EQ(firstLayerOf(r), MINIPSD_ERR_FORMAT) << "blend signature";
     r = simpleRec();     r.extraLengthDelta = 1000;       EXPECT_EQ(firstLayerOf(r), MINIPSD_ERR_FORMAT) << "extra data past the layer info";
@@ -1236,6 +1234,26 @@ TEST(MinipsdReaderTest, ChannelDataNotYetReadAsksForMore)
     EXPECT_EQ(out, (Bytes{2, 0xEE, 0xEE, 1, 2, 0xEE, 0xEE, 1, 2, 0xEE, 0xEE, 1, 2, 0xEE, 0xEE, 1}));
 }
 
+TEST(MinipsdReaderTest, AnInvertedRectangleIsAnEmptyLayer)
+{
+    // Photoshop writes (0, 0, -1, 0) for a fill layer with no pixels of its own (psd-tools'
+    // vector-mask2.psd).
+    Rec fill = simpleRec();
+    fill.top = 5; fill.left = 3; fill.bottom = 4; fill.right = -1;
+    Spec s;
+    s.layers = {fill};
+    s.count = -1;
+    Open o(build(s).bytes);
+    const minipsd_layer_view v = nextLayer(o.r);
+    EXPECT_EQ(v.top, 5);
+    EXPECT_EQ(v.bottom, 5) << "bottom = top";
+    EXPECT_EQ(v.left, 3);
+    EXPECT_EQ(v.right, 3) << "right = left";
+    Bytes out(16, 0xEE);
+    EXPECT_EQ(decodeRgba(o.r, v, 0, out), MINIPSD_OK) << "nothing to decode";
+    EXPECT_EQ(out, Bytes(16, 0xEE));
+}
+
 TEST(MinipsdReaderTest, DecodeChecksItsArguments)
 {
     Spec s;
@@ -1518,18 +1536,33 @@ TEST(MinipsdReaderTest, ADecodeOverTheBytesLimitIsRefusedBeforeWriting)
 }
 
 // ---------------------------------------------------------------------------------------------------
-// Files from other programs: tests/data (committed, origin and licence in its README) and
-// tests/fixtures (local only, never committed)
+// Files from other programs: tests/data (committed, origin and licence in its README),
+// tests/fixtures (local only, never committed) and, with MINIPSD_PSD_TOOLS_FILES, psd-tools' own
+// test files (fetched, every subdirectory)
 // ---------------------------------------------------------------------------------------------------
 
 namespace {
 
+// Files whose composite cannot be decoded because the file itself is malformed: the reason is
+// checked to be the one given.  psd-tools fails on each as well.
+struct KnownBad {
+    const char *name;
+    int         composite;   // what decode_composite answers over the whole file
+    const char *why;
+};
+const KnownBad knownBad[] = {
+    {"group-divider-blend-mode.psd", MINIPSD_ERR_SHORT,
+     "the layer and mask section's length ends 6 bytes early: its image data reads as raw, 40000 bytes "
+     "that are not there (psd-tools: 'Decompressed length mismatch')"},
+};
+
 std::vector<std::filesystem::path> filesFromOtherPrograms()
 {
     std::vector<std::filesystem::path> files;
-    for (const char *dir : {MINIPSD_TEST_DATA_DIR, MINIPSD_TEST_FIXTURES_DIR}) {
+    for (const char *dir : {MINIPSD_TEST_DATA_DIR, MINIPSD_TEST_FIXTURES_DIR, MINIPSD_TEST_PSD_TOOLS_DIR}) {
         std::error_code ec;
-        for (const auto &entry : std::filesystem::directory_iterator(dir, ec))
+        if (!*dir) continue;
+        for (const auto &entry : std::filesystem::recursive_directory_iterator(dir, ec))
             if (entry.path().extension() == ".psd") files.push_back(entry.path());
     }
     std::sort(files.begin(), files.end());
@@ -1549,7 +1582,7 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
     const auto files = filesFromOtherPrograms();
     if (files.empty()) GTEST_SKIP() << "no .psd in tests/data or tests/fixtures";
     for (const auto &path : files) {
-        SCOPED_TRACE(path.filename().string());
+        SCOPED_TRACE(path.string());
         const Bytes file = readFile(path);
 
         // Whole: every layer and the composite decode, when the file is 8-bit RGB.
@@ -1570,6 +1603,13 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
         }
         EXPECT_EQ(layers, o.info.layer_count);
         Bytes composite(std::size_t(w) * h * 4), stored(composite.size());
+        const KnownBad *bad = nullptr;
+        for (const KnownBad &k : knownBad)
+            if (path.filename() == k.name) bad = &k;
+        if (bad) {
+            EXPECT_EQ(decodeComposite(o.r, w, composite), bad->composite) << bad->why;
+            continue;
+        }
         if (rgb8) {
             EXPECT_EQ(decodeComposite(o.r, w, composite), MINIPSD_OK);
             EXPECT_EQ(decodeComposite(o.r, w, stored, 0, 0, 1), MINIPSD_OK);

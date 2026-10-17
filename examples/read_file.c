@@ -117,11 +117,14 @@ int main(int argc, char **argv)
         if (info.depth == 8 && info.color_mode == 3
             && show_pixels(r, &layer, (uint32_t)(layer.right - layer.left), (uint32_t)(layer.bottom - layer.top)) != MINIPSD_OK)
             failed = 1;
+        else if (info.depth != 8 || info.color_mode != 3)
+            printf("      not 8-bit RGB: described, not decoded\n");
     }
     if (rc != MINIPSD_OK) { printf("  layers: %s\n", minipsd_error_string(rc)); failed = 1; }
 
     printf("composite:\n");
-    if (show_pixels(r, NULL, info.width, info.height) != MINIPSD_OK) failed = 1;
+    if (info.depth != 8 || info.color_mode != 3) printf("      not 8-bit RGB: described, not decoded\n");
+    else if (show_pixels(r, NULL, info.width, info.height) != MINIPSD_OK) failed = 1;
     free(data);
     return failed;
 }

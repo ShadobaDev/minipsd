@@ -381,7 +381,10 @@ static int mpsd__record(minipsd_reader *r, uint64_t at, mpsd__rec *rec)
         v->channel[k].data = NULL;
         v->channel[k].size = 0;
     }
-    if (rect[2] < rect[0] || rect[3] < rect[1]) return MINIPSD_ERR_FORMAT;
+    /* An inverted rectangle is an empty one: Photoshop writes (0, 0, -1, 0) for a fill layer
+       that has no pixels of its own. */
+    if (rect[2] < rect[0]) rect[2] = rect[0];
+    if (rect[3] < rect[1]) rect[3] = rect[1];
     v->top = rect[0]; v->left = rect[1]; v->bottom = rect[2]; v->right = rect[3];
     v->other_channels = 0;
     rec->total        = 0;

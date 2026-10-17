@@ -159,12 +159,14 @@ Additive. See [Reader](CODE-ARCH.md#reader).
 - [x] **S4.5** `minipsd_decode_composite` with un-matting, whole image or a range of rows. Serves
       `R3`, `R4`.
 - [x] **S4.6** Limits (`R8`, `X4`), checked before any decoding.
-- [ ] **S4.7** Tests:
-      - [x] `encode(decode(x)) == x` over the golden set (`E4`);
-      - [ ] files saved by GIMP, Krita and Photopea in `tests/data/`, with their origin and
-        licence noted. The test that reads them, whole and in parts, is in place and already
-        runs on a local Procreate file in `tests/fixtures/`; the files themselves are missing;
-      - [x] `examples/read_file.c`.
+- [x] **S4.7** Tests:
+      - `encode(decode(x)) == x` over the golden set (`E4`);
+      - files from other programs, read whole and in parts, every 8-bit RGB layer and composite
+        decoded: psd-tools' 279 test files (Photoshop, one from GIMP), fetched with
+        `MINIPSD_PSD_TOOLS_FILES` and not in CI yet, and a 19-layer Procreate project kept
+        locally in `tests/fixtures/`. Files saved by Krita and Photopea are still missing: they
+        go to `tests/data/` with their origin and licence when someone saves them;
+      - `examples/read_file.c`.
 - [ ] **S4.8** Fuzzing, a local tool and not a CI job: a libFuzzer target under ASan and
       UBSan, seeded from `tests/data/` and from the writer's own files, built by its own preset
       and run by hand for as long as wanted. CI keeps to tests that guard against regressions:
