@@ -12,7 +12,9 @@
 
 #include "support.h"
 
+#include <initializer_list>
 #include <limits>
+#include <vector>
 #include <utility>
 
 TEST(MinipsdDocumentTest, AcceptsAPlainDocument)
@@ -108,6 +110,34 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
     EXPECT_EQ(storedDoc(raw4, nullptr, nullptr), MINIPSD_ERR_ARG) << "nothing to compose the composite from";
     EXPECT_EQ(storedDoc(raw3, nullptr, px.data()), MINIPSD_ERR_ARG) << "raw rows short of the rectangle";
     EXPECT_EQ(storedDoc(bad, nullptr, px.data()), MINIPSD_ERR_ARG) << "an unknown compression";
+
+    // Groups nest bottom first: a divider, the layers, the top record.
+    auto groups = [&](std::initializer_list<std::uint8_t> kinds) {
+        std::vector<minipsd_layer> ls;
+        for (std::uint8_t k : kinds) ls.push_back({.name = "G", .rgba = nullptr, .opacity = 255, .kind = k});
+        const minipsd_doc g = docOf(2, 2, ls.data(), ls.size());
+        return minipsd_doc_check(&g);
+    };
+    EXPECT_EQ(groups({MINIPSD_KIND_GROUP_END, MINIPSD_KIND_LAYER, MINIPSD_KIND_GROUP}), MINIPSD_OK);
+    EXPECT_EQ(groups({MINIPSD_KIND_GROUP_END, MINIPSD_KIND_GROUP_END, MINIPSD_KIND_GROUP_CLOSED, MINIPSD_KIND_GROUP}), MINIPSD_OK) << "nested";
+    EXPECT_EQ(groups({MINIPSD_KIND_GROUP}), MINIPSD_ERR_ARG) << "a top record without its divider";
+    EXPECT_EQ(groups({MINIPSD_KIND_GROUP_END}), MINIPSD_ERR_ARG) << "a divider never closed";
+    EXPECT_EQ(groups({MINIPSD_KIND_GROUP, MINIPSD_KIND_GROUP_END}), MINIPSD_ERR_ARG) << "upside down";
+    EXPECT_EQ(groups({4}), MINIPSD_ERR_ARG) << "an unknown kind";
+
+    // Masks: a rectangle not inverted, pixels for an area, a side PSD can count.
+    auto masked = [&](const minipsd_mask &m) {
+        const minipsd_layer ml{.name = "M", .rgba = px.data(), .opacity = 255, .mask = &m};
+        const minipsd_doc md = docOf(2, 2, &ml, 1);
+        return minipsd_doc_check(&md);
+    };
+    const std::uint8_t two[4] = {1, 2, 3, 4};
+    EXPECT_EQ(masked({.top = 0, .left = 0, .bottom = 2, .right = 2, .pixels = two}), MINIPSD_OK);
+    EXPECT_EQ(masked({.top = 0, .left = 0, .bottom = 0, .right = 0}), MINIPSD_OK) << "no area: the colour alone";
+    EXPECT_EQ(masked({.top = 0, .left = 0, .bottom = 2, .right = 2}), MINIPSD_ERR_ARG) << "an area without pixels";
+    EXPECT_EQ(masked({.top = 2, .left = 0, .bottom = 1, .right = 2, .pixels = two}), MINIPSD_ERR_ARG) << "inverted";
+    EXPECT_EQ(masked({.top = 0, .left = 0, .bottom = 1, .right = MINIPSD_MAX_SIDE + 1, .pixels = two}), MINIPSD_ERR_SIZE);
+    EXPECT_EQ(masked({.top = 0, .left = 0, .bottom = 2, .right = 2, .stored = {two, 4}}), MINIPSD_ERR_ARG) << "stored rows short";
 
     // The resources' length is 32-bit; the ICC size alone decides it, so no ICC byte is read and a
     // 4-byte buffer stands in for 4 GiB.

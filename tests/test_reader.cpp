@@ -681,7 +681,7 @@ TEST(MinipsdReaderTest, RleChannelsAreViewedWholeAndBackToBack)
     for (int i = 0; i < 2; ++i) {
         for (int k = 0; k < 4; ++k) {
             const minipsd_bytes &c = v[i].channel[channelOf[k]];
-            EXPECT_EQ(c.size, mpsd__layer_channel_size(&d, &layers[i], channelOf[k])) << i << "/" << k;
+            EXPECT_EQ(c.size, mpsd__layer_channel_size(&d, &layers[i], k)) << i << "/" << k;   // k: the order written
             EXPECT_EQ(c.data[1], 1) << "the marker: RLE";
             if (k) {                       // back to back, in the file's order
                 const minipsd_bytes &before = v[i].channel[channelOf[k - 1]];
@@ -697,7 +697,7 @@ TEST(MinipsdReaderTest, ChannelsAreFoundByIdWhateverTheirOrderAndOthersAreCounte
 {
     Rec a;
     a.right = 2; a.bottom = 1;
-    a.channels = {chan(2, 3, 0x0B), chan(-2, 5, 0x0D), chan(-1, 4, 0x0A), chan(0, 3, 0x0E), chan(-2, 3, 0x0F), chan(1, 6, 0x0C),
+    a.channels = {chan(2, 3, 0x0B), chan(-2, 5, 0x0D), chan(-1, 4, 0x0A), chan(0, 3, 0x0E), chan(-3, 3, 0x0F), chan(1, 6, 0x0C),
                   chan(3, 3, 0x10)};
     Rec b;
     b.right = 1; b.bottom = 1;
@@ -709,7 +709,7 @@ TEST(MinipsdReaderTest, ChannelsAreFoundByIdWhateverTheirOrderAndOthersAreCounte
     ASSERT_EQ(o.rc, MINIPSD_OK);
 
     const minipsd_layer_view va = nextLayer(o.r);
-    EXPECT_EQ(va.other_channels, 3) << "two masks and a fourth colour channel";
+    EXPECT_EQ(va.other_channels, 3) << "two mask channels without mask data, and a fourth colour channel";
     const unsigned fill[4] = {0x0E, 0x0C, 0x0B, 0x0A};
     const std::size_t size[4] = {3, 6, 3, 4};
     for (int k = 0; k < 4; ++k) {
@@ -1669,8 +1669,8 @@ TEST(MinipsdReadTest, LostSaysWhatTheDocumentCannotCarry)
     };
     const Case cases[] = {
         {"nothing", 0, [](Spec &, Rec &) {}},
-        {"layer mask data", MINIPSD_LOST_MASK, [](Spec &, Rec &r) { r.mask = Bytes(20, 0); }},
-        {"a mask channel", MINIPSD_LOST_MASK, [](Spec &, Rec &r) { r.channels.push_back(chan(-2, 2, 0)); }},
+        {"a mask without area, kept", 0, [](Spec &, Rec &r) { r.mask = Bytes(20, 0); r.channels.push_back(chan(-2, 2, 0)); }},
+        {"a mask channel without mask data", MINIPSD_LOST_CHANNELS, [](Spec &, Rec &r) { r.channels.push_back(chan(-2, 2, 0)); }},
         {"a channel beyond RGBA", MINIPSD_LOST_CHANNELS, [](Spec &, Rec &r) { r.channels.push_back(chan(3, 6, 0)); }},
         {"an alpha channel of the composite", MINIPSD_LOST_CHANNELS,
          [](Spec &s, Rec &) { s.channels = 5; s.image = rawImage(5, 2, 2, 0); }},
@@ -1738,8 +1738,8 @@ std::vector<std::filesystem::path> filesFromOtherPrograms()
 }
 
 // What a file written back from a document keeps of the original, through the reader: resources
-// (1005 and 1039 come from dpi and icc), every layer's blend key, clipping, flags and blocks
-// ('luni' comes from the name), and the layer tail, byte for byte.
+// (1005 and 1039 come from dpi and icc), every layer's blend key, clipping, flags, kind, blocks
+// ('luni' comes from the name) and mask, and the layer tail, byte for byte.
 void expectKeptAlike(const Bytes &before, const Bytes &after)
 {
     Open a(before), b(after);
@@ -1772,7 +1772,22 @@ void expectKeptAlike(const Bytes &before, const Bytes &after)
         EXPECT_STREQ(va.blend, vb.blend);
         EXPECT_EQ(va.clipping, vb.clipping);
         EXPECT_EQ(va.flags, vb.flags);
+        EXPECT_EQ(va.kind, vb.kind);
         EXPECT_EQ(blocks(va), blocks(vb));
+        ASSERT_EQ(va.has_mask, vb.has_mask);
+        if (!va.has_mask) continue;
+        const minipsd_mask &ma = va.mask, &mb = vb.mask;
+        EXPECT_EQ(std::tie(ma.top, ma.left, ma.bottom, ma.right, ma.color, ma.flags),
+                  std::tie(mb.top, mb.left, mb.bottom, mb.right, mb.color, mb.flags));
+        auto bytesOf = [](const minipsd_bytes &x) { return Bytes(x.data, x.data + x.size); };
+        EXPECT_EQ(ma.rest.size ? bytesOf(ma.rest) : Bytes(2, 0), mb.rest.size ? bytesOf(mb.rest) : Bytes(2, 0));
+        EXPECT_EQ(bytesOf(ma.real), bytesOf(mb.real));
+        const std::size_t mw = std::size_t(ma.right - ma.left), mh = std::size_t(ma.bottom - ma.top);
+        Bytes pa(mw * mh, 1), pb(mw * mh, 2);
+        const minipsd_plane qa{pa.data(), 1, static_cast<std::ptrdiff_t>(mw)}, qb{pb.data(), 1, static_cast<std::ptrdiff_t>(mw)};
+        EXPECT_EQ(minipsd_decode_mask(a.r, &va, &qa, nullptr), MINIPSD_OK);
+        EXPECT_EQ(minipsd_decode_mask(b.r, &vb, &qb, nullptr), MINIPSD_OK);
+        EXPECT_EQ(pa, pb);
     }
 }
 
@@ -1828,7 +1843,7 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
             std::uint32_t lost = 0;
             const Doc d = readDoc(file, &lost);
             ASSERT_TRUE(d);
-            if (otherChannels) { EXPECT_NE(lost & (MINIPSD_LOST_MASK | MINIPSD_LOST_CHANNELS), 0u) << "lost " << lost; }
+            if (otherChannels) { EXPECT_NE(lost & MINIPSD_LOST_CHANNELS, 0u) << "lost " << lost; }
             EXPECT_EQ(Bytes(d->composite, d->composite + composite.size()), stored);
             const Bytes again = write(*d);
             std::uint32_t lostAgain = 99;

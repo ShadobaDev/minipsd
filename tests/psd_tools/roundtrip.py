@@ -27,13 +27,21 @@ class Bytes(ctypes.Structure):
     _fields_ = [("data", ctypes.c_void_p), ("size", ctypes.c_size_t)]
 
 
+class Mask(ctypes.Structure):
+    _fields_ = [("top", ctypes.c_int32), ("left", ctypes.c_int32),
+                ("bottom", ctypes.c_int32), ("right", ctypes.c_int32),
+                ("color", ctypes.c_uint8), ("flags", ctypes.c_uint8), ("pixels", ctypes.c_void_p),
+                ("stored", Bytes), ("real", Bytes), ("rest", Bytes)]
+
+
 class Layer(ctypes.Structure):
     _fields_ = [("name", ctypes.c_char_p), ("rgba", ctypes.c_void_p),
                 ("opacity", ctypes.c_uint8), ("hidden", ctypes.c_uint8),
                 ("top", ctypes.c_int32), ("left", ctypes.c_int32),
                 ("bottom", ctypes.c_int32), ("right", ctypes.c_int32),
                 ("blend", ctypes.c_char * 4), ("clipping", ctypes.c_uint8), ("flags", ctypes.c_uint8),
-                ("extra", Bytes), ("stored", ctypes.c_void_p)]
+                ("extra", Bytes), ("stored", ctypes.c_void_p),
+                ("kind", ctypes.c_uint8), ("mask", ctypes.POINTER(Mask))]
 
 
 class Doc(ctypes.Structure):
@@ -242,10 +250,82 @@ def check(name, psd, w, h, dpi, layers):
     return errors
 
 
+# --- groups and a mask, written from scratch ------------------------------------------------------
+
+KIND_LAYER, KIND_GROUP, KIND_GROUP_CLOSED, KIND_GROUP_END = 0, 1, 2, 3
+
+
+def groups_and_mask(lib, path):
+    """Base; group "Outer" (open, pass through) holding "Masked" and group "Inner" (closed, multiply)
+    holding "Deep".  Bottom first, as the file stores them; returns what to expect."""
+    w, h = 64, 48
+    keep = []
+
+    def pixels(lw, lh, colour):
+        buf = ctypes.create_string_buffer(bytes(c for _ in range(lw * lh) for c in colour))
+        keep.append(buf)
+        return ctypes.cast(buf, ctypes.c_void_p)
+
+    mask_px = bytes((x * 255 // 31) for y in range(20) for x in range(32))   # a ramp, left to right
+    mask_buf = ctypes.create_string_buffer(mask_px)
+    mask = Mask(top=10, left=8, bottom=30, right=40, color=0, flags=0, pixels=ctypes.cast(mask_buf, ctypes.c_void_p))
+    records = (Layer * 7)()
+    spec = [  # name, rgba, kind, blend, mask
+        ("Base", pixels(w, h, (240, 240, 240, 255)), KIND_LAYER, b"\0\0\0\0", None),
+        ("</Layer group>", None, KIND_GROUP_END, b"\0\0\0\0", None),
+        ("Masked", pixels(w, h, (200, 40, 40, 255)), KIND_LAYER, b"\0\0\0\0", ctypes.pointer(mask)),
+        ("</Layer group>", None, KIND_GROUP_END, b"\0\0\0\0", None),
+        ("Deep", pixels(w, h, (40, 40, 200, 255)), KIND_LAYER, b"\0\0\0\0", None),
+        ("Inner", None, KIND_GROUP_CLOSED, b"mul ", None),
+        ("Outer", None, KIND_GROUP, b"\0\0\0\0", None),
+    ]
+    for i, (name, rgba, kind, blend, m) in enumerate(spec):
+        records[i] = Layer(name=name.encode(), rgba=rgba, opacity=255, blend=blend, kind=kind, mask=m)
+    doc = Doc(w, h, 72.0, records, len(spec), None, 0, MINIPSD_RLE)
+    out = bytearray()
+
+    def collect(_user, data, size):
+        out.extend(ctypes.string_at(data, size))
+        return 1
+
+    rc = lib.minipsd_write(ctypes.byref(doc), WRITE_FN(collect), None)
+    if rc == MINIPSD_OK:
+        path.write_bytes(out)
+    return rc, mask_px
+
+
+def check_groups_and_mask(psd, mask_px):
+    errors = []
+
+    def expect(what, got, want):
+        if got != want:
+            errors.append(f"groups-masks: {what} is {got!r}, expected {want!r}")
+
+    top = list(psd)
+    expect("top level", [(l.name, l.is_group()) for l in top], [("Base", False), ("Outer", True)])
+    outer = top[1]
+    expect("Outer's mode", outer.blend_mode.value, b"pass")
+    expect("Outer's layers", [(l.name, l.is_group()) for l in outer], [("Masked", False), ("Inner", True)])
+    inner = list(outer)[1]
+    expect("Inner's mode", inner.blend_mode.value, b"mul ")
+    expect("Inner closed", inner._record.tagged_blocks.get_data(b"lsct").kind.value, KIND_GROUP_CLOSED)
+    expect("Inner's layers", [l.name for l in inner], ["Deep"])
+    masked = list(outer)[0]
+    expect("mask", masked.has_mask(), True)
+    if masked.has_mask():
+        expect("mask rectangle", tuple(masked.mask.bbox), (8, 10, 40, 30))
+        expect("mask colour", masked.mask.background_color, 0)
+        expect("mask disabled", masked.mask.disabled, False)
+        expect("mask pixels", masked.mask.topil().tobytes(), mask_px)
+    return errors
+
+
 # --- files from other programs: read, written back, what is kept compared --------------------------
 
 # Files with text, effects, groups and resources of every kind; read whole, written back as they are.
-KEPT_FILES = ["text.psd", "layer_effects.psd", "group.psd", "blend-and-clipping.psd", "unicode_pathname.psd"]
+KEPT_FILES = ["text.psd", "layer_effects.psd", "group.psd", "blend-and-clipping.psd", "unicode_pathname.psd",
+              "hidden-groups.psd", "layer_mask_data.psd", "mask-density-layervectormask.psd", "mask-disabled.psd",
+              "mask-parameters-no-real-channel.psd"]
 
 
 def resave(lib, source, path):
@@ -291,6 +371,10 @@ def check_kept(name, before, after):
     same("layer count", len(rb), len(ra))
     for i, (b, a) in enumerate(zip(rb, ra)):
         same(f"layer {i} blocks", blocks(b.tagged_blocks), blocks(a.tagged_blocks))
+        same(f"layer {i} mask data", b.mask_data.tobytes() if b.mask_data else None, a.mask_data.tobytes() if a.mask_data else None)
+        ids = [c.id.value for c in b.channel_info]
+        added = [] if -1 in ids else [-1]   # a layer without transparency gets an opaque one
+        same(f"layer {i} channels", added + ids if added else ids, [c.id.value for c in a.channel_info])
         same(f"layer {i} blend, clipping, flags", (b.blend_mode, b.clipping, b.flags), (a.blend_mode, a.clipping, a.flags))
     return errors
 
@@ -318,6 +402,12 @@ def main():
         errors += found
         print(f"{name}: {'FAILED' if found else 'ok'}")
 
+    path = out / "groups-masks.psd"
+    rc, mask_px = groups_and_mask(lib, path)
+    found = [f"groups-masks: minipsd_write returned {rc}"] if rc != MINIPSD_OK else check_groups_and_mask(PSDImage.open(path), mask_px)
+    errors += found
+    print(f"groups-masks: {'FAILED' if found else 'ok'}")
+
     files = pathlib.Path(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] else None
     if files is None:
         print("kept content: skipped, no psd-tools files (MINIPSD_PSD_TOOLS_FILES)")
@@ -327,7 +417,11 @@ def main():
         if rc != MINIPSD_OK:
             errors.append(f"{name}: minipsd_read or minipsd_write returned {rc}")
             continue
-        found = check_kept(name, PSDImage.open(files / name), PSDImage.open(path))
+        before, after = PSDImage.open(files / name), PSDImage.open(path)
+        found = check_kept(name, before, after)
+        for lb, la in zip(before.descendants(), after.descendants()):   # mask pixels, as psd-tools decodes them
+            if lb.has_mask() and lb.mask.topil() is not None and lb.mask.topil().tobytes() != la.mask.topil().tobytes():
+                found.append(f"{name}: '{lb.name}' mask pixels differ")
         errors += found
         print(f"resaved {name} (lost {lost}): {'FAILED' if found else 'ok'}")
     for e in errors:

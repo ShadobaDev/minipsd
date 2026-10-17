@@ -178,7 +178,7 @@ minipsd_bytes view(const Bytes &b) { return {b.data(), b.size()}; }
 TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
 {
     const Bytes px = testImage(2, 2);
-    const Bytes lsct = tagged("lsct", {0, 0, 0, 1}), tysh = tagged("TySh", Bytes(6, 7));
+    const Bytes lsct = tagged("lsct", {0, 0, 0, 0}), tysh = tagged("TySh", Bytes(6, 7));   // an 'lsct' of a plain layer
     const Bytes extra = tagged("luni", {0, 0, 0, 1, 0, 'X', 0, 0}) + lsct + tysh;   // a stale name, then two blocks
     const minipsd_layer layer{.name = "Mine", .rgba = px.data(), .opacity = 200, .hidden = 1,
                               .blend = {'m', 'u', 'l', ' '}, .clipping = 1, .flags = 0x09, .extra = view(extra)};
@@ -226,6 +226,72 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     EXPECT_EQ(info.dpi, 72.0);
     ASSERT_EQ(minipsd_reader_next_resource(r, &res), MINIPSD_MORE);
     EXPECT_EQ(res.data.data[7], 1) << "shown in inches";
+}
+
+TEST(MinipsdWriterTest, GroupsAndMasksAreWritten)
+{
+    const Bytes px = testImage(6, 4);
+    Bytes ramp(std::size_t(5) * 3);
+    for (std::size_t i = 0; i < ramp.size(); ++i) ramp[i] = static_cast<std::uint8_t>(i * 17);
+    const minipsd_mask mask{.top = 1, .left = 1, .bottom = 4, .right = 6, .color = 255, .flags = 0x02, .pixels = ramp.data()};
+    const Bytes kept = tagged("lsct", {0, 0, 0, 2, '8', 'B', 'I', 'M', 'n', 'o', 'r', 'm', 0, 0, 0, 1});   // with a sub-type
+    const minipsd_layer layers[5] = {
+        {.name = "</Layer group>", .opacity = 255, .kind = MINIPSD_KIND_GROUP_END},
+        {.name = "Masked", .rgba = px.data(), .opacity = 255, .mask = &mask},
+        {.name = "</Layer group>", .opacity = 255, .kind = MINIPSD_KIND_GROUP_END},
+        {.name = "Inner", .opacity = 255, .extra = view(kept), .kind = MINIPSD_KIND_GROUP_CLOSED},
+        {.name = "Outer", .opacity = 255, .blend = {'s', 'c', 'r', 'n'}, .kind = MINIPSD_KIND_GROUP}};
+    for (int compression : {MINIPSD_RLE, MINIPSD_RAW}) {
+        SCOPED_TRACE(compression);
+        minipsd_doc d = docOf(6, 4, layers, 5);
+        d.compression = compression;
+        const Bytes file = write(d);
+        EXPECT_EQ(pull(d, 7), file);
+        EXPECT_EQ(pullTotal(d), file.size());
+
+        Bytes workspace(256);
+        minipsd_reader *r = nullptr;
+        minipsd_info info{};
+        ASSERT_EQ(minipsd_reader_init(&r, file.data(), file.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
+        std::vector<minipsd_layer_view> v(5);
+        for (minipsd_layer_view &one : v) ASSERT_EQ(minipsd_reader_next_layer(r, &one), MINIPSD_MORE);
+        const std::uint8_t kinds[5] = {MINIPSD_KIND_GROUP_END, MINIPSD_KIND_LAYER, MINIPSD_KIND_GROUP_END,
+                                       MINIPSD_KIND_GROUP_CLOSED, MINIPSD_KIND_GROUP};
+        for (int i = 0; i < 5; ++i) EXPECT_EQ(v[i].kind, kinds[i]) << i;
+        auto lsct = [](const minipsd_layer_view &one) {
+            minipsd_block blk;
+            for (std::size_t pos = 0; minipsd_layer_next_block(&one, &pos, &blk) == MINIPSD_MORE;)
+                if (std::string(blk.key) == "lsct") return Bytes(blk.data.data, blk.data.data + blk.data.size);
+            return Bytes();
+        };
+        EXPECT_EQ(lsct(v[0]), (Bytes{0, 0, 0, 3})) << "a divider";
+        EXPECT_EQ(lsct(v[3]), Bytes(kept.begin() + 12, kept.end())) << "the kept one of the same kind, as it is";
+        EXPECT_EQ(lsct(v[4]), (Bytes{0, 0, 0, 1, '8', 'B', 'I', 'M', 's', 'c', 'r', 'n'})) << "the group's own mode";
+
+        ASSERT_TRUE(v[1].has_mask);
+        const minipsd_mask &m = v[1].mask;
+        EXPECT_EQ(std::tie(m.top, m.left, m.bottom, m.right), std::tie(mask.top, mask.left, mask.bottom, mask.right));
+        EXPECT_EQ(m.color, 255);
+        EXPECT_EQ(m.flags, 0x02);
+        EXPECT_EQ(m.rest.size, 2u) << "the padding of a mask with nothing more";
+        Bytes got(ramp.size(), 0xEE);
+        const minipsd_plane plane{got.data(), 1, 5};
+        ASSERT_EQ(minipsd_decode_mask(r, &v[1], &plane, nullptr), MINIPSD_OK);
+        EXPECT_EQ(got, ramp);
+        EXPECT_EQ(minipsd_decode_mask(r, &v[0], &plane, nullptr), MINIPSD_ERR_ARG) << "no mask";
+        EXPECT_EQ(v[1].other_channels, 0);
+
+        // Read back as a document and written again: the same bytes, and the same with stored.
+        for (int keep : {0, 1}) {
+            const minipsd_read_opts opts{keep};
+            minipsd_doc *back = nullptr;
+            std::uint32_t lost = 99;
+            ASSERT_EQ(minipsd_read(file.data(), file.size(), nullptr, &opts, &back, &lost), MINIPSD_OK);
+            EXPECT_EQ(lost, 0u);
+            EXPECT_EQ(write(*back), file) << "stored " << keep;
+            minipsd_doc_free(back);
+        }
+    }
 }
 
 TEST(MinipsdWriterTest, PassThroughEncodesOnlyTheLayerThatChanged)

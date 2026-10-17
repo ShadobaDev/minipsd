@@ -58,11 +58,12 @@ for a file (UTF-8 paths on Windows), a buffer and a non-blocking pipe are in
 
 An 8-bit RGB document with transparency: layers anywhere on or off the canvas (by default the
 full canvas), or empty, with UTF-8 names, opacity and visibility; the merged composite image,
-yours or composed as a best effort; the resolution; an optional ICC profile; blend keys,
-clipping, and blocks and resources kept from a file (text, effects, groups), as they are.
+yours or composed as a best effort; the resolution; an optional ICC profile; groups, layer
+masks, blend modes, clipping, and blocks and resources kept from a file (text, effects), as
+they are.
 Channels are PackBits RLE or raw. Each side is limited to 30 000 px.
 
-Not written (yet): layer masks, 16-bit, PSB. The full contract is in [docs/SPECIFICATION.md](docs/SPECIFICATION.md).
+Not written (yet): 16-bit, PSB. The full contract is in [docs/SPECIFICATION.md](docs/SPECIFICATION.md).
 
 ## What it reads
 

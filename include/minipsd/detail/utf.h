@@ -1,5 +1,5 @@
 /**
- * \file
+ * \file minipsd/detail/utf.h
  * \brief Internal: UTF-8 to UTF-16 (the writer) and UTF-16BE to UTF-8 (the reader), for layer
  *        names.
  *

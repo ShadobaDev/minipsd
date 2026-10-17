@@ -581,17 +581,15 @@ typedef struct minipsd_read_opts {
 
 | Flag | What is lost |
 |---|---|
-| `MINIPSD_LOST_MASK` | layer masks: the record's mask data and its mask channels (vector masks are blocks, kept) |
 | `MINIPSD_LOST_BLENDING_RANGES` | the record's blending ranges ("Blend If") |
-| `MINIPSD_LOST_CHANNELS` | channels other than R, G, B, transparency and masks, of a layer or of the composite (a positive layer count makes a fourth composite channel an alpha channel) |
+| `MINIPSD_LOST_CHANNELS` | channels other than R, G, B, transparency and masks, of a layer or of the composite (a positive layer count makes a fourth composite channel an alpha channel), and a mask channel without mask data |
 
 - **Every known loss is tracked.** The code that sets a bit carries a `TODO` naming the ROADMAP
   step that will carry the content, so the list of bits is the list of open work.
 - **A loud warning, and a request.** The MANUAL asks whoever sees a non-zero `lost` to open an
   issue with the file or a description of it; the bits make the report precise.
-- **Not loss:** groups (their `lsct` blocks are in `extra`, the dividers are empty layers),
-  text, effects, smart objects, adjustments and vector masks (blocks and `layer_tail`), blend
-  keys, clipping and flags (fields). The composite is copied, never lost. Blending ranges left at their
+- **Not loss:** groups and layer masks (fields), text, effects, smart objects, adjustments and
+  vector masks (blocks and `layer_tail`), blend keys, clipping and flags (fields). The composite is copied, never lost. Blending ranges left at their
   default (`0 0 255 255` for every pair) are not loss either.
 - **Document-wide.** Which layer has a mask, the reader tells; a per-layer list is an addition
   when a caller needs it.
@@ -614,8 +612,8 @@ feature is serialization: written and read as data. The composite composed as a 
 | **Blend modes** | done: `blend[4]`; zero = `norm` | done: key in the record | done: the view's key | — | the composed composite draws every mode as `norm` |
 | **Supplied composite** | done: `composite`, `composite_matted`; NULL = composed | done: matted unless marked, composing skipped | — | `composite`: the row source | `W7` |
 | **Round trip** | done: `blend`, `clipping`, `flags`, `extra`, `stored`; `resources`, `layer_tail` | done: kept data written back, stored channels copied | done: `clipping`, `flags`, resource names, `layer_tail`; `minipsd_read` with `opts->stored` | `bytes`: the block walker, shared | see [Round trip](#round-trip) |
-| **Layer groups (`lsct`)** | `kind`: layer / group open / group close; zero = layer | divider records, `lsct` block | group structure in the view | — | kept today as `lsct` blocks in `extra` |
-| **Layer masks** | optional mask (rect + bytes) per layer | mask record, channel `-2` | mask view | — | until then `MINIPSD_LOST_MASK` |
+| **Layer groups (`lsct`)** | done: `kind` (`MINIPSD_KIND_*`); zero = layer | done: the `lsct` block, the group's mode in it; a kept one of the same kind as it is; nesting checked | done: `kind` in the view | — | the composed composite draws groups flat |
+| **Layer masks** | done: `mask` (`minipsd_mask`: rectangle, colour, flags, pixels or stored, kept real mask and rest) | done: mask data, channels -2 and -3 | done: the view's mask, `minipsd_decode_mask` | — | the composed composite ignores masks |
 | **16-bit channels** | `depth` on `minipsd_doc`; zero = 8 | 2-byte samples | 2-byte samples | `packbits` over byte planes, `composite` in 16-bit | |
 | **PSB (version 2)** | `format` on `minipsd_doc`; zero = PSD | 8-byte lengths, 4-byte RLE counts | both versions | `bytes`: 64-bit fields | sides up to 300 000 px |
 

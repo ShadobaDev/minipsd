@@ -1,5 +1,5 @@
 /**
- * \file
+ * \file minipsd/detail/bytes.h
  * \brief Internal: the output sink, big-endian integers in both directions, and additional-
  *        information blocks.  Included by the writer and the reader.
  *
@@ -13,10 +13,10 @@
 /* --- output: a sink either counts the bytes (the sizing pass) or sends them on --- */
 
 typedef struct mpsd__sink {
-    minipsd_write_fn fn;    /* NULL while counting */
-    void            *user;
-    uint64_t         count;
-    int              failed;
+    minipsd_write_fn fn;        /* NULL while counting */
+    void            *user;      /* user-provided context for the write function */
+    uint64_t         count;     /* how many bytes have been sent or counted */
+    int              failed;    /* 1 if the write function returned 0, else 0 */
 } mpsd__sink;
 
 static void mpsd__put(mpsd__sink *s, const void *data, size_t size)

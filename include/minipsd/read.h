@@ -1,5 +1,5 @@
 /**
- * \file
+ * \file minipsd/read.h
  * \brief Implementation: minipsd_read, a PSD held in memory into one standalone minipsd_doc, built
  *        on the reader.  Included by minipsd.h under MINIPSD_IMPLEMENTATION; the declarations are
  *        in minipsd.h.
@@ -51,21 +51,15 @@ static minipsd_bytes mpsd__copy(mpsd__arena *a, minipsd_bytes src)
 
 /* What a layer record holds that the document cannot carry yet.  at is where the record starts;
    the reader has checked it whole. */
-static uint32_t mpsd__record_loss(const minipsd_reader *r, uint64_t at)
+static uint32_t mpsd__record_loss(const minipsd_reader *r, uint64_t at, const minipsd_layer_view *v)
 {
     static const uint8_t no_range[8] = { 0, 0, 255, 255, 0, 0, 255, 255 };   /* "Blend If" left alone */
     const uint8_t *d        = r->data;
     const uint32_t channels = mpsd__get16(d + (size_t)at + 16);
     uint64_t       extra    = at + 18 + 6 * (uint64_t)channels + 16, ranges;
-    uint32_t       loss = 0, k, length;
-    for (k = 0; k < channels; ++k) {
-        const int id = (int16_t)(uint16_t)mpsd__get16(d + (size_t)at + 18 + 6 * (size_t)k);
-        /* TODO(S6.4): layer masks.  TODO(S6.8): channels beyond R, G, B, A. */
-        if (id == -2 || id == -3) loss |= MINIPSD_LOST_MASK;
-        else if (id < -1 || id > 2) loss |= MINIPSD_LOST_CHANNELS;
-    }
-    length = mpsd__get32(d + (size_t)extra);
-    if (length) loss |= MINIPSD_LOST_MASK;                        /* TODO(S6.4) */
+    uint32_t       loss = 0, length;
+    if (v->other_channels) loss |= MINIPSD_LOST_CHANNELS;          /* TODO(S6.8): alpha and spot channels */
+    length = mpsd__get32(d + (size_t)extra);                        /* the mask data, kept */
     extra += 4 + length;
     length = mpsd__get32(d + (size_t)extra);
     for (ranges = extra + 4; ranges + 8 <= extra + 4 + length; ranges += 8)
@@ -142,10 +136,12 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         uint64_t       w, h;
         char          *name;
         minipsd_bytes  extra, copies[4], *stored = NULL;
+        minipsd_mask  *mask = NULL;
+        uint8_t       *mask_pixels = NULL;
         int            k, keep;
         rc = minipsd_reader_next_layer(r, &v);
         if (rc != MINIPSD_MORE) return rc == MINIPSD_OK ? MINIPSD_ERR_FORMAT : rc;
-        loss |= mpsd__record_loss(r, at);
+        loss |= mpsd__record_loss(r, at, &v);
         w = (uint64_t)((int64_t)v.right - v.left);
         h = (uint64_t)((int64_t)v.bottom - v.top);
         if (w > MINIPSD_MAX_SIDE || h > MINIPSD_MAX_SIDE) return MINIPSD_ERR_UNSUPPORTED;   /* the writer's limit */
@@ -162,6 +158,24 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         pixels = w && h && !keep ? (uint8_t *)mpsd__take(a, w * h * 4, 0) : NULL;
         extra  = mpsd__copy(a, v.extra);                        /* every block, 'luni' too */
         if (pixels) decoded += w * h * 4;
+        if (v.has_mask) {                                       /* the mask: decoded, or stored with the layer */
+            const uint64_t mw = (uint64_t)((int64_t)v.mask.right - v.mask.left), mh = (uint64_t)((int64_t)v.mask.bottom - v.mask.top);
+            const int      copy = opts && opts->stored && v.mask.stored.size;
+            minipsd_mask  *m = (minipsd_mask *)mpsd__take(a, sizeof *m, 1);
+            minipsd_mask   kept = v.mask;
+            kept.rest   = mpsd__copy(a, v.mask.rest);
+            kept.real   = mpsd__copy(a, v.mask.real);
+            kept.stored.data = NULL;
+            kept.stored.size = 0;
+            if (copy) kept.stored = mpsd__copy(a, v.mask.stored);
+            if (!copy && mw && mh) {
+                mask_pixels = (uint8_t *)mpsd__take(a, mw * mh, 0);   /* NULL while measuring */
+                decoded    += mw * mh;
+            }
+            kept.pixels = mask_pixels;
+            if (m) *m = kept;
+            mask = m;
+        }
         if (max && decoded > max) return MINIPSD_ERR_LIMIT;
         if (!d) continue;
         (void)minipsd_layer_name(&v, name, n, NULL);
@@ -180,6 +194,16 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         layers[i].clipping = v.clipping;
         layers[i].flags    = (uint8_t)(v.flags & ~0x02u);
         layers[i].extra    = extra;
+        layers[i].kind     = v.kind;
+        layers[i].mask     = mask;
+        if (mask_pixels) {
+            minipsd_plane plane;
+            plane.data       = mask_pixels;
+            plane.pixel_step = 1;
+            plane.row_step   = (ptrdiff_t)((int64_t)v.mask.right - v.mask.left);
+            rc = minipsd_decode_mask(r, &v, &plane, NULL);
+            if (rc != MINIPSD_OK) return rc;
+        }
         if (stored) {
             for (k = 0; k < 4; ++k) stored[k] = copies[k];
             layers[i].stored = stored;

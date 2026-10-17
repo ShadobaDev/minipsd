@@ -1,5 +1,5 @@
 /**
- * \file
+ * \file minipsd/detail/packbits.h
  * \brief Internal: PackBits run-length encoding over a strided source, and decoding into a strided
  *        target.  Included by the writer and the reader.
  *

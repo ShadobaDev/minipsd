@@ -30,8 +30,12 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
 - `minipsd_read`: a whole 8-bit RGB file into a `minipsd_doc` that `minipsd_write` takes as it
   is, every byte copied into one block so the file can be freed at once; `minipsd_doc_free`;
   `minipsd_read_size` and `minipsd_read_into` for the caller's own memory. `lost`
-  (`MINIPSD_LOST_*`) says what the document could not carry: layer masks, blending ranges,
-  extra channels.
+  (`MINIPSD_LOST_*`) says what the document could not carry: blending ranges, extra channels.
+- Layer groups: `kind` on `minipsd_layer` and the layer view (`MINIPSD_KIND_*`), written as
+  `lsct` blocks with the group's mode, nesting checked by `minipsd_doc_check`.
+- Layer masks: `minipsd_mask` on `minipsd_layer` (rectangle, colour, flags, pixels or the stored
+  channel, and a file's real mask and mask parameters kept), the mask in the layer view, and
+  `minipsd_decode_mask`.
 - Pass-through re-save: `minipsd_read_opts.stored` keeps each layer's channels as the file
   stores them (`minipsd_layer.stored`), and the writer copies them instead of encoding pixels, so
   changing one layer encodes only that one.

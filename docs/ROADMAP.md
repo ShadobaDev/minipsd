@@ -253,11 +253,23 @@ feature; a supplied composite needs nothing. See
 - [x] **S6.2** Blend modes. Each mode is a four-character key in the layer record: the reader
       returns it in `minipsd_layer_view.blend`, the writer writes `minipsd_layer.blend` as given
       (S5.5); the composed composite draws them all as `norm`. Photoshop's keys are in the
-      spec's [Blend modes](SPECIFICATION.md#blend-modes); `pass` waits for groups (S6.3).
+      spec's [Blend modes](SPECIFICATION.md#blend-modes).
       *Done when:* a document with a layer in every mode reads back with every key from
       `psd-tools` (`roundtrip.py`, "blend-modes"); GIMP shows each mode, checked by hand once.
-- [ ] **S6.3** Layer groups (`lsct`).
-- [ ] **S6.4** Layer masks.
+- [x] **S6.3** Layer groups (`lsct`): `kind` on the layer and in the view; the writer writes
+      the `lsct` block with the group's mode (`pass` by default), or a kept one of the same kind
+      as it is; `minipsd_doc_check` checks the nesting.
+      *Done when:* nested groups, one closed, written from scratch read back by `psd-tools` with
+      their structure and modes; every group file of psd-tools' set keeps its blocks through
+      `minipsd_read` and `minipsd_write`; GIMP shows the groups, the closed one closed, checked by
+      hand once.
+- [x] **S6.4** Layer masks: `minipsd_mask` on the layer (rectangle, colour, flags, pixels or
+      stored channel; a file's real mask, -3, and mask parameters kept as they are), the mask in
+      the view, `minipsd_decode_mask`; `MINIPSD_LOST_MASK` goes, no release had it.
+      *Done when:* a mask written from scratch reads back from `psd-tools` with its rectangle,
+      colour and pixels; every mask of psd-tools' set survives `minipsd_read` and
+      `minipsd_write` with the same mask data and pixels; the fuzzer decodes masks; GIMP shows the
+      mask, checked by hand once.
 - [ ] **S6.5** 16-bit channels.
 - [ ] **S6.6** PSB (version 2).
 - [ ] **S6.7** Blending ranges ("Blend If") kept on the layer; until then `MINIPSD_LOST_BLENDING_RANGES`.

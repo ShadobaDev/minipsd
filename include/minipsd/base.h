@@ -1,5 +1,5 @@
 /**
- * \file
+ * \file minipsd/base.h
  * \brief Implementation: the texts of the return codes.  Included by minipsd.h under
  *        MINIPSD_IMPLEMENTATION; the declarations are in minipsd.h.
  *

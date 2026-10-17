@@ -1,5 +1,5 @@
 /**
- * \file
+ * \file minipsd/detail/composite.h
  * \brief Internal: the composite one row at a time, supplied or the layers blended "over", matted
  *        against white (the writer); the matte undone again (the reader).  Also a layer's
  *        rectangle.
@@ -14,8 +14,8 @@
 #include <string.h>
 
 typedef struct mpsd__composite {
-    const minipsd_doc *doc;
-    uint8_t           *row;      /* width * 4, the caller's */
+    const minipsd_doc *doc;     /* pointer to the PSD document */
+    uint8_t           *row;     /* width * 4, the caller's */
 } mpsd__composite;
 
 static int mpsd__contributes(const minipsd_layer *l) { return l->rgba && !l->hidden && l->opacity; }

@@ -193,6 +193,21 @@ minipsd_layer logo = { .name = "Logo", .rgba = logo_rgba, .opacity = 255,
                        .top = 10, .left = 20, .bottom = 42, .right = 84 };
 ```
 
+A group is two records around its layers, bottom first: a divider, then the layers, then the
+group itself, which carries its name, visibility and mode (Pass Through unless `blend` says
+otherwise). A layer mask is one byte per pixel over a rectangle of its own, 255 where the layer
+shows:
+
+```c
+minipsd_mask  fade   = { .top = 0, .left = 0, .bottom = 32, .right = 64, .pixels = ramp };
+minipsd_layer layers[4] = {
+    { .name = "</Layer group>", .opacity = 255, .kind = MINIPSD_KIND_GROUP_END },
+    { .name = "Logo", .rgba = logo_rgba, .opacity = 255, .bottom = 32, .right = 64, .mask = &fade },
+    { .name = "Shadow", .rgba = shadow_rgba, .opacity = 128, .bottom = 32, .right = 64 },
+    { .name = "Branding", .opacity = 255, .kind = MINIPSD_KIND_GROUP },
+};
+```
+
 The composite, the flattened image that viewers and thumbnails show, is yours to render when
 the layers use anything beyond plain "over" (libvips does most of it, see
 [Working with libvips](SPECIFICATION.md#working-with-libvips)). Give it in straight alpha, the
@@ -386,6 +401,10 @@ t.channel[MINIPSD_CH_R].data = bgra + 2;
 t.channel[MINIPSD_CH_B].data = bgra;
 ```
 
+A layer's mask, when `has_mask` is set, decodes the same way into one plane, over the mask's own
+rectangle: `minipsd_decode_mask(r, &layer, &plane, NULL)`. Groups need no decoding: `kind` says
+which records open and close them.
+
 Pixels come as stored: straight alpha, the layer's opacity and visibility left in the view. A
 `minipsd_decode_opts` with `y_first` and `y_count` decodes a band of rows into the target's first
 row, so a huge layer can go through a small buffer in strips. Only 8-bit RGB files decode
@@ -437,8 +456,8 @@ memory of yours with `minipsd_read_size` and `minipsd_read_into`. Nothing in it 
 file, so the file's bytes can go as soon as the call returns.
 
 **What comes back.** Every layer with its rectangle, name, opacity, visibility, blend mode,
-clipping and flags, and its pixels; the blocks a layer carries (text, effects, groups, vector
-masks, smart objects) and the file's resources and global blocks, byte for byte, so a program
+clipping and flags, its pixels, its mask and its place in the groups; the blocks a layer carries
+(text, effects, vector masks, smart objects) and the file's resources and global blocks, byte for byte, so a program
 that understands them finds them as they were. The document's own fields win over kept data that says the same
 thing: rename a layer with `name`, change the resolution with `dpi`, replace the profile with
 `icc`.
@@ -477,7 +496,6 @@ bits say what writing the document back would drop:
 
 | Bit | What |
 |---|---|
-| `MINIPSD_LOST_MASK` | layer masks (vector masks are blocks, kept) |
 | `MINIPSD_LOST_BLENDING_RANGES` | "Blend If" ranges that are not left at their default |
 | `MINIPSD_LOST_CHANNELS` | alpha and spot channels, of a layer or of the composite |
 

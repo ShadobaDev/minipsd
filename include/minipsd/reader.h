@@ -1,5 +1,5 @@
 /**
- * \file
+ * \file minipsd/reader.h
  * \brief Implementation: the reader, a PSD held in memory walked in place.  Included by minipsd.h
  *        under MINIPSD_IMPLEMENTATION; the declarations are in minipsd.h.
  *
@@ -22,22 +22,22 @@
 /* --- the reader's state --- */
 
 struct minipsd_reader {
-    const uint8_t *data;
-    size_t         size;
+    const uint8_t *data;          /* raw data, a binary PSD file                                 */
+    size_t         size;          /* PSD file size                                               */
     uint64_t       needed;        /* what the last MINIPSD_ERR_SHORT asked for                   */
     minipsd_limits limits;        /* with zero fields replaced by the format's own limits        */
     uint32_t       layer_side;    /* the caller's max_side, for layers; 0: none                  */
     int            ready;         /* init succeeded                                              */
     int            rgb8;          /* the file is 8-bit RGB: its pixels can be decoded            */
     uint32_t       width, height; /* the composite: its size, channels, and where it starts      */
-    uint32_t       channels;
-    int            composite_alpha;
-    uint64_t       image_start;
+    uint32_t       channels;      /* the composite: how many channels, 1..56; 0: not known yet   */
+    int            composite_alpha; /* the composite: non-zero if it has an alpha channel        */
+    uint64_t       image_start;   /* the composite: where its channel data starts                */
     uint64_t       res_next;      /* the resources: where the next one starts, where they end    */
     uint64_t       res_end;
     uint64_t       li_start;      /* the layer info: its first record, and the end of its content */
     uint64_t       li_end;
-    size_t         layer_count;
+    size_t         layer_count;   /* the layer info: how many records, or 0 for a flat file      */
     size_t         layer_next;    /* the layers already returned                                 */
     uint64_t       record_next;   /* where the next layer record starts                          */
     uint64_t       data_next;     /* where the next layer's channel data starts                  */
@@ -276,8 +276,8 @@ MINIPSDDEF int minipsd_reader_next_resource(minipsd_reader *r, minipsd_resource 
    keeps where each one starts in the layer's run of channel data, and how long it is. */
 typedef struct mpsd__rec {
     minipsd_layer_view view;
-    uint64_t           offset[4];   /* in the layer's channel data, by MINIPSD_CH_* */
-    uint32_t           length[4];   /* 0: the layer has no such channel             */
+    uint64_t           offset[6];   /* in the layer's channel data, by MINIPSD_CH_*, then the mask, the real mask */
+    uint32_t           length[6];   /* 0: the layer has no such channel             */
     uint64_t           total;       /* all of its channel data, other channels too  */
     uint64_t           next;        /* where the next record starts                 */
 } mpsd__rec;
@@ -288,10 +288,11 @@ static int mpsd__room(minipsd_reader *r, uint64_t end)
     return end > r->li_end ? MINIPSD_ERR_FORMAT : mpsd__have(r, end);
 }
 
-/* Which MINIPSD_CH_* a PSD channel id is, or -1 for a channel the reader does not read. */
+/* Where a PSD channel id goes: MINIPSD_CH_*, 4 the mask (-2), 5 the real mask (-3), or -1 for a
+   channel the reader does not read. */
 static int mpsd__slot(int id)
 {
-    return id >= 0 && id <= 2 ? id : id == -1 ? MINIPSD_CH_A : -1;
+    return id >= 0 && id <= 2 ? id : id == -1 ? MINIPSD_CH_A : id == -2 ? 4 : id == -3 ? 5 : -1;
 }
 
 /* The name block 'luni': a count of UTF-16 units, then the units. */
@@ -320,6 +321,19 @@ static int mpsd__extra(const minipsd_reader *r, uint64_t at, uint64_t end, minip
         skip = mpsd__get32(d + (size_t)at);
         at += 4;
         if (skip > end - at) return MINIPSD_ERR_FORMAT;
+        if (k == 0 && skip >= 18) {                            /* rectangle, colour, flags, the rest */
+            const uint8_t *m = d + (size_t)at;
+            minipsd_mask  *mask = &v->mask;
+            mask->top    = (int32_t)mpsd__get32(m);     mask->left  = (int32_t)mpsd__get32(m + 4);
+            mask->bottom = (int32_t)mpsd__get32(m + 8); mask->right = (int32_t)mpsd__get32(m + 12);
+            if (mask->bottom < mask->top) mask->bottom = mask->top;   /* inverted: empty, as layers */
+            if (mask->right < mask->left) mask->right = mask->left;
+            mask->color     = m[16];
+            mask->flags     = m[17];
+            mask->rest.data = m + 18;
+            mask->rest.size = skip - 18;
+            v->has_mask     = 1;
+        }
         at += skip;
     }
     if (end == at || mpsd__pad(1u + d[(size_t)at], 4) > end - at) return MINIPSD_ERR_FORMAT;
@@ -334,6 +348,10 @@ static int mpsd__extra(const minipsd_reader *r, uint64_t at, uint64_t end, minip
         if (mpsd__tag((const uint8_t *)block.key, "luni") && !v->name_unicode.data) {
             rc = mpsd__luni(block.data, &v->name_unicode);
             if (rc != MINIPSD_OK) return rc;
+        }
+        if (mpsd__tag((const uint8_t *)block.key, "lsct") && block.data.size >= 4 && !v->kind) {
+            const uint32_t type = mpsd__get32(block.data.data);
+            v->kind = (uint8_t)(type <= (uint32_t)MINIPSD_KIND_GROUP_END ? type : 0u);   /* unknown: a layer */
         }
     }
     return MINIPSD_OK;
@@ -358,10 +376,13 @@ static int mpsd__record(minipsd_reader *r, uint64_t at, mpsd__rec *rec)
 
     for (k = 0; k < 4; ++k) {
         rect[k]        = (int32_t)mpsd__get32(d + (size_t)at + 4 * (size_t)k);
-        rec->offset[k] = rec->length[k] = 0;
         v->channel[k].data = NULL;
         v->channel[k].size = 0;
     }
+    for (k = 0; k < 6; ++k) rec->offset[k] = rec->length[k] = 0;
+    memset(&v->mask, 0, sizeof v->mask);
+    v->kind = v->has_mask = 0;
+    v->mask_offset = 0;
     /* An inverted rectangle is an empty one: Photoshop writes (0, 0, -1, 0) for a fill layer
        that has no pixels of its own. */
     if (rect[2] < rect[0]) rect[2] = rect[0];
@@ -398,6 +419,10 @@ static int mpsd__record(minipsd_reader *r, uint64_t at, mpsd__rec *rec)
     v->name_pascal.size = v->name_unicode.size = v->extra.size = 0;
     rc = mpsd__extra(r, pos + 16, extra_end, v);
     rec->next = extra_end;
+    if (!v->has_mask) {                                        /* mask channels with no mask data */
+        v->other_channels = (uint16_t)(v->other_channels + (rec->length[4] != 0) + (rec->length[5] != 0));
+        rec->length[4] = rec->length[5] = 0;
+    }
     return rc;
 }
 
@@ -434,11 +459,13 @@ MINIPSDDEF int minipsd_reader_next_layer(minipsd_reader *r, minipsd_layer_view *
     if (r->layer_side && ((uint64_t)((int64_t)rec.view.right - rec.view.left) > r->layer_side
                           || (uint64_t)((int64_t)rec.view.bottom - rec.view.top) > r->layer_side))
         return MINIPSD_ERR_LIMIT;
-    for (k = 0; k < 4; ++k) {
-        const uint64_t at = r->data_next + rec.offset[k];
-        rec.view.channel[k].size  = rec.length[k];
-        rec.view.channel_offset[k] = rec.length[k] ? at : 0;
-        if (rec.length[k] && at + rec.length[k] <= r->size) rec.view.channel[k].data = r->data + (size_t)at;
+    for (k = 0; k < 6; ++k) {
+        const uint64_t at   = r->data_next + rec.offset[k];
+        minipsd_bytes *view = k < 4 ? &rec.view.channel[k] : k == 4 ? &rec.view.mask.stored : &rec.view.mask.real;
+        view->size = rec.length[k];
+        view->data = rec.length[k] && at + rec.length[k] <= r->size ? r->data + (size_t)at : NULL;
+        if (k < 4) rec.view.channel_offset[k] = rec.length[k] ? at : 0;
+        if (k == 4) rec.view.mask_offset = rec.length[k] ? at : 0;
     }
     *layer         = rec.view;
     r->record_next = rec.next;
@@ -617,6 +644,37 @@ MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view 
         if (rc != MINIPSD_OK) return rc;
     }
     return MINIPSD_OK;
+}
+
+MINIPSDDEF int minipsd_decode_mask(minipsd_reader *r, const minipsd_layer_view *layer, const minipsd_plane *plane,
+                                   const minipsd_decode_opts *opts)
+{
+    minipsd_target t;
+    mpsd__chan     ch;
+    minipsd_bytes  c;
+    uint32_t       width, height, y0, rows;
+    int            k, rc;
+    if (!r || !layer || !plane || !r->ready || !layer->has_mask) return MINIPSD_ERR_ARG;
+    width  = (uint32_t)((int64_t)layer->mask.right - layer->mask.left);   /* next_layer made it not inverted */
+    height = (uint32_t)((int64_t)layer->mask.bottom - layer->mask.top);
+    y0     = opts ? opts->y_first : 0;
+    if (y0 > height) return MINIPSD_ERR_ARG;
+    rows   = opts && opts->y_count ? opts->y_count : height - y0;
+    if (rows > height - y0) return MINIPSD_ERR_ARG;
+    for (k = 0; k < 4; ++k) t.channel[k].data = NULL;
+    t.channel[0] = *plane;
+    if (!mpsd__within(r, &t, width, rows)) return MINIPSD_ERR_LIMIT;
+    if (!r->rgb8) return MINIPSD_ERR_UNSUPPORTED;
+    if (width == 0 || rows == 0) return MINIPSD_OK;
+    if (!plane->data) return MINIPSD_ERR_ARG;
+    c = layer->mask.stored;
+    if (c.size == 0) return MINIPSD_ERR_FORMAT;                 /* a mask with an area, no channel */
+    if (!c.data) {
+        r->needed = layer->mask_offset + c.size;
+        return MINIPSD_ERR_SHORT;
+    }
+    rc = mpsd__chan_open(c, width, height, &ch);
+    return rc != MINIPSD_OK ? rc : mpsd__chan_rows(&ch, width, y0, rows, plane);
 }
 
 /* --- pixels: the composite, every channel's rows after one compression marker --- */

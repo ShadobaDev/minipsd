@@ -1,5 +1,5 @@
 /**
- * \file
+ * \file minipsd.h
  * \brief A small, dependency-free Photoshop (PSD) writer and reader.  Header-only, C99, also valid C++.
  *
  * This file is the whole public API: every type, constant and function a caller can use.  The
@@ -62,8 +62,8 @@
  *
  * Channel data is PackBits RLE by default (small for flat art), or raw.
  *
- * Not written: 16/32-bit, other colour modes, layer masks, PSB.  Groups, text and effects only as
- * blocks kept from a file.
+ * Groups (minipsd_layer.kind) and layer masks (minipsd_layer.mask) are written; text and effects
+ * only as blocks kept from a file.  Not written: 16/32-bit, other colour modes, PSB.
  * PSD caps each side at 30000 px; larger documents are refused (MINIPSD_ERR_SIZE).
  *
  * \par Output
@@ -196,6 +196,38 @@ typedef struct minipsd_block {
     minipsd_bytes data;   /*!< The block's bytes.                   */
 } minipsd_block;
 
+/** \brief What a layer record is: a layer, or one end of a group (the type of its 'lsct' block). */
+enum {
+    MINIPSD_KIND_LAYER        = 0, /*!< A layer with pixels, or an empty one.                     */
+    MINIPSD_KIND_GROUP        = 1, /*!< A group, shown open in the layers panel: its top record.  */
+    MINIPSD_KIND_GROUP_CLOSED = 2, /*!< A group, shown closed: its top record.                    */
+    MINIPSD_KIND_GROUP_END    = 3  /*!< Where a group starts, below its layers: the divider.      */
+};
+
+/**
+ * \brief A layer mask: one 8-bit channel over its own rectangle, 255 shows the layer, 0 hides it.
+ *
+ * Pointers are borrowed, like the layer's.  Fields are only ever added at the end.
+ */
+typedef struct minipsd_mask {
+    int32_t        top, left, bottom, right; /*!< The mask's rectangle on the canvas; may differ from
+                                                  the layer's, and may have no area.                */
+    uint8_t        color;                    /*!< Its value outside the rectangle: 0 or 255.        */
+    uint8_t        flags;                    /*!< As stored: 0x01 position relative to the layer,
+                                                  0x02 disabled, 0x08 made by rendering other data,
+                                                  0x10 parameters follow (in rest).                 */
+    const uint8_t *pixels;                   /*!< (right - left) * (bottom - top) bytes, rows top down;
+                                                  NULL with stored, or for a rectangle without area. */
+    minipsd_bytes  stored;                   /*!< The channel as a file stores it (compression marker,
+                                                  rows), copied instead of encoding pixels; size 0:
+                                                  pixels are encoded.                               */
+    minipsd_bytes  real;                     /*!< The "real" user mask (channel -3) a file stores
+                                                  beside a vector mask, kept as stored; size 0: none. */
+    minipsd_bytes  rest;                     /*!< The mask data after flags, kept from a file:
+                                                  parameters, the real mask's flags and rectangle.
+                                                  Size 0: none.                                     */
+} minipsd_mask;
+
 /**
  * \brief One layer of a document.
  *
@@ -229,6 +261,12 @@ typedef struct minipsd_layer {
                                  instead of encoding rgba: a layer never decoded is never encoded
                                  again.  Each is checked against the rectangle.  rgba may then be
                                  NULL, as long as the document supplies its composite.          */
+    uint8_t        kind;     /*!< MINIPSD_KIND_*: a layer, or a group's top record or divider.
+                                 Groups nest bottom first: a divider, the group's layers, then
+                                 its top record, which carries the group's name, visibility and
+                                 mode (blend; zero: pass through).  Written as an 'lsct' block,
+                                 or a kept one of the same kind as it is.                       */
+    const minipsd_mask *mask; /*!< The layer mask; NULL: none.                                   */
 } minipsd_layer;
 
 /**
@@ -279,8 +317,10 @@ typedef struct minipsd_doc {
  *                          (0, 65536), a size is set without its data (icc, a resource, a name,
  *                          extra, layer_tail), a layer's rectangle is inverted, an empty layer's
  *                          has an area, extra is not a run of well-formed blocks, a stored
- *                          channel does not match its rectangle, or a layer has only stored
- *                          channels while the composite is to be composed.
+ *                          channel does not match its rectangle, a layer has only stored
+ *                          channels while the composite is to be composed, groups do not nest
+ *                          (every group's top record needs its divider below it), or a mask's
+ *                          rectangle is inverted or has an area without pixels.
  * \retval MINIPSD_ERR_SIZE A side of the canvas or of a layer is 0 or above MINIPSD_MAX_SIDE (a
  *                          layer's may be 0), a resource name is longer than 255 bytes, or the
  *                          resources or a layer's extra data do not fit a 32-bit length.
@@ -466,9 +506,18 @@ typedef struct minipsd_layer_view {
     uint64_t      channel_offset[4];        /*!< Where each channel's data starts in the file (0 for an
                                                  absent one): a buffer holds the channel once it reaches
                                                  channel_offset + size.                                */
-    uint16_t      other_channels;           /*!< Channels the reader does not read (masks, ...).       */
+    uint16_t      other_channels;           /*!< Channels the reader does not read (alpha, spot, ...). */
     uint8_t       clipping;                 /*!< Non-zero: clipped to the layer below.                 */
     uint8_t       flags;                    /*!< The record's flag bits as stored (0x02 is hidden).    */
+    uint8_t       kind;                     /*!< MINIPSD_KIND_*, from the record's 'lsct' block; a
+                                                 group's own mode is in that block (blend is the
+                                                 record's).                                           */
+    uint8_t       has_mask;                 /*!< Non-zero: mask holds the layer mask.                  */
+    minipsd_mask  mask;                     /*!< The layer mask: its rectangle, colour and flags, its
+                                                 channel in stored (data NULL with a size when the
+                                                 buffer ends before it), real and rest as views;
+                                                 pixels is NULL: minipsd_decode_mask decodes.          */
+    uint64_t      mask_offset;              /*!< Where the mask's channel starts in the file (0: none). */
 } minipsd_layer_view;
 
 /**
@@ -683,6 +732,24 @@ MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view 
  */
 MINIPSDDEF int minipsd_decode_composite(minipsd_reader *r, const minipsd_target *target, const minipsd_decode_opts *opts);
 
+/**
+ * \brief Decodes a layer's mask, or a band of its rows, into one plane.
+ *
+ * The mask is decoded as stored: its rectangle's width by the rows asked for, one byte per pixel,
+ * 255 where the layer shows; its colour outside the rectangle and its flags are in the view.  As in
+ * minipsd_decode_layer, every check comes before the first sample is written, and opts.keep_matte
+ * does not apply.
+ *
+ * \param r     The reader the layer came from.
+ * \param layer A record from minipsd_reader_next_layer of that reader, with has_mask set.
+ * \param plane Where the samples go.
+ * \param opts  The rows; NULL for all of them.
+ * \return MINIPSD_OK or an error code, as minipsd_decode_layer; MINIPSD_ERR_ARG also when the
+ *         layer has no mask, plane is NULL, or its data is NULL while there are samples to write.
+ */
+MINIPSDDEF int minipsd_decode_mask(minipsd_reader *r, const minipsd_layer_view *layer, const minipsd_plane *plane,
+                                   const minipsd_decode_opts *opts);
+
 /* --- Document from a file ------------------------------------------------------------------ */
 
 /**
@@ -693,11 +760,9 @@ MINIPSDDEF int minipsd_decode_composite(minipsd_reader *r, const minipsd_target 
  * description of it) at the project's address.
  */
 enum {
-    MINIPSD_LOST_MASK            = 1, /*!< Layer masks: mask data and mask channels.  Vector masks
-                                           are blocks, kept.                                         */
     MINIPSD_LOST_BLENDING_RANGES = 2, /*!< A layer's blending ranges ("Blend If") not left alone.  */
-    MINIPSD_LOST_CHANNELS        = 4  /*!< Channels beyond R, G, B, transparency and masks: alpha
-                                           and spot channels, of a layer or of the composite.     */
+    MINIPSD_LOST_CHANNELS        = 4  /*!< Channels beyond R, G, B, transparency and the masks':
+                                           alpha and spot channels, of a layer or of the composite. */
 };
 
 /**

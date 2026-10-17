@@ -111,6 +111,7 @@ The declarations, with every parameter and return code, are in
 | `minipsd_target_rgba(&target, rgba, row_stride)` | a target for interleaved RGBA, the common case |
 | `minipsd_decode_layer(r, layer, target, opts)` | a layer's pixels, or a band of its rows, as stored (opacity and visibility not applied), into the caller's planes; 8-bit RGB, raw or PackBits |
 | `minipsd_decode_composite(r, target, opts)` | the composite (merged) image, or a band of its rows, un-matted to straight alpha unless `keep_matte` |
+| `minipsd_decode_mask(r, layer, plane, opts)` | a layer's mask, or a band of its rows, into one plane |
 | `minipsd_read_size(data, size, limits, opts, &block_size)` | the block `minipsd_read_into` needs for a whole file |
 | `minipsd_read_into(data, size, limits, opts, block, block_size, &doc, &lost)` | a whole file into a document in the caller's block, everything copied, so the file may go; `lost` says what it could not carry; `opts->stored` keeps each layer's channels as stored instead of decoding them |
 | `minipsd_read(data, size, limits, opts, &doc, &lost)`, `minipsd_doc_free(doc)` | the same in one `MINIPSD_MALLOC` block, and its free; absent under `MINIPSD_NO_MALLOC` |
@@ -214,7 +215,15 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
   - after the writer's own `luni`, the blocks kept from a file (`extra`), as they are, except a
     kept `luni`: the name wins;
   - channel data encoded from `rgba`, or copied as it is from `stored` (any compression the
-    file had, ZIP included), so a layer that was not changed is not encoded again.
+    file had, ZIP included), so a layer that was not changed is not encoded again;
+  - groups (`kind`), bottom first: a divider (`lsct` type 3), the group's layers, then the
+    group's top record (type 1 open, 2 closed) with its name, visibility and mode in its `lsct`
+    block (`blend`, Pass Through by default; the record keeps `norm`). A kept `lsct` of the same
+    kind is written instead, as it is. Groups must nest;
+  - a layer mask (`mask`): its rectangle, colour outside it and flags in the mask data, then
+    what was kept after them (parameters, the real mask's rectangle) or two bytes of padding; its
+    channel (id -2) encoded from `pixels` or copied from `stored`, and a kept real mask (id -3)
+    as it is.
 - **Composite image:**
   - the caller's `composite` when set (the full canvas, straight alpha), whatever the layers
     hold: flattening layers is rendering, the caller's domain;
@@ -271,10 +280,13 @@ them; nothing is copied or allocated. Results on real files from other programs:
   - the name: the `luni` block when there is one, otherwise the legacy name read as Latin-1;
     an unpaired surrogate becomes U+FFFD and a U+0000 ends the name;
   - the channels red, green, blue and transparency as views of their stored data; any other
-    channel (masks, ...) is counted, not read;
+    channel (alpha, spot, a mask channel without mask data) is counted, not read;
+  - what the record is (`kind`, from its `lsct` block): a layer, a group's top record, a divider;
+  - its mask: rectangle, colour, flags, the rest of the mask data, the mask channel and the real
+    mask channel as views; `minipsd_decode_mask` decodes the mask's pixels;
   - every additional-information block as a raw view (key and bytes), the known ones included.
 - **Pixels come as stored:** a layer's opacity, visibility, blend mode and mask are not applied;
-  they are in its view. Groups are blocks (`lsct`) like any other.
+  they are in its view, and so is the group structure.
 - **The composite:** un-matted to straight alpha (see [API](#api)), or as stored with
   `keep_matte`; a file whose layer count is positive has no transparency in it, and its composite
   decodes as opaque.
@@ -282,8 +294,8 @@ them; nothing is copied or allocated. Results on real files from other programs:
   blocks that follow the layer info, as one raw view (`minipsd_info.layer_tail`).
 - **Not read:** the colour mode data (palettes).
 - **As a document** (`minipsd_read`): 8-bit RGB files; each layer's rectangle, name, opacity,
-  visibility, blend key, clipping, flags, decoded pixels (or, with `opts->stored`, its channels
-  as stored) and blocks, the composite as stored
+  visibility, blend key, clipping, flags, kind, mask, decoded pixels (or, with `opts->stored`,
+  its channels as stored) and blocks, the composite as stored
   (`composite_matted`), the dpi (72 when none is stored), the ICC profile, every resource and the
   layer tail, all copied into one block. A file without layers gets one,
   "Background", holding its image. Anything else is reported in `lost` (`MINIPSD_LOST_*`), never
@@ -299,8 +311,8 @@ them; nothing is copied or allocated. Results on real files from other programs:
 A layer's blend mode is a four-character key in its record. minipsd writes `minipsd_layer.blend`
 as given and reads it into `minipsd_layer_view.blend`; it does not blend with it: the composite
 it composes draws every mode as Normal (supply the composite for the real result). Photoshop's
-keys, in its menu order; the tests write each but `pass` (groups only) and read it back with
-`psd-tools`:
+keys, in its menu order; the tests write each and read it back with `psd-tools` (`pass` on a
+group, where it belongs):
 
 | Group | Mode | Key |
 |---|---|---|
