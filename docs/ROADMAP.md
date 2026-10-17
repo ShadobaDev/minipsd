@@ -250,44 +250,12 @@ feature; a supplied composite needs nothing. See
 [Features through the modules](CODE-ARCH.md#features-through-the-modules).
 
 - [x] **S6.1** Layers smaller than the canvas: moved to S5.2, which the round trip needs first.
-- [ ] **S6.2** Blend modes. Each mode is a four-character key in the layer record: the reader
-      already returns it in `minipsd_layer_view.blend`, and the writer writes it from S5.5. What
-      is left: every key written, read back by `psd-tools` and shown right by one real
-      application, checked by hand; the composed composite draws them all as `norm`.
-      Photoshop's full set, in its menu order:
-
-      | Group | Mode | Key |
-      |---|---|---|
-      | Normal | Normal | `norm` (done) |
-      | | Dissolve | `diss` |
-      | Darken | Darken | `dark` |
-      | | Multiply | `mul ` |
-      | | Color Burn | `idiv` |
-      | | Linear Burn | `lbrn` |
-      | | Darker Color | `dkCl` |
-      | Lighten | Lighten | `lite` |
-      | | Screen | `scrn` |
-      | | Color Dodge | `div ` |
-      | | Linear Dodge (Add) | `lddg` |
-      | | Lighter Color | `lgCl` |
-      | Contrast | Overlay | `over` |
-      | | Soft Light | `sLit` |
-      | | Hard Light | `hLit` |
-      | | Vivid Light | `vLit` |
-      | | Linear Light | `lLit` |
-      | | Pin Light | `pLit` |
-      | | Hard Mix | `hMix` |
-      | Inversion | Difference | `diff` |
-      | | Exclusion | `smud` |
-      | Cancellation | Subtract | `fsub` |
-      | | Divide | `fdiv` |
-      | Component | Hue | `hue ` |
-      | | Saturation | `sat ` |
-      | | Color | `colr` |
-      | | Luminosity | `lum ` |
-      | Groups only | Pass Through | `pass` (S6.3) |
-
-      Procreate already writes `sLit` and `colr` (seen in a real file in S4.7).
+- [x] **S6.2** Blend modes. Each mode is a four-character key in the layer record: the reader
+      returns it in `minipsd_layer_view.blend`, the writer writes `minipsd_layer.blend` as given
+      (S5.5); the composed composite draws them all as `norm`. Photoshop's keys are in the
+      spec's [Blend modes](SPECIFICATION.md#blend-modes); `pass` waits for groups (S6.3).
+      *Done when:* a document with a layer in every mode reads back with every key from
+      `psd-tools` (`roundtrip.py`, "blend-modes"); GIMP shows each mode, checked by hand once.
 - [ ] **S6.3** Layer groups (`lsct`).
 - [ ] **S6.4** Layer masks.
 - [ ] **S6.5** 16-bit channels.

@@ -47,7 +47,8 @@ class Doc(ctypes.Structure):
 # --- the documents --------------------------------------------------------------------------------
 
 # A layer is (name, pixels, opacity, hidden), or with a fifth item (top, left) for a rectangle the size
-# of its pixels at that offset; without it the layer covers the full canvas.
+# of its pixels at that offset; without it the layer covers the full canvas.  A sixth item is the
+# blend mode's key; without it, "norm".
 
 def image(w, h, pixel):
     """Straight-alpha RGBA rows, top down, from pixel(x, y) -> (r, g, b, a)."""
@@ -84,6 +85,34 @@ def rects(w, h):
             ("Empty", None, 255, False)]
 
 
+# Photoshop's blend modes, in its menu order: (name, key).  Pass Through is for groups only.
+BLEND_MODES = [
+    ("Normal", b"norm"), ("Dissolve", b"diss"),
+    ("Darken", b"dark"), ("Multiply", b"mul "), ("Color Burn", b"idiv"), ("Linear Burn", b"lbrn"),
+    ("Darker Color", b"dkCl"),
+    ("Lighten", b"lite"), ("Screen", b"scrn"), ("Color Dodge", b"div "), ("Linear Dodge (Add)", b"lddg"),
+    ("Lighter Color", b"lgCl"),
+    ("Overlay", b"over"), ("Soft Light", b"sLit"), ("Hard Light", b"hLit"), ("Vivid Light", b"vLit"),
+    ("Linear Light", b"lLit"), ("Pin Light", b"pLit"), ("Hard Mix", b"hMix"),
+    ("Difference", b"diff"), ("Exclusion", b"smud"), ("Subtract", b"fsub"), ("Divide", b"fdiv"),
+    ("Hue", b"hue "), ("Saturation", b"sat "), ("Color", b"colr"), ("Luminosity", b"lum "),
+]
+
+
+def blend_modes(cell):
+    # A gradient below; above it one square per mode, each in a cell of its own, nine to a row,
+    # named after its mode: a viewer shows every mode side by side.
+    w, h = 9 * cell, 3 * cell
+    base = image(w, h, lambda x, y: (x * 255 // (w - 1), 128, y * 255 // (h - 1), 255))
+    side = cell - cell // 4
+    square = image(side, side, lambda x, y: (230, 60 + x * 150 // side, 40, 160 + y * 95 // side))
+    layers = [("Base", base, 255, False)]
+    for i, (name, key) in enumerate(BLEND_MODES):
+        at = (i // 9 * cell + cell // 8, i % 9 * cell + cell // 8)
+        layers.append((name, square, 255, False, at, key))
+    return layers
+
+
 DOCUMENTS = [
     # name,          width, height, dpi,   compression, layers
     ("template",     40,    30,     300.0, MINIPSD_RLE, template(40, 30)),
@@ -91,6 +120,7 @@ DOCUMENTS = [
     ("stack-raw",    33,    9,      150.0, MINIPSD_RAW, stack(33, 9)),
     ("rects-rle",    24,    16,     72.0,  MINIPSD_RLE, rects(24, 16)),
     ("rects-raw",    24,    16,     72.0,  MINIPSD_RAW, rects(24, 16)),
+    ("blend-modes",  9 * 32, 3 * 32, 72.0, MINIPSD_RLE, blend_modes(32)),
 ]
 
 
@@ -137,7 +167,8 @@ def write(lib, path, w, h, dpi, compression, layers):
             keep.append(buffer)
             rgba = ctypes.cast(buffer, ctypes.c_void_p)
         top, left, bottom, right = rect(layer, w, h) if len(layer) > 4 else (0, 0, 0, 0)
-        records[i] = Layer(name.encode("utf-8"), rgba, opacity, int(hidden), top, left, bottom, right)
+        records[i] = Layer(name.encode("utf-8"), rgba, opacity, int(hidden), top, left, bottom, right,
+                           layer[5] if len(layer) > 5 else b"\0\0\0\0")
     doc = Doc(w, h, dpi, records, len(layers), None, 0, compression)
     out = bytearray()
 
@@ -173,6 +204,7 @@ def check(name, psd, w, h, dpi, layers):
         expect("layer name", got.name, lname)
         expect(f"'{lname}' opacity", got.opacity, opacity)
         expect(f"'{lname}' visible", got.visible, not hidden)
+        expect(f"'{lname}' blend mode", got.blend_mode.value, layer[5] if len(layer) > 5 else b"norm")
         if pixels is None:
             expect(f"'{lname}' bbox", tuple(got.bbox), (0, 0, 0, 0))
             continue

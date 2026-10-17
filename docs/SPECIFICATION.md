@@ -209,7 +209,8 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
     `luni` block in UTF-16 with surrogate pairs;
   - opacity;
   - visibility: flag bit `0x02` set means hidden; the other flag bits as given (`flags`);
-  - the blend key as given, `norm` by default, and clipping as given;
+  - the blend key as given, `norm` by default (the keys: [Blend modes](#blend-modes)), and
+    clipping as given;
   - after the writer's own `luni`, the blocks kept from a file (`extra`), as they are, except a
     kept `luni`: the name wins;
   - channel data encoded from `rgba`, or copied as it is from `stored` (any compression the
@@ -292,6 +293,47 @@ them; nothing is copied or allocated. Results on real files from other programs:
 - **Limits:** every length is checked against the buffer and the section it lies in; the
   caller's `minipsd_limits` add the canvas's and the layers' side, the layer count and the bytes
   one decode call writes, all checked before anything is decoded.
+
+## Blend modes
+
+A layer's blend mode is a four-character key in its record. minipsd writes `minipsd_layer.blend`
+as given and reads it into `minipsd_layer_view.blend`; it does not blend with it: the composite
+it composes draws every mode as Normal (supply the composite for the real result). Photoshop's
+keys, in its menu order; the tests write each but `pass` (groups only) and read it back with
+`psd-tools`:
+
+| Group | Mode | Key |
+|---|---|---|
+| Normal | Normal | `norm` |
+| | Dissolve | `diss` |
+| Darken | Darken | `dark` |
+| | Multiply | `mul ` |
+| | Color Burn | `idiv` |
+| | Linear Burn | `lbrn` |
+| | Darker Color | `dkCl` |
+| Lighten | Lighten | `lite` |
+| | Screen | `scrn` |
+| | Color Dodge | `div ` |
+| | Linear Dodge (Add) | `lddg` |
+| | Lighter Color | `lgCl` |
+| Contrast | Overlay | `over` |
+| | Soft Light | `sLit` |
+| | Hard Light | `hLit` |
+| | Vivid Light | `vLit` |
+| | Linear Light | `lLit` |
+| | Pin Light | `pLit` |
+| | Hard Mix | `hMix` |
+| Inversion | Difference | `diff` |
+| | Exclusion | `smud` |
+| Cancellation | Subtract | `fsub` |
+| | Divide | `fdiv` |
+| Component | Hue | `hue ` |
+| | Saturation | `sat ` |
+| | Color | `colr` |
+| | Luminosity | `lum ` |
+| Groups only | Pass Through | `pass` |
+
+A key outside this list is written as given too; what a reader makes of it is its own choice.
 
 ## Working with libvips
 
