@@ -81,6 +81,37 @@ TEST(MinipsdWriterTest, EmptyLayerHasNoPixelsAndLeavesTheComposite)
     EXPECT_EQ(p.composite, matted(px));
 }
 
+TEST(MinipsdWriterTest, ALayerIsWrittenAtItsRectangle)
+{
+    // Smaller than the canvas, reaching past its edge, wholly outside it, and an empty layer whose
+    // rectangle has no area: each record keeps its rectangle, and its channels its own pixels.
+    const Bytes small = testImage(3, 2), edge = testImage(4, 5), outside = testImage(2, 2);
+    const minipsd_layer layers[4] = {
+        {.name = "Small", .rgba = small.data(), .opacity = 255, .top = 1, .left = 2, .bottom = 3, .right = 5},
+        {.name = "Edge", .rgba = edge.data(), .opacity = 255, .top = -2, .left = 6, .bottom = 3, .right = 10},
+        {.name = "Outside", .rgba = outside.data(), .opacity = 255, .top = 9, .left = -5, .bottom = 11, .right = -3},
+        {.name = "Empty", .rgba = nullptr, .opacity = 255, .top = 4, .left = 4, .bottom = 4, .right = 7}};
+    for (int compression : {MINIPSD_RLE, MINIPSD_RAW}) {
+        minipsd_doc d = docOf(8, 4, layers, 4);
+        d.compression = compression;
+        const Psd p = read(write(d));
+        ASSERT_EQ(p.layers.size(), 4u);
+        for (std::size_t i = 0; i < 4; ++i) {
+            const minipsd_layer &l = layers[i];
+            SCOPED_TRACE(l.name);
+            EXPECT_EQ(p.layers[i].top, l.top);
+            EXPECT_EQ(p.layers[i].left, l.left);
+            EXPECT_EQ(p.layers[i].bottom, l.bottom);
+            EXPECT_EQ(p.layers[i].right, l.right);
+        }
+        EXPECT_EQ(p.layers[0].rgba, small);
+        EXPECT_EQ(p.layers[1].rgba, edge);
+        EXPECT_EQ(p.layers[2].rgba, outside);
+        EXPECT_TRUE(p.layers[3].rgba.empty());
+        EXPECT_EQ(p.composite.size(), 8u * 4 * 4) << "the composite stays the canvas";
+    }
+}
+
 // How the composite is computed is tested in test_composite.cpp; here, what the records keep.
 TEST(MinipsdWriterTest, RecordsKeepOpacityVisibilityAndPixelsAsGiven)
 {
@@ -188,11 +219,12 @@ TEST(MinipsdWriterTest, PullTotalIsTheFileSize)
 {
     const Bytes px = testImage(37, 5);
     const Bytes icc = {1, 2, 3, 4, 5};
-    const minipsd_layer layers[3] = {{"Template", px.data(), 255, 0}, {"Layer", nullptr, 255, 0},
-                                     {"Half \xC5\xBC", px.data(), 128, 1}};
+    const minipsd_layer layers[4] = {{"Template", px.data(), 255, 0}, {"Layer", nullptr, 255, 0},
+                                     {"Half \xC5\xBC", px.data(), 128, 1},
+                                     {.name = "Offset", .rgba = px.data(), .opacity = 255, .top = -2, .left = 20, .bottom = 3, .right = 57}};
     for (int compression : {MINIPSD_RLE, MINIPSD_RAW})
         for (bool withIcc : {false, true}) {
-            minipsd_doc d = docOf(37, 5, layers, 3);
+            minipsd_doc d = docOf(37, 5, layers, 4);
             d.compression = compression;
             if (withIcc) { d.icc = icc.data(); d.icc_size = icc.size(); }
             const std::uint64_t written = write(d).size();
@@ -207,9 +239,10 @@ TEST(MinipsdWriterTest, PullWriterFeedsANonBlockingTarget)
     // A target that takes 0 to 5 bytes per round, like a non-blocking socket: the caller keeps what
     // it did not take and pulls more only once that is gone.
     const Bytes px = testImage(37, 5);
-    const minipsd_layer layers[2] = {{"Template", px.data(), 255, 0}, {"Layer", nullptr, 255, 0}};
+    const minipsd_layer layers[3] = {{"Template", px.data(), 255, 0}, {"Layer", nullptr, 255, 0},
+                                     {.name = "Offset", .rgba = px.data(), .opacity = 255, .top = 4, .left = -30, .bottom = 9, .right = 7}};
     for (int compression : {MINIPSD_RLE, MINIPSD_RAW}) {
-        minipsd_doc d = docOf(37, 5, layers, 2);
+        minipsd_doc d = docOf(37, 5, layers, 3);
         d.compression = compression;
         std::size_t size = 0;
         ASSERT_EQ(minipsd_writer_workspace_size(&d, &size), MINIPSD_OK);

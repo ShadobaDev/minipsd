@@ -48,6 +48,9 @@ if(MSVC)
     set(MINIPSD_WARNINGS /W4 /WX /permissive-)
 else()
     set(MINIPSD_WARNINGS -Wall -Wextra -Wpedantic -Werror)
+    # Structs grow at the end and zero keeps the old behaviour, so the tests' positional
+    # initialisers, written before the newer fields, are old callers' code and must keep compiling.
+    list(APPEND MINIPSD_WARNINGS -Wno-missing-field-initializers)
     # C, which here is the library itself, is held to more.  Not C++: the header must stay valid
     # C, whose casts -Wold-style-cast and -Wuseless-cast reject.  gcc only: -Wcast-align, because
     # clang's ignores the platform and flags the workspace layout, which aligns its own pointers;

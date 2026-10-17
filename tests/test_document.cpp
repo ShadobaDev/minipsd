@@ -21,6 +21,14 @@ TEST(MinipsdDocumentTest, AcceptsAPlainDocument)
     const minipsd_layer layer{"L", px.data(), 255, 0};
     const minipsd_doc d = docOf(2, 2, &layer, 1);
     EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_OK);
+
+    // A rectangle may lie anywhere, on the canvas or off it; an empty layer's has no area.
+    const minipsd_layer anywhere[3] = {
+        {.name = "Off", .rgba = px.data(), .opacity = 255, .top = -2147483647 - 1, .left = 9, .bottom = -2147483647 + 1, .right = 11},
+        {.name = "Edge", .rgba = px.data(), .opacity = 255, .top = 1, .left = 1, .bottom = 3, .right = 3},
+        {.name = "Empty", .rgba = nullptr, .opacity = 255, .top = 5, .left = 5, .bottom = 5, .right = 9}};
+    const minipsd_doc r = docOf(2, 2, anywhere, 3);
+    EXPECT_EQ(minipsd_doc_check(&r), MINIPSD_OK);
 }
 
 TEST(MinipsdDocumentTest, RejectsBadDocuments)
@@ -47,6 +55,19 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
                                {MINIPSD_MAX_SIDE + 1, 2}, {2, MINIPSD_MAX_SIDE + 1}}) {
         d = docOf(w, h, &layer, 1);
         EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_SIZE) << w << " x " << h;
+    }
+
+    // Rectangles: inverted, an area without pixels, a side PSD's 16-bit row counts cannot hold.
+    struct Case { std::int32_t top, left, bottom, right; const std::uint8_t *rgba; int rc; };
+    for (const Case &c : {Case{2, 0, 1, 2, px.data(), MINIPSD_ERR_ARG}, Case{0, 2, 2, 1, px.data(), MINIPSD_ERR_ARG},
+                          Case{0, 0, 2, 2, nullptr, MINIPSD_ERR_ARG},
+                          Case{0, 0, 1, MINIPSD_MAX_SIDE + 1, px.data(), MINIPSD_ERR_SIZE},
+                          Case{-MINIPSD_MAX_SIDE, 0, 1, 1, px.data(), MINIPSD_ERR_SIZE},
+                          Case{-2147483647 - 1, 0, 2147483647, 1, px.data(), MINIPSD_ERR_SIZE}}) {
+        const minipsd_layer bad{.name = "R", .rgba = c.rgba, .opacity = 255,
+                                .top = c.top, .left = c.left, .bottom = c.bottom, .right = c.right};
+        d = docOf(2, 2, &bad, 1);
+        EXPECT_EQ(minipsd_doc_check(&d), c.rc) << c.top << ", " << c.left << ", " << c.bottom << ", " << c.right;
     }
 
     // The resources' length is 32-bit; the ICC size alone decides it, so no ICC byte is read and a

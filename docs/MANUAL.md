@@ -46,8 +46,9 @@ static int to_file(void *file, const void *data, size_t size)
 int main(void)
 {
     static uint8_t rgba[64 * 64 * 4];   /* straight alpha, rows top down */
-    minipsd_layer  layer = {"Hello", rgba, 255, 0};   /* name, pixels, opacity, hidden */
-    minipsd_doc    doc   = {64, 64, 72.0, &layer, 1, NULL, 0, MINIPSD_RLE};
+    /* Fields left out are zero, the defaults: visible, the full canvas, RLE. */
+    minipsd_layer  layer = {.name = "Hello", .rgba = rgba, .opacity = 255};
+    minipsd_doc    doc   = {.width = 64, .height = 64, .dpi = 72.0, .layers = &layer, .layer_count = 1};
     FILE          *f;
     int            i, rc;
 
@@ -175,10 +176,20 @@ The examples below write this document:
 
 ```c
 minipsd_layer layers[2] = {
-    { "Template", rgba, 255, 0 },   /* name, pixels (width * height * 4, straight alpha), opacity, hidden */
-    { "Layer",    NULL, 255, 0 },   /* an empty layer above it */
+    { .name = "Template", .rgba = rgba, .opacity = 255 },   /* width * height * 4, straight alpha */
+    { .name = "Layer", .opacity = 255 },                    /* an empty layer above it */
 };
-minipsd_doc doc = { width, height, 300.0, layers, 2, NULL, 0, MINIPSD_RLE };
+minipsd_doc doc = { .width = width, .height = height, .dpi = 300.0, .layers = layers, .layer_count = 2 };
+```
+
+Name the fields. The structs only grow at the end, and every field left out is zero, which is
+the default: visible, RLE, and a layer that covers the full canvas. A layer of another size sets
+its rectangle on the canvas, which may reach past the edges; `rgba` then holds that rectangle:
+
+```c
+/* 64 x 32 pixels, its top-left corner at x 20, y 10 */
+minipsd_layer logo = { .name = "Logo", .rgba = logo_rgba, .opacity = 255,
+                       .top = 10, .left = 20, .bottom = 42, .right = 84 };
 ```
 
 The document, its pixels and the workspace must stay valid, and unchanged, until the last byte

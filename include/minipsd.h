@@ -22,10 +22,10 @@
  *
  * \code
  *     minipsd_layer layers[2] = {
- *         { "Template", rgba, 255, 0 },     // bottom
- *         { "Layer",    NULL, 255, 0 },     // empty, above it
+ *         { .name = "Template", .rgba = rgba, .opacity = 255 },   // bottom, the full canvas
+ *         { .name = "Layer", .opacity = 255 },                    // empty, above it
  *     };
- *     minipsd_doc doc = { width, height, 300.0, layers, 2, NULL, 0, MINIPSD_RLE };
+ *     minipsd_doc doc = { .width = width, .height = height, .dpi = 300.0, .layers = layers, .layer_count = 2 };
  *     int rc = minipsd_write(&doc, file_out, f);   // file_out: fwrite to f, see minipsd_write_fn
  *     if (rc != MINIPSD_OK) puts(minipsd_error_string(rc));
  * \endcode
@@ -44,9 +44,11 @@
  *
  * \par What it writes
  * An 8-bit RGB document (PSD version 1) with a transparency channel:
- * - one or more layers, bottom first, each the full canvas or empty, with a name, opacity and
- *   visibility; names go out both as a legacy Pascal string (ASCII) and as Unicode ('luni');
- * - the composite (merged) image, the layers blended with straight-alpha "over", which is what a
+ * - one or more layers, bottom first, each a rectangle anywhere on or off the canvas (by default
+ *   the full canvas) or empty, with a name, opacity and visibility; names go out both as a legacy
+ *   Pascal string (ASCII) and as Unicode ('luni');
+ * - the composite (merged) image, the layers blended with straight-alpha "over" at their
+ *   rectangles and clipped to the canvas, which is what a
  *   reader that ignores layers shows; its transparency rides as the first extra channel, flagged by
  *   a negative layer count, and its colour is matted against white (c * a + 255 * (1 - a)), as
  *   Photoshop stores it and readers expect to undo;
@@ -170,10 +172,14 @@ enum {
  */
 typedef struct minipsd_layer {
     const char    *name;    /*!< UTF-8; NULL means "".                                            */
-    const uint8_t *rgba;    /*!< width * height * 4 bytes, rows top down, straight (not premultiplied)
-                                 alpha; NULL means an empty layer.                                */
+    const uint8_t *rgba;    /*!< (right - left) * (bottom - top) * 4 bytes, rows top down, straight
+                                 (not premultiplied) alpha; NULL means an empty layer.             */
     uint8_t        opacity; /*!< 255 is opaque, 0 is fully transparent.                            */
     uint8_t        hidden;  /*!< Non-zero: the layer starts hidden (and stays out of the composite). */
+    int32_t        top, left, bottom, right; /*!< The layer's rectangle on the canvas, as in
+                                 minipsd_layer_view; all four zero: the full canvas.  It may reach
+                                 past the canvas, or lie wholly outside it.  An empty layer's has
+                                 no area.                                                       */
 } minipsd_layer;
 
 /**
@@ -203,9 +209,11 @@ typedef struct minipsd_doc {
  * \return MINIPSD_OK or an error code.
  *
  * \retval MINIPSD_ERR_ARG  doc is NULL, there are no layers (or more than 32767), dpi is outside
- *                          (0, 65536), or icc_size is set without icc.
- * \retval MINIPSD_ERR_SIZE A side is 0 or above MINIPSD_MAX_SIDE, or the ICC profile does not fit
- *                          a 32-bit section length.
+ *                          (0, 65536), icc_size is set without icc, a layer's rectangle is
+ *                          inverted, or an empty layer's has an area.
+ * \retval MINIPSD_ERR_SIZE A side of the canvas or of a layer is 0 or above MINIPSD_MAX_SIDE (a
+ *                          layer's may be 0), or the ICC profile does not fit a 32-bit section
+ *                          length.
  */
 MINIPSDDEF int minipsd_doc_check(const minipsd_doc *doc);
 
@@ -235,10 +243,10 @@ typedef int (*minipsd_write_fn)(void *user, const void *data, size_t size);
  * \return MINIPSD_OK or an error code.
  *
  * \retval MINIPSD_OK        The whole file went to fn.
- * \retval MINIPSD_ERR_ARG   doc or fn is NULL, there are no layers, dpi is outside (0, 65536), or
- *                           icc_size is set without icc.  Nothing was written.
- * \retval MINIPSD_ERR_SIZE  A side is 0 or above MINIPSD_MAX_SIDE, or the layers or the ICC
- *                           profile do not fit a 32-bit section length.  Nothing was written.
+ * \retval MINIPSD_ERR_ARG   doc or fn is NULL, or the document fails minipsd_doc_check with it.
+ *                           Nothing was written.
+ * \retval MINIPSD_ERR_SIZE  As minipsd_doc_check, or the layers do not fit a 32-bit section
+ *                           length.  Nothing was written.
  * \retval MINIPSD_ERR_ALLOC An allocation failed.  Nothing was written.
  * \retval MINIPSD_ERR_WRITE fn returned 0; the output is incomplete.
  */

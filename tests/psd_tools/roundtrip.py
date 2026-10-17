@@ -22,7 +22,9 @@ WRITE_FN = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctyp
 
 class Layer(ctypes.Structure):
     _fields_ = [("name", ctypes.c_char_p), ("rgba", ctypes.c_void_p),
-                ("opacity", ctypes.c_uint8), ("hidden", ctypes.c_uint8)]
+                ("opacity", ctypes.c_uint8), ("hidden", ctypes.c_uint8),
+                ("top", ctypes.c_int32), ("left", ctypes.c_int32),
+                ("bottom", ctypes.c_int32), ("right", ctypes.c_int32)]
 
 
 class Doc(ctypes.Structure):
@@ -32,6 +34,9 @@ class Doc(ctypes.Structure):
 
 
 # --- the documents --------------------------------------------------------------------------------
+
+# A layer is (name, pixels, opacity, hidden), or with a fifth item (top, left) for a rectangle the size
+# of its pixels at that offset; without it the layer covers the full canvas.
 
 def image(w, h, pixel):
     """Straight-alpha RGBA rows, top down, from pixel(x, y) -> (r, g, b, a)."""
@@ -55,24 +60,50 @@ def stack(w, h):
             ("Hidden", top, 255, True)]
 
 
+def rects(w, h):
+    # Rectangles: smaller than the canvas, reaching past its edge, wholly outside it, and empty.
+    full = image(w, h, lambda x, y: (40, 40, 40, 255))
+    small = image(8, 6, lambda x, y: (255, x * 30, y * 40, 255))
+    edge = image(10, 10, lambda x, y: (0, 255, 0, 160))
+    outside = image(5, 5, lambda x, y: (0, 0, 255, 255))
+    return [("Full", full, 255, False),
+            ("Small", small, 255, False, (3, 5)),
+            ("Edge", edge, 200, False, (-4, w - 6)),
+            ("Outside", outside, 255, False, (h + 2, w + 3)),
+            ("Empty", None, 255, False)]
+
+
 DOCUMENTS = [
     # name,          width, height, dpi,   compression, layers
     ("template",     40,    30,     300.0, MINIPSD_RLE, template(40, 30)),
     ("stack-rle",    33,    9,      72.5,  MINIPSD_RLE, stack(33, 9)),
     ("stack-raw",    33,    9,      150.0, MINIPSD_RAW, stack(33, 9)),
+    ("rects-rle",    24,    16,     72.0,  MINIPSD_RLE, rects(24, 16)),
+    ("rects-raw",    24,    16,     72.0,  MINIPSD_RAW, rects(24, 16)),
 ]
+
+
+def rect(layer, w, h):
+    """The layer's (top, left, bottom, right) on the canvas; None for an empty layer."""
+    pixels = layer[1]
+    if pixels is None:
+        return None
+    top, left = layer[4] if len(layer) > 4 else (0, 0)
+    return top, left, top + len(pixels), left + len(pixels[0])
 
 
 # --- the expectation: straight-alpha "over", computed independently -----------------------------
 
 def composite(w, h, layers):
     out = [[(0.0, 0.0, 0.0, 0.0)] * w for _ in range(h)]
-    for _, pixels, opacity, hidden in layers:
+    for layer in layers:
+        _, pixels, opacity, hidden = layer[:4]
         if pixels is None or hidden or opacity == 0:
             continue
-        for y in range(h):
-            for x in range(w):
-                r, g, b, a = pixels[y][x]
+        top, left, bottom, right = rect(layer, w, h)
+        for y in range(max(top, 0), min(bottom, h)):
+            for x in range(max(left, 0), min(right, w)):
+                r, g, b, a = pixels[y - top][x - left]
                 dr, dg, db, da = out[y][x]
                 sa = a / 255 * opacity / 255
                 oa = sa + da * (1 - sa)
@@ -87,13 +118,15 @@ def composite(w, h, layers):
 def write(lib, path, w, h, dpi, compression, layers):
     keep = []   # the pixel buffers must outlive the call
     records = (Layer * len(layers))()
-    for i, (name, pixels, opacity, hidden) in enumerate(layers):
+    for i, layer in enumerate(layers):
+        name, pixels, opacity, hidden = layer[:4]
         rgba = None
         if pixels is not None:
             buffer = ctypes.create_string_buffer(bytes(c for row in pixels for px in row for c in px))
             keep.append(buffer)
             rgba = ctypes.cast(buffer, ctypes.c_void_p)
-        records[i] = Layer(name.encode("utf-8"), rgba, opacity, int(hidden))
+        top, left, bottom, right = rect(layer, w, h) if len(layer) > 4 else (0, 0, 0, 0)
+        records[i] = Layer(name.encode("utf-8"), rgba, opacity, int(hidden), top, left, bottom, right)
     doc = Doc(w, h, dpi, records, len(layers), None, 0, compression)
     out = bytearray()
 
@@ -124,16 +157,22 @@ def check(name, psd, w, h, dpi, layers):
 
     read = list(psd)   # bottom first, as written
     expect("layer count", len(read), len(layers))
-    for got, (lname, pixels, opacity, hidden) in zip(read, layers):
+    for got, layer in zip(read, layers):
+        lname, pixels, opacity, hidden = layer[:4]
         expect("layer name", got.name, lname)
         expect(f"'{lname}' opacity", got.opacity, opacity)
         expect(f"'{lname}' visible", got.visible, not hidden)
         if pixels is None:
             expect(f"'{lname}' bbox", tuple(got.bbox), (0, 0, 0, 0))
             continue
-        expect(f"'{lname}' bbox", tuple(got.bbox), (0, 0, w, h))
+        top, left, bottom, right = rect(layer, w, h)
+        expect(f"'{lname}' bbox", tuple(got.bbox), (left, top, right, bottom))
         got_px = got.topil().convert("RGBA")
-        bad = [(x, y) for y in range(h) for x in range(w) if got_px.getpixel((x, y)) != tuple(pixels[y][x])]
+        lw, lh = right - left, bottom - top
+        expect(f"'{lname}' image size", got_px.size, (lw, lh))
+        if got_px.size != (lw, lh):
+            continue
+        bad = [(x, y) for y in range(lh) for x in range(lw) if got_px.getpixel((x, y)) != tuple(pixels[y][x])]
         if bad:
             x, y = bad[0]
             errors.append(f"{name}: '{lname}' has {len(bad)} wrong pixels, first at {(x, y)}: "

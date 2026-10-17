@@ -39,17 +39,17 @@ static void mpsd__raw(mpsd__sink *s, const uint8_t *src, size_t n, size_t stride
     }
 }
 
-/* One row of one channel. */
-static void mpsd__row(mpsd__sink *s, const minipsd_doc *d, const uint8_t *row, int channel)
+/* One row of one channel, width pixels. */
+static void mpsd__row(mpsd__sink *s, const minipsd_doc *d, const uint8_t *row, int channel, uint32_t width)
 {
-    if (d->compression == MINIPSD_RAW) mpsd__raw(s, row + channel, d->width, 4);
-    else                               mpsd__packbits(s, row + channel, d->width, 4);
+    if (d->compression == MINIPSD_RAW) mpsd__raw(s, row + channel, width, 4);
+    else                               mpsd__packbits(s, row + channel, width, 4);
 }
 
-static uint64_t mpsd__row_size(const minipsd_doc *d, const uint8_t *row, int channel)
+static uint64_t mpsd__row_size(const minipsd_doc *d, const uint8_t *row, int channel, uint32_t width)
 {
     mpsd__sink c = { NULL, NULL, 0, 0 };
-    mpsd__row(&c, d, row, channel);
+    mpsd__row(&c, d, row, channel, width);
     return c.count;
 }
 
@@ -92,12 +92,13 @@ static void mpsd__layer_extra(mpsd__sink *s, const char *name)
    rows. */
 static uint64_t mpsd__layer_channel_size(const minipsd_doc *d, const minipsd_layer *l, int channel)
 {
+    const mpsd__rect r = mpsd__layer_rect(d, l);
     uint64_t size = 2;
     uint32_t y;
-    if (!l->rgba) return size;
-    if (d->compression == MINIPSD_RAW) return size + (uint64_t)d->width * d->height;
-    for (y = 0; y < d->height; ++y)
-        size += 2 + mpsd__row_size(d, l->rgba + (size_t)y * d->width * 4, channel);
+    if (!r.height) return size;
+    if (d->compression == MINIPSD_RAW) return size + (uint64_t)r.width * r.height;
+    for (y = 0; y < r.height; ++y)
+        size += 2 + mpsd__row_size(d, l->rgba + (size_t)y * r.width * 4, channel, r.width);
     return size;
 }
 
@@ -112,10 +113,10 @@ static uint64_t mpsd__layer_extra_size(const char *name)
    mpsd__layer_channel_size. */
 static void mpsd__layer_record(mpsd__sink *s, const minipsd_doc *d, const minipsd_layer *l, const uint64_t *sizes)
 {
+    const mpsd__rect r = mpsd__layer_rect(d, l);
     int k;
-    mpsd__u32(s, 0); mpsd__u32(s, 0);                             /* top, left       */
-    mpsd__u32(s, l->rgba ? d->height : 0);                        /* bottom          */
-    mpsd__u32(s, l->rgba ? d->width  : 0);                        /* right           */
+    mpsd__u32(s, (uint32_t)r.top);    mpsd__u32(s, (uint32_t)r.left);
+    mpsd__u32(s, (uint32_t)r.bottom); mpsd__u32(s, (uint32_t)r.right);
     mpsd__u16(s, 4);
     for (k = 0; k < 4; ++k) {
         mpsd__u16(s, (unsigned)(uint16_t)(int16_t)mpsd__channel_id[k]);
@@ -138,6 +139,7 @@ static void mpsd__layer_record(mpsd__sink *s, const minipsd_doc *d, const minips
 MINIPSDDEF int minipsd_doc_check(const minipsd_doc *d)
 {
     double res;
+    size_t i;
     if (!d) return MINIPSD_ERR_ARG;
     /* The dpi is stored as 16.16 fixed point: it must round to 1 .. 2^32 - 1.  NaN fails both. */
     res = d->dpi * 65536.0 + 0.5;
@@ -148,6 +150,12 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *d)
         return MINIPSD_ERR_SIZE;
     if ((uint64_t)d->icc_size + 28 + 12 + 1 > MPSD__MAX_SECTION)   /* resources: resolution + ICC, padded */
         return MINIPSD_ERR_SIZE;
+    for (i = 0; i < d->layer_count; ++i) {    /* RLE row counts are 16 bits: a side fits 30000 */
+        const minipsd_layer *l = &d->layers[i];
+        const int64_t w = (int64_t)l->right - l->left, h = (int64_t)l->bottom - l->top;
+        if (w < 0 || h < 0 || (!l->rgba && w && h)) return MINIPSD_ERR_ARG;
+        if (w > MINIPSD_MAX_SIDE || h > MINIPSD_MAX_SIDE) return MINIPSD_ERR_SIZE;
+    }
     return MINIPSD_OK;
 }
 
@@ -304,7 +312,7 @@ MINIPSDDEF int minipsd_writer_init(minipsd_writer **out, const minipsd_doc *d, m
         for (y = 0; y < d->height; ++y) {
             const uint8_t *row = mpsd__composite_row(&comp, y);
             for (k = 0; k < 4; ++k) {
-                const uint64_t n = mpsd__row_size(d, row, k);
+                const uint64_t n = mpsd__row_size(d, row, k, d->width);
                 w->composite_sizes[(size_t)k * d->height + y] = (uint16_t)n;
                 total += 2 + n;
             }
@@ -367,24 +375,26 @@ static void mpsd__writer_piece(minipsd_writer *w, mpsd__sink *s)
 {
     const minipsd_doc   *d = w->doc;
     const minipsd_layer *l = &d->layers[w->layer];   /* always valid: 0 outside the layer section */
-    const uint8_t       *row = l->rgba ? l->rgba + (size_t)w->row * d->width * 4 : NULL;
+    const mpsd__rect     r = mpsd__layer_rect(d, l);
+    const uint8_t       *row = r.height ? l->rgba + (size_t)w->row * r.width * 4 : NULL;
     switch (w->piece) {
     case MPSD__HEAD:            mpsd__head(s, d, w->info); break;
     case MPSD__RECORD:          mpsd__layer_record(s, d, l, w->channel_sizes + w->layer * 4); break;
     case MPSD__COMPRESSION:     mpsd__u16(s, d->compression == MINIPSD_RAW ? 0 : 1); break;
-    case MPSD__COUNT:           mpsd__u16(s, (unsigned)mpsd__row_size(d, row, mpsd__channel_of[w->channel])); break;
-    case MPSD__ROW:             mpsd__row(s, d, row, mpsd__channel_of[w->channel]); break;
+    case MPSD__COUNT:           mpsd__u16(s, (unsigned)mpsd__row_size(d, row, mpsd__channel_of[w->channel], r.width)); break;
+    case MPSD__ROW:             mpsd__row(s, d, row, mpsd__channel_of[w->channel], r.width); break;
     case MPSD__TAIL:            mpsd__tail(s, d, w->content, w->info); break;
     case MPSD__COMPOSITE_COUNT: mpsd__u16(s, w->composite_sizes[(size_t)w->channel * d->height + w->row]); break;
-    default:                    mpsd__row(s, d, mpsd__writer_composite(w, w->row), w->channel); break;
+    default:                    mpsd__row(s, d, mpsd__writer_composite(w, w->row), w->channel, d->width); break;
     }
 }
 
 /* Moves the cursor to the piece after the current one, in file order. */
 static void mpsd__writer_next(minipsd_writer *w)
 {
-    const minipsd_doc *d   = w->doc;
-    const int          rle = d->compression != MINIPSD_RAW;
+    const minipsd_doc *d    = w->doc;
+    const int          rle  = d->compression != MINIPSD_RAW;
+    const uint32_t     rows = mpsd__layer_rect(d, &d->layers[w->layer]).height;   /* the layer's */
     w->offset = 0;
     switch (w->piece) {
     case MPSD__HEAD:
@@ -396,15 +406,15 @@ static void mpsd__writer_next(minipsd_writer *w)
         w->piece = MPSD__COMPRESSION;
         return;
     case MPSD__COMPRESSION:                   /* rows follow, unless the layer is empty */
-        if (d->layers[w->layer].rgba) { w->piece = rle ? MPSD__COUNT : MPSD__ROW; return; }
+        if (rows) { w->piece = rle ? MPSD__COUNT : MPSD__ROW; return; }
         break;
     case MPSD__COUNT:
-        if (++w->row < d->height) return;
+        if (++w->row < rows) return;
         w->row   = 0;
         w->piece = MPSD__ROW;
         return;
     case MPSD__ROW:
-        if (++w->row < d->height) return;
+        if (++w->row < rows) return;
         w->row = 0;
         break;
     case MPSD__TAIL:

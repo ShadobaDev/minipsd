@@ -486,7 +486,7 @@ int            composite_matted;   /* non-zero: composite is already matted, wri
 
 | Field | Zero means | Notes |
 |---|---|---|
-| `int32_t top, left, bottom, right` | all four zero: the full canvas | the fields of `minipsd_layer_view`, in its order. `rgba` holds `(right - left) * (bottom - top) * 4` bytes. A rectangle may reach past the canvas; an inverted one is `MINIPSD_ERR_ARG`. Row tables and channel sizes follow the rectangle; the composed composite blends at the offset and clips to the canvas |
+| `int32_t top, left, bottom, right` | all four zero: the full canvas | the fields of `minipsd_layer_view`, in its order. `rgba` holds `(right - left) * (bottom - top) * 4` bytes. A rectangle may reach past the canvas; an inverted one, or an area without `rgba`, is `MINIPSD_ERR_ARG`; a side above `MINIPSD_MAX_SIDE` is `MINIPSD_ERR_SIZE` (RLE row counts are 16 bits). Row tables and channel sizes follow the rectangle; the composed composite blends at the offset and clips to the canvas |
 | `char blend[4]` | `norm` | written as given |
 | `uint8_t clipping` | not clipped | written as given |
 | `minipsd_bytes extra` | no extra blocks | the layer's additional-information blocks as one blob, in the format of the reader's `extra` view; written after the writer's own blocks |
@@ -595,7 +595,7 @@ feature is serialization: written and read as data. The composite composed as a 
 | **Pull writer + workspace** | `minipsd_doc_check` | `minipsd_writer_*` | — | `bytes` | `minipsd_write` rebuilt on top, same bytes |
 | **`minipsd_write_file` to `examples/`** | — | removed | — | — | the only **breaking** item: 0.2.0 |
 | **Reader, own subset** | — | — | new | `bytes`, `utf`, `packbits`, `composite` (un-matte) | 8-bit RGB, full-canvas or empty layers |
-| **Layers smaller than the canvas** | `top, left, bottom, right` on `minipsd_layer`, as in the view; all zero = full canvas | bounds, row tables | done: the view's rectangle | `composite`: offset blend, clipped to the canvas | |
+| **Layers smaller than the canvas** | done: `top, left, bottom, right` on `minipsd_layer`, as in the view; all zero = full canvas | done: bounds, row tables | done: the view's rectangle | done: `composite`: offset blend, clipped to the canvas | |
 | **Blend modes** | `blend[4]`; zero = `norm` | key in the record | done: the view's key | — | the composed composite draws every mode as `norm` |
 | **Round trip** | `clipping`, `extra`, `stored`; `composite`, `composite_matted`, `resources`, `layer_tail` | kept data written back | `clipping`, `layer_tail`; `minipsd_read` | — | see [Round trip](#round-trip) |
 | **Layer groups (`lsct`)** | `kind`: layer / group open / group close; zero = layer | divider records, `lsct` block | group structure in the view | — | kept today as `lsct` blocks in `extra` |

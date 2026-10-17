@@ -39,6 +39,7 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
     int             rc;
 
     for (i = 0; i < sizeof px; ++i) px[i] = (uint8_t)(i * 17);
+    memset(layers, 0, sizeof layers);   /* the structs grow at the end: zero is every default */
     layers[0].name = "Template"; layers[0].rgba = px;   layers[0].opacity = 255; layers[0].hidden = 0;
     layers[1].name = "Layer";    layers[1].rgba = NULL; layers[1].opacity = 255; layers[1].hidden = 0;
     memset(&doc, 0, sizeof doc);

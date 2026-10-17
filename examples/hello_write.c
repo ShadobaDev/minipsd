@@ -19,8 +19,9 @@ static int to_file(void *file, const void *data, size_t size)
 int main(void)
 {
     static uint8_t rgba[64 * 64 * 4];   /* straight alpha, rows top down */
-    minipsd_layer  layer = {"Hello", rgba, 255, 0};   /* name, pixels, opacity, hidden */
-    minipsd_doc    doc   = {64, 64, 72.0, &layer, 1, NULL, 0, MINIPSD_RLE};
+    /* Fields left out are zero, the defaults: visible, the full canvas, RLE. */
+    minipsd_layer  layer = {.name = "Hello", .rgba = rgba, .opacity = 255};
+    minipsd_doc    doc   = {.width = 64, .height = 64, .dpi = 72.0, .layers = &layer, .layer_count = 1};
     FILE          *f;
     int            i, rc;
 

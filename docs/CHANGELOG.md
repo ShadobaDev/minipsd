@@ -20,6 +20,9 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
 - `examples/hello_write.c` and `examples/hello_read.c`: the shortest programs that write and read
   a PSD, which open a rewritten [MANUAL.md](MANUAL.md): call-order diagrams, a file read in
   parts, memory, return codes and configuration.
+- Layers of any size, anywhere: `top, left, bottom, right` at the end of `minipsd_layer`, as in
+  `minipsd_layer_view`; all zero keeps the full canvas, and the same bytes. The composite blends
+  each layer at its rectangle, clipped to the canvas.
 - Return codes `MINIPSD_ERR_FORMAT`, `MINIPSD_ERR_UNSUPPORTED`, `MINIPSD_ERR_SHORT`,
   `MINIPSD_ERR_LIMIT`, and `minipsd_limits` for untrusted files: the largest side (canvas, and
   layers when set), the most layers, the most bytes one decode call writes.

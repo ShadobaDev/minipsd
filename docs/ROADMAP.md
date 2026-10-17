@@ -204,12 +204,12 @@ whatever cannot be carried is reported.
       gain; `minipsd_read` and its memory (one block, nothing pointing into the file); loss;
       which of two sources wins. The libvips bridge in the spec's
       [Working with libvips](SPECIFICATION.md#working-with-libvips).
-- [ ] **S5.2** Layer rectangles in the writer: a layer of any size, anywhere, also partly or
+- [x] **S5.2** Layer rectangles in the writer: a layer of any size, anywhere, also partly or
       wholly off the canvas; the composed composite blends at the offset and clips to the
       canvas. Moved from S6.1; the reader already returns the rectangle.
       *Done when:* golden test unchanged with every rectangle zero; `psd-tools` reads the
       rectangles and the composite of a test set (smaller, offset, off the canvas, empty);
-      Photoshop or Photopea shows the layers in place, checked by hand once.
+      a real application shows the layers in place, checked by hand once (GIMP).
 - [ ] **S5.3** Composite supplied by the caller (`W7`): `composite` and `composite_matted`; the
       writer mattes a supplied composite unless it is marked matted, and skips composing.
       `NULL` keeps today's composed composite, documented as a best effort.

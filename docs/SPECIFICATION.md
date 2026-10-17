@@ -194,14 +194,18 @@ caller's memory:
 
 - PSD version 1, 8 bits per channel, RGB, 4 channels (R, G, B, transparency).
 - **Layers:**
-  - each covers the full canvas, or is empty (a 0x0 rectangle whose channels hold no data);
+  - each at its rectangle (`top, left, bottom, right`; all zero is the full canvas), which may
+    reach past the canvas or lie wholly outside it; a side of at most 30 000 px, since RLE row
+    counts are 16 bits;
+  - or empty: no pixels, a rectangle without area (by default 0x0), channels that hold no data;
   - name twice: a legacy Pascal string (ASCII, every non-ASCII character replaced by `?`) and a
     `luni` block in UTF-16 with surrogate pairs;
   - opacity;
   - visibility: flag bit `0x02` set means hidden;
   - blend mode `norm` only.
 - **Composite image:**
-  - the visible layers combined with straight-alpha "over";
+  - the visible layers combined with straight-alpha "over", each at its rectangle, clipped to
+    the canvas;
   - transparency is the first extra channel, signalled by writing the layer count as a
     **negative** number, as the format specifies;
   - **colour is matted against white:** `c*a + 255*(1-a)`. Photoshop stores it this way and
@@ -408,7 +412,8 @@ Rules for adding features without breaking existing callers:
 - **Zero means "previous behaviour".** Callers zero-initialise structs; a new field must keep
   the old output when it is 0/NULL.
 - **New struct fields go at the end.** Positional initialisers (C99 without designated
-  initialisers, C++) must keep compiling.
+  initialisers, C++) must keep compiling. gcc and clang flag them under `-Wextra`
+  (`-Wmissing-field-initializers`), so the examples and the manual name the fields.
 - **New error codes and enum values are added, never renumbered.**
 - **The composite is not a renderer.** A feature that changes how layers look (blend modes,
   masks, groups) is written and read as data. The composite the writer composes is a best
