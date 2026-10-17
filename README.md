@@ -80,8 +80,8 @@ Define before the implementation include:
 | Document | Contents |
 |---|---|
 | [docs/INSTALL.md](docs/INSTALL.md) | every way of adding minipsd to a project, SBOM |
-| [docs/MANUAL.md](docs/MANUAL.md) | how to use it: memory, writing, return codes (skeleton) |
-| [examples/](examples/) | complete programs: a file, a buffer, a non-blocking pipe |
+| [docs/MANUAL.md](docs/MANUAL.md) | how to use it: a PSD written and read in a page of code, then every way of writing and reading |
+| [examples/](examples/) | complete programs: the shortest writer and reader, a file, a buffer, a non-blocking pipe, a full dump |
 | [docs/SPECIFICATION.md](docs/SPECIFICATION.md) | the contract: API, file contents, guarantees, PSD primer |
 | [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | the reader on 315 files from other programs (psd-tools' test set): decoded, described, refused |
 | [docs/CODING_STYLE_C.md](docs/CODING_STYLE_C.md) | C rules: language, naming, comments |

@@ -98,14 +98,16 @@ include/
       packbits.h               PackBits encode, decode, size bound; strided source and target
       composite.h              blending one row "over", white matte and un-matte
 examples/                      the I/O implementations; built and run in CI, never installed
-  demo.h                       the document every example writes (the golden "template-rle")
+  hello_write.c, hello_read.c  the shortest writer and reader: the manual's Getting started
+  demo.h                       the document the other writers write (the golden "template-rle")
   write_file.c                 stdio, UTF-8 path on Windows (minipsd_write_file until 0.2.0)
   write_memory.c               exact-size buffer from minipsd_writer_total
   write_nonblocking.c          O_NONBLOCK pipe + poll (POSIX)
-  read_file.c                  whole file into memory, then decode (later stage)
+  read_file.c                  whole file into memory, described, every layer and the composite decoded
 tests/
   test_<module>.cpp            one file per module; detail modules are tested directly
-  fuzz/                        libFuzzer target for the reader, run locally (later stage)
+  fuzz/                        the reader's libFuzzer target, run locally (linux-fuzz preset);
+                               replay.c runs it on regressions/, the inputs that once failed
 tools/
   amalgamate.cmake             joins include/ into one file, a release artifact
 ```

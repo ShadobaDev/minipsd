@@ -1,15 +1,18 @@
 # ---------------------------------------------------------------------------
 # minipsd examples: the I/O minipsd leaves to its caller, each a complete program on the public
-# API. Built and run as tests (with MINIPSD_BUILD_TESTS), never installed. Each writes the golden
-# test's "template-rle" document (demo.h), and its test checks the bytes by SHA-256.
+# API. Built and run as tests (with MINIPSD_BUILD_TESTS), never installed. Each writer but the
+# hello pair writes the golden test's "template-rle" document (demo.h), and its test checks the
+# bytes by SHA-256.
 #
+#   hello_write        the shortest writer: one layer to hello.psd     (the manual's Getting started)
+#   hello_read         the shortest reader: layer names and the composite of hello.psd
 #   write_file         minipsd_write to stdio, a UTF-8 path on Windows included   (blocking)
 #   write_memory       the pull writer into one buffer of the exact size
 #   write_nonblocking  the pull writer into an O_NONBLOCK pipe, with poll          (POSIX only)
 #   read_file          a PSD read whole, described, every layer and the composite decoded
 # ---------------------------------------------------------------------------
 
-set(_examples write_file write_memory read_file)
+set(_examples hello_write hello_read write_file write_memory read_file)
 if(UNIX)
     list(APPEND _examples write_nonblocking)
 endif()
@@ -42,6 +45,17 @@ minipsd_add_example_test(write_memory write_memory -DARG=out.psd)
 if(UNIX)
     minipsd_add_example_test(write_nonblocking write_nonblocking -DARG=out.psd)
 endif()
+
+# The hello pair, in one directory: hello_read reads what hello_write wrote.
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/out-hello")
+add_test(NAME example.hello_write COMMAND hello_write WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/out-hello")
+add_test(NAME example.hello_read  COMMAND hello_read  WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/out-hello")
+set_tests_properties(example.hello_write PROPERTIES FIXTURES_SETUP minipsd-hello-psd)
+set_tests_properties(example.hello_read PROPERTIES
+    FIXTURES_REQUIRED minipsd-hello-psd
+    PASS_REGULAR_EXPRESSION "64 x 64, 1 layers
+layer 'Hello'
+first pixel: 255 0 0 255")
 
 # Failures are reported, not swallowed.
 add_test(NAME example.write_file.missing-dir COMMAND write_file "${CMAKE_CURRENT_BINARY_DIR}/missing/x.psd")
