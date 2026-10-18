@@ -51,12 +51,14 @@ fetch them from a pinned psd-tools release, verified by its SHA-256.
 
 ## How to read the results
 
-- **decoded:** 8-bit RGB. The header, resources and every layer record are read, and every
-  layer's pixels and the composite are decoded. This is the subset minipsd supports today.
-- **described:** another colour mode or depth. Everything but the pixels is read: size, colour
-  mode, depth, dpi, ICC profile, resources, and every layer with its name, rectangle, opacity,
-  visibility, blend mode and blocks. Decoding the pixels returns `MINIPSD_ERR_UNSUPPORTED`. This
-  is a choice of scope ([ROADMAP.md](ROADMAP.md), stage 6), not a failure.
+- **decoded:** 8- or 16-bit RGB. The header, resources and every layer record are read, and
+  every layer's pixels and the composite are decoded. This is the subset minipsd supports today.
+- **described:** another colour mode or depth, or ZIP-compressed layers (Photoshop's 16-bit
+  ones). Everything but those pixels is read: size, colour mode, depth, dpi, ICC profile,
+  resources, and every layer with its name, rectangle, opacity, visibility, blend mode and blocks.
+  Decoding the pixels returns `MINIPSD_ERR_UNSUPPORTED`; ZIP channels are still copied when the
+  file is read as a document with `stored` and written back. This is a choice of scope
+  ([ROADMAP.md](ROADMAP.md), stage 6), not a failure.
 - **refused:** the reader does not open the file, with the reason.
 - **failed:** an error other than the above: a malformed file, or a bug. Each is listed. A
   malformed file that the tests know about is in `knownBad` in `tests/test_reader.cpp`, with the
@@ -111,9 +113,11 @@ class File:
         self.layers = 0
         self.layer_errors = []       # what failed while walking or decoding layers
         self.composite = None        # "decoded", "described", or what failed
+        self.zip = 0                 # layers described only: ZIP-compressed
         self.blends = collections.Counter()
         self.features = collections.Counter()
         self.masks = 0
+        self.others = 0              # layers with channels not read: alpha, spot
         self.groups = 0
 
 
@@ -136,15 +140,21 @@ def run(exe, path, root):
             f.blends[m.group(2)] += 1
             continue
         if line.startswith("      blocks:"):
-            keys = line[len("      blocks:"):].split(", and")[0].split()
+            parts = line[len("      blocks:"):].split(",")
+            keys = parts[0].split()
             for key in keys:
                 if key in ("lsct=1", "lsct=2"):
                     f.groups += 1
                 for label, members in FEATURES:
                     if key in members or key.strip() in {m.strip() for m in members}:
                         f.features[label] += 1
-            if "channels not read" in line:
+            if any(p.strip() == "mask" for p in parts[1:]):
                 f.masks += 1
+            if "channels not read" in line:
+                f.others += 1
+            continue
+        if "ZIP-compressed: described" in line and not in_composite:
+            f.zip += 1
             continue
         if line.startswith("  layers: "):
             f.layer_errors.append(line.strip()[len("layers: "):])
@@ -171,6 +181,8 @@ def status(f):
         return "failed", "; ".join(f.layer_errors + ([f.composite] if f.composite not in ("decoded", "described") else []))
     if f.composite == "described":
         return "described", f"{f.mode}: pixels not decoded yet"
+    if f.zip:
+        return "described", f"{f.mode}: ZIP-compressed layers, copied, not decoded"
     return "decoded", ""
 
 
@@ -181,7 +193,7 @@ def report(files, source):
     out.append("|---|---|---|")
     meaning = {
         "decoded": "every layer and the composite decoded to pixels",
-        "described": "header, resources and layers read; pixels not decoded, outside 8-bit RGB",
+        "described": "header, resources and layers read; pixels not decoded: outside 8- and 16-bit RGB, or ZIP",
         "refused": "the reader does not open the file (see below)",
         "failed": "malformed, or a reader bug (see below)",
     }
@@ -193,7 +205,11 @@ def report(files, source):
     out.append("|---|---|---|")
     modes = collections.Counter(f.mode for f in files if not f.refused)
     for mode, n in sorted(modes.items(), key=lambda kv: (-kv[1], kv[0])):
-        out.append(f"| {mode} | {n} | {'decoded' if mode == '8-bit RGB' else 'not yet: described only'} |")
+        decoded = sum(1 for f in files if f.mode == mode and status(f)[0] in ("decoded", "failed"))   # failed: listed below
+        zipped = sum(1 for f in files if f.mode == mode and f.zip)
+        pixels = ("decoded" if decoded == n else f"decoded, but ZIP-compressed layers in {zipped}" if decoded + zipped == n
+                  else "not yet: described only" if not decoded else f"{decoded} decoded")
+        out.append(f"| {mode} | {n} | {pixels} |")
 
     refused = collections.Counter(f.refused for f in files if f.refused)
     if refused:
@@ -233,8 +249,8 @@ def report(files, source):
     rows.append(("Blend modes other than normal", sum(blends.values()),
                  sum(1 for f in files if any(k != "norm" for k in f.blends))))
     rows.append(("Layer groups", sum(f.groups for f in files), sum(1 for f in files if f.groups)))
-    rows.append(("Layer masks and other extra channels", sum(f.masks for f in files),
-                 sum(1 for f in files if f.masks)))
+    rows.append(("Layer masks", sum(f.masks for f in files), sum(1 for f in files if f.masks)))
+    rows.append(("Other channels, not read (alpha, spot, CMYK's black)", sum(f.others for f in files), sum(1 for f in files if f.others)))
     for label, _ in FEATURES:
         rows.append((label, sum(f.features[label] for f in files), sum(1 for f in files if f.features[label])))
     for label, layers, nfiles in rows:

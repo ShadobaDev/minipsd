@@ -119,7 +119,7 @@ tools/
 | Version, linkage, return codes | `minipsd_bytes { const uint8_t *data; size_t size; }` | `minipsd_error_string`; new codes, added never renumbered: `MINIPSD_MORE = 1` (positive: not an error, call again), `MINIPSD_ERR_FORMAT = -6`, `MINIPSD_ERR_UNSUPPORTED = -7`, `MINIPSD_ERR_SHORT = -8`, `MINIPSD_ERR_LIMIT = -9` | `base.h` |
 | Document | `minipsd_doc`, `minipsd_layer` (unchanged from 0.1) | `minipsd_doc_check(doc)`: the validation `minipsd_write` does today, now callable on its own | `writer.h` today; its own file if the reader shares it |
 | Writer | `minipsd_writer` (opaque, built in the workspace) | `minipsd_writer_workspace_size`, `_init`, `_total`, `_fill`; `minipsd_write` | `writer.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
-| Reader | `minipsd_reader` (opaque, like the writer), `minipsd_info`, `minipsd_resource`, `minipsd_layer_view`, `minipsd_target` (of `minipsd_plane`), `minipsd_decode_opts`, `minipsd_limits` | `minipsd_reader_workspace_size`, `_init`, `_needed`, `_next_resource`, `_next_layer`, `minipsd_layer_name`, `minipsd_decode_layer`, `minipsd_decode_composite`, `minipsd_target_rgba` | `reader.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
+| Reader | `minipsd_reader` (opaque, like the writer), `minipsd_info`, `minipsd_resource`, `minipsd_layer_view`, `minipsd_target` (of `minipsd_plane`), `minipsd_decode_opts`, `minipsd_limits` | `minipsd_reader_workspace_size`, `_init`, `_needed`, `_next_resource`, `_next_layer`, `minipsd_layer_name`, `minipsd_decode_layer`, `minipsd_decode_composite`, `minipsd_decode_mask`, `minipsd_target_rgba`, `minipsd_target_rgba16` | `reader.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
 | Document from a file | `MINIPSD_LOST_*` | `minipsd_read_size`, `minipsd_read_into`, `minipsd_read`, `minipsd_doc_free` | `read.h`, on the public reader (and its record offsets, to tell what is lost) |
 
 Rules for the split:
@@ -240,6 +240,7 @@ int minipsd_decode_composite(minipsd_reader *r,
                              const minipsd_target *target, const minipsd_decode_opts *opts);
 
 void minipsd_target_rgba(minipsd_target *t, uint8_t *rgba, size_t row_stride);  /* the common case */
+void minipsd_target_rgba16(minipsd_target *t, uint16_t *rgba, size_t row_stride);  /* the same, 16 bits */
 ```
 
 The reader follows the writer's pattern: opaque, built by `init` inside a caller workspace, which
@@ -304,8 +305,14 @@ typedef struct minipsd_target { minipsd_plane channel[4]; } minipsd_target;   /*
 - **The caller guarantees the memory**: the library cannot see the size of a buffer, so it writes
   `width * rows` samples per non-`NULL` plane and nothing else. `info`, the layer view and the
   band tell the caller how big that is before it allocates.
-- **Samples are one byte (depth 8) for now.** A depth field goes at the end of `minipsd_target`
-  with the 16-bit stage; zero keeps 8.
+- **Samples are of the file's depth**, 8 or 16 bits: `minipsd_decode_opts.depth` says which the
+  caller expects (0 and `NULL` options: 8), and another than the file's is
+  `MINIPSD_ERR_UNSUPPORTED`; there is no conversion. A 16-bit sample is a `uint16_t` in host
+  order; steps count bytes either way, and `minipsd_target_rgba16` fills interleaved 16-bit RGBA.
+  The depth sits in the options, not in the target: `minipsd_decode_mask` takes a bare plane, and
+  a target filled by `minipsd_target_rgba` would leave a new field of its own undefined. So an
+  8-bit caller handed a 16-bit file gets the same `MINIPSD_ERR_UNSUPPORTED` as before 16 bits,
+  never twice the bytes it allocated.
 
 ### Pixel conventions (`X3`)
 
@@ -316,10 +323,11 @@ typedef struct minipsd_target { minipsd_plane channel[4]; } minipsd_target;   /*
   applied to the pixels, as on the writer side. A layer without an alpha channel decodes as
   opaque.
 - **The composite is un-matted by default.** The file stores it matted against white
-  (`c*a + 255*(1-a)`); the reader inverts that, `c = 255 - (255 - s) * 255 / a` clamped to
-  0..255, and `0` where `a == 0`. This gives the straight-alpha image the writer took in: exactly
-  where `a == 255`, and within about `255 / (2a)` levels below, since 8-bit matting has already
-  merged nearby colours (see the spec's Verification). `keep_matte` returns it as stored.
+  (`c*a + max*(1-a)`, `max` 255, or 65535 at 16 bits); the reader inverts that,
+  `c = max - (max - s) * max / a` clamped to 0..max, and `0` where `a == 0`. This gives the
+  straight-alpha image the writer took in: exactly where `a == max`, and within about
+  `max / (2a)` levels below, since matting has already merged nearby colours (see the spec's
+  Verification). `keep_matte` returns it as stored.
   Un-matting reads each pixel's alpha back from the target, so the target must have an `A` plane
   (otherwise `MINIPSD_ERR_ARG`) unless `keep_matte` is set or the file has no composite alpha.
 - **Channel order is the target's business.** The library's own order is R, G, B, A.
@@ -330,7 +338,8 @@ typedef struct minipsd_target { minipsd_plane channel[4]; } minipsd_target;   /*
 typedef struct minipsd_decode_opts {
     uint32_t y_first, y_count;  /* rows to decode; y_count 0: from y_first to the end */
     int      keep_matte;        /* composite only: do not remove the white matte */
-} minipsd_decode_opts;           /* NULL opts: the whole image, un-matted */
+    int      depth;             /* the target's samples: 0 or 8, or 16; the file's */
+} minipsd_decode_opts;           /* NULL opts: the whole image, 8-bit, un-matted */
 ```
 
 - **The target describes the band, not the canvas**: its row 0 receives row `y_first`. So a
@@ -425,9 +434,14 @@ while ((rc = minipsd_reader_init(&r, buf, have, ws, ws_size, NULL, &info)) == MI
   - A malformed file returns `MINIPSD_ERR_FORMAT`.
   - **What is described, and what is decoded.** `init` and `next_layer` describe any PSD of
     version 1, whatever its colour mode or depth, so a file manager can list a CMYK or 16-bit file
-    (`R1`). Only the pixel decoding is limited to 8-bit RGB (`MINIPSD_ERR_UNSUPPORTED`, from
-    `decode_*`, S4.4 and S4.5), as is any feature it does not decode yet. A PSB (version 2) is
-    refused by `init`, since its lengths are wider.
+    (`R1`). Only the pixel decoding is limited to 8- and 16-bit RGB (`MINIPSD_ERR_UNSUPPORTED`,
+    from `decode_*`), as is any feature it does not decode yet, ZIP among them. A PSB (version 2)
+    is refused by `init`, since its lengths are wider.
+  - **Layers in `Lr16`.** Photoshop leaves the layer info of a 16- or 32-bit file empty and keeps
+    the same structure in a global block, `Lr16` or `Lr32`. With an empty layer info, `init`
+    walks the global blocks' headers (each padded to four bytes past its stated length) and,
+    finding one, reads the layer count there; `next_layer` then walks its records like any
+    others. The block stays in `info.layer_tail`, which is raw bytes.
   - A libFuzzer target runs locally under ASan and UBSan, seeded from the test files; it is a
     tool, not a CI job. Each finding, once fixed, stays as an input that the ordinary tests
     replay, so CI guards against its return.
@@ -494,7 +508,7 @@ int            composite_matted;   /* non-zero: composite is already matted, wri
 | `uint8_t clipping` | not clipped | written as given |
 | `uint8_t flags` | none | the record's other flag bits (0x01 transparency locked, 0x08 and 0x10 pixel data irrelevant), written as given; 0x02 comes from `hidden` |
 | `minipsd_bytes extra` | no extra blocks | the layer's additional-information blocks as one blob, in the format of the reader's `extra` view; written after the writer's own blocks. `minipsd_doc_check` walks them: a malformed run is `MINIPSD_ERR_ARG` |
-| `const minipsd_bytes *stored` | encode `rgba` | four channel blobs (R, G, B, A, as `minipsd_layer_view.channel`), each the stored data with its compression marker and row counts. The writer copies each as one piece instead of encoding `rgba`; the sizing pass takes their sizes. `minipsd_doc_check` checks each against the rectangle (raw rows, or RLE counts adding up within the blob; ZIP passes as it is); a layer with `stored` and no `rgba` needs a supplied `composite`, since nothing could compose it. Name, opacity, visibility, blend, clipping and `extra` still come from the layer |
+| `const minipsd_bytes *stored` | encode `rgba` | four channel blobs (R, G, B, A, as `minipsd_layer_view.channel`), each the stored data with its compression marker and row counts; transparency of size 0 is none. The writer copies each as one piece instead of encoding `rgba`, and for a missing transparency encodes an opaque channel from one full sample read with a step of 0; the sizing pass takes their sizes. `minipsd_doc_check` checks each against the rectangle (raw rows, or RLE counts adding up within the blob; ZIP passes as it is); a layer with `stored` and no `rgba` needs a supplied `composite`, since nothing could compose it. Name, opacity, visibility, blend, clipping and `extra` still come from the layer |
 
 `minipsd_doc`, at the end, after `composite` and `composite_matted`:
 
@@ -566,12 +580,14 @@ typedef struct minipsd_read_opts {
 - **`opts->stored`** decodes nothing: each layer keeps its compressed channels, a fraction of its
   pixels' size. The caller decodes the one layer it edits through the reader, from the same
   file, sets that layer's `rgba` and clears its `stored`, then writes. Untouched layers are never
-  decoded nor encoded again, and the file's own composite needs no rendering (`E1`). A layer
-  without a transparency channel is decoded all the same: the writer writes four channels.
+  decoded nor encoded again, and the file's own composite needs no rendering (`E1`). ZIP
+  channels, which minipsd cannot decode, pass this way; a layer without a transparency channel
+  gets an opaque one when written.
 - **Limits:** `minipsd_limits` as in the reader; `max_decoded_bytes` bounds the sum of the call's
   decoded pixels. A block larger than `SIZE_MAX` is `MINIPSD_ERR_SIZE`.
-- **What it accepts:** 8-bit RGB, as the decoder; anything else is `MINIPSD_ERR_UNSUPPORTED`
-  until the document has other depths.
+- **What it accepts:** 8- and 16-bit RGB, as the decoder; the document has the file's `depth`.
+  Anything else is `MINIPSD_ERR_UNSUPPORTED`. Layers read from `Lr16` are the document's, so
+  `layer_tail` is copied without that block, and the writer puts them in the layer info.
 - **No allocator passed at run time.** The caller's block and `MINIPSD_MALLOC` cover both cases;
   a `{alloc, free, user}` variant is an addition when a caller needs one.
 
@@ -614,7 +630,7 @@ feature is serialization: written and read as data. The composite composed as a 
 | **Round trip** | done: `blend`, `clipping`, `flags`, `extra`, `stored`; `resources`, `layer_tail` | done: kept data written back, stored channels copied | done: `clipping`, `flags`, resource names, `layer_tail`; `minipsd_read` with `opts->stored` | `bytes`: the block walker, shared | see [Round trip](#round-trip) |
 | **Layer groups (`lsct`)** | done: `kind` (`MINIPSD_KIND_*`); zero = layer | done: the `lsct` block, the group's mode in it; a kept one of the same kind as it is; nesting checked | done: `kind` in the view | — | the composed composite draws groups flat |
 | **Layer masks** | done: `mask` (`minipsd_mask`: rectangle, colour, flags, pixels or stored, kept real mask and rest) | done: mask data, channels -2 and -3 | done: the view's mask, `minipsd_decode_mask` | — | the composed composite ignores masks |
-| **16-bit channels** | `depth` on `minipsd_doc`; zero = 8 | 2-byte samples | 2-byte samples | `packbits` over byte planes, `composite` in 16-bit | |
+| **16-bit channels** | done: `depth` on `minipsd_doc`; zero = 8 | done: 2-byte samples, big-endian, in the layer info | done: `depth` in `minipsd_decode_opts`, layers from `Lr16`, `minipsd_read` | done: `bytes` (`mpsd__at`, samples), `packbits` over a row's bytes, `composite` against 65535 | ZIP channels pass only as stored |
 | **PSB (version 2)** | `format` on `minipsd_doc`; zero = PSD | 8-byte lengths, 4-byte RLE counts | both versions | `bytes`: 64-bit fields | sides up to 300 000 px |
 
 ## Distribution of a multi-file library
@@ -695,8 +711,8 @@ Taken at the S4.1 review, 2026-10-15 (the reader):
    limit gets a stricter reader.
 10. **Un-matting needs an `A` plane in the target**, so the workspace stays independent of the
     file.
-11. **One `minipsd_decode_opts`** carries the row band and the matte option; `NULL` is the
-    defaults, and new options go at its end.
+11. **One `minipsd_decode_opts`** carries the row band, the matte option and the depth; `NULL` is
+    the defaults, and new options go at its end.
 12. **Resources are iterated, not looked up by id.**
 13. **A Pascal-only name is read as Latin-1**; the raw view is there for a caller that knows the
     code page.

@@ -270,11 +270,36 @@ feature; a supplied composite needs nothing. See
       colour and pixels; every mask of psd-tools' set survives `minipsd_read` and
       `minipsd_write` with the same mask data and pixels; the fuzzer decodes masks; GIMP shows the
       mask, checked by hand once.
-- [ ] **S6.5** 16-bit channels.
+- [x] **S6.5** 16-bit channels: `depth` on `minipsd_doc` (samples `uint16_t` in host order,
+      written big-endian, layers in the layer info); `depth` on `minipsd_decode_opts`, which must
+      be the file's, and `minipsd_target_rgba16`; layers Photoshop keeps in its global `Lr16` (or
+      `Lr32`) block read as the file's; `minipsd_read` at 16 bits, `Lr16` dropped from
+      `layer_tail`. A stored layer without transparency is copied and gets an opaque one, so
+      Photoshop's 16-bit files, whose channels are ZIP, round trip with `opts->stored`.
+      *Done when:* a 16-bit document written from scratch reads back from `psd-tools` with every
+      channel's samples and the composite (`roundtrip.py`, "deep-16"); psd-tools' 16-bit RGB
+      files go through `minipsd_read` (stored) and `minipsd_write` with their blocks and channel
+      data byte for byte; the fuzzer decodes at 16 bits; GIMP opens `deep-16.psd`, checked by
+      hand once.
 - [ ] **S6.6** PSB (version 2).
 - [ ] **S6.7** Blending ranges ("Blend If") kept on the layer; until then `MINIPSD_LOST_BLENDING_RANGES`.
 - [ ] **S6.8** Channels beyond RGBA (alpha and spot channels, of layers and of the composite)
       kept; until then `MINIPSD_LOST_CHANNELS`.
+- [ ] **S6.9** ZIP channels (compression 2, and 3 with prediction), Photoshop's 16- and 32-bit
+      layers, decoded through the caller's inflate: minipsd implements no deflate. A function
+      pointer and its `user` at the end of `minipsd_decode_opts` (and of `minipsd_read_opts`, so
+      `minipsd_read` decodes them without `stored`), shaped as `inflate(user, src, src_size, dst,
+      dst_size)`; zlib's `uncompress`, libdeflate or miniz fit it in a few lines. The stream is
+      zlib (RFC 1950), not a ZIP archive; its size after inflating is known from the view: the
+      rectangle times the sample size. minipsd hands the stream and that size, undoes the
+      prediction (part of the format: byte sums at 8 bits, big-endian sample sums at 16, the
+      byte shuffle at 32) and spreads the samples into the target as for RLE. The reader still
+      allocates nothing: a dense plane (`pixel_step` the sample size) takes the inflated channel
+      directly; any other target needs a scratch buffer of one channel from the caller. ZIP is
+      never written; stored ZIP channels stay copied as they are. Without the function, decoding
+      them stays `MINIPSD_ERR_UNSUPPORTED`.
+      *Done when:* psd-tools' 16-bit RGB files decode, layers and masks, to the samples psd-tools
+      gives, through zlib in the tests; the fuzzer decodes ZIP channels through zlib.
 
 ## 7. Interoperability
 

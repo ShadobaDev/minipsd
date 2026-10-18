@@ -45,7 +45,7 @@
  * nothing.
  *
  * \par What it writes
- * An 8-bit RGB document (PSD version 1) with a transparency channel:
+ * An RGB document (PSD version 1), 8 or 16 bits a channel, with a transparency channel:
  * - one or more layers, bottom first, each a rectangle anywhere on or off the canvas (by default
  *   the full canvas) or empty, with a name, opacity, visibility, blend key, clipping and flags;
  *   names go out both as a legacy Pascal string (ASCII) and as Unicode ('luni'), followed by any
@@ -63,14 +63,14 @@
  * Channel data is PackBits RLE by default (small for flat art), or raw.
  *
  * Groups (minipsd_layer.kind) and layer masks (minipsd_layer.mask) are written; text and effects
- * only as blocks kept from a file.  Not written: 16/32-bit, other colour modes, PSB.
+ * only as blocks kept from a file.  Not written: 32-bit, other colour modes, PSB.
  * PSD caps each side at 30000 px; larger documents are refused (MINIPSD_ERR_SIZE).
  *
  * \par Output
  * Bytes come out in order, never seeking back, so a pipe or a socket works as well as a file:
  * pulled by the caller into its own buffer (minipsd_writer_fill), or pushed to a callback
  * (minipsd_write).  The pull writer allocates nothing; its workspace, from the caller, holds a
- * size table (layer_count * 4 numbers), the composite's row sizes and one composite row.
+ * size table (layer_count * 6 numbers), the composite's row sizes and one composite row.
  * minipsd_write allocates that workspace once.  Layer pixels and a supplied composite are read
  * in place, never copied whole.
  *
@@ -133,8 +133,8 @@ enum {
     MINIPSD_ERR_OPEN    = -5, /*!< Not returned by minipsd; kept for the caller's own file
                                    code (examples/): a file not opened or closed.             */
     MINIPSD_ERR_FORMAT  = -6, /*!< Reader: the bytes are not a well-formed PSD.                */
-    MINIPSD_ERR_UNSUPPORTED = -7, /*!< Reader: a valid PSD outside what minipsd reads (so far a
-                                       PSB; pixels other than 8-bit RGB once decoding lands).     */
+    MINIPSD_ERR_UNSUPPORTED = -7, /*!< Reader: a valid PSD outside what minipsd reads: a PSB, or
+                                       pixels other than 8- or 16-bit RGB, or ZIP-compressed.     */
     MINIPSD_ERR_SHORT   = -8, /*!< Reader: the buffer ends inside data the call needs; the
                                    file may be fine.  minipsd_reader_needed says how much more.  */
     MINIPSD_ERR_LIMIT   = -9  /*!< Reader: a value is over a limit (minipsd_limits).           */
@@ -216,8 +216,9 @@ typedef struct minipsd_mask {
     uint8_t        flags;                    /*!< As stored: 0x01 position relative to the layer,
                                                   0x02 disabled, 0x08 made by rendering other data,
                                                   0x10 parameters follow (in rest).                 */
-    const uint8_t *pixels;                   /*!< (right - left) * (bottom - top) bytes, rows top down;
-                                                  NULL with stored, or for a rectangle without area. */
+    const uint8_t *pixels;                   /*!< (right - left) * (bottom - top) samples, rows top
+                                                  down, of the document's depth; NULL with stored, or
+                                                  for a rectangle without area.                     */
     minipsd_bytes  stored;                   /*!< The channel as a file stores it (compression marker,
                                                   rows), copied instead of encoding pixels; size 0:
                                                   pixels are encoded.                               */
@@ -236,8 +237,9 @@ typedef struct minipsd_mask {
  */
 typedef struct minipsd_layer {
     const char    *name;    /*!< UTF-8; NULL means "".                                            */
-    const uint8_t *rgba;    /*!< (right - left) * (bottom - top) * 4 bytes, rows top down, straight
-                                 (not premultiplied) alpha; NULL means an empty layer.             */
+    const uint8_t *rgba;    /*!< (right - left) * (bottom - top) * 4 samples, rows top down, straight
+                                 (not premultiplied) alpha; NULL means an empty layer.  A sample is
+                                 a byte, or with depth 16 a uint16_t in host order (two bytes).  */
     uint8_t        opacity; /*!< 255 is opaque, 0 is fully transparent.                            */
     uint8_t        hidden;  /*!< Non-zero: the layer starts hidden (and stays out of the composite). */
     int32_t        top, left, bottom, right; /*!< The layer's rectangle on the canvas, as in
@@ -259,8 +261,9 @@ typedef struct minipsd_layer {
                                  stores them (R, G, B, transparency, as minipsd_layer_view.channel:
                                  the compression marker, then the rows), copied as they are
                                  instead of encoding rgba: a layer never decoded is never encoded
-                                 again.  Each is checked against the rectangle.  rgba may then be
-                                 NULL, as long as the document supplies its composite.          */
+                                 again.  Each is checked against the rectangle; transparency of
+                                 size 0 is none, written opaque.  rgba may then be NULL, as long
+                                 as the document supplies its composite.                       */
     uint8_t        kind;     /*!< MINIPSD_KIND_*: a layer, or a group's top record or divider.
                                  Groups nest bottom first: a divider, the group's layers, then
                                  its top record, which carries the group's name, visibility and
@@ -284,7 +287,7 @@ typedef struct minipsd_doc {
     size_t               icc_size;       /*!< Size of icc in bytes; 0 when icc is NULL.      */
     int                  compression;    /*!< MINIPSD_RLE or MINIPSD_RAW.                    */
     const uint8_t       *composite;      /*!< The composite (merged) image: width * height * 4
-                                              bytes, rows top down, straight alpha, written
+                                              samples, rows top down, straight alpha, written
                                               whatever the layers hold.  NULL: composed from the
                                               layers, a best effort (see "What it writes").  */
     int                  composite_matted; /*!< Non-zero: composite is already matted against
@@ -301,6 +304,9 @@ typedef struct minipsd_doc {
                                               file (minipsd_info.layer_tail): the global layer
                                               mask and the global blocks, written as they are.
                                               Empty: no global mask, no blocks.               */
+    uint16_t             depth;          /*!< Bits per channel: 0 or 8, or 16, where every sample
+                                              (rgba, mask pixels, composite) is a uint16_t in
+                                              host order, 0 .. 65535.                         */
 } minipsd_doc;
 
 /**
@@ -314,7 +320,7 @@ typedef struct minipsd_doc {
  * \return MINIPSD_OK or an error code.
  *
  * \retval MINIPSD_ERR_ARG  doc is NULL, there are no layers (or more than 32767), dpi is outside
- *                          (0, 65536), a size is set without its data (icc, a resource, a name,
+ *                          (0, 65536), depth is not 0, 8 or 16, a size is set without its data (icc, a resource, a name,
  *                          extra, layer_tail), a layer's rectangle is inverted, an empty layer's
  *                          has an area, extra is not a run of well-formed blocks, a stored
  *                          channel does not match its rectangle, a layer has only stored
@@ -453,7 +459,7 @@ typedef struct minipsd_limits {
  * \brief What a file says about itself, read by minipsd_reader_init.
  *
  * Any PSD of version 1 is described, whatever its colour mode or depth; it is the decoding that
- * is limited to 8-bit RGB.
+ * is limited to 8- and 16-bit RGB.
  */
 typedef struct minipsd_info {
     uint32_t      width, height;       /*!< In pixels.                                                 */
@@ -468,7 +474,9 @@ typedef struct minipsd_info {
                                             (the file's layer count is negative).                      */
     minipsd_bytes layer_tail;          /*!< The layer and mask section after the layer info: the global
                                             layer mask and the global blocks.  data is NULL with a size
-                                            when the buffer ends before its end.                       */
+                                            when the buffer ends before its end.  With an empty layer
+                                            info, a block 'Lr16' or 'Lr32' (Photoshop's 16- and 32-bit
+                                            files) holds the layers: next_layer reads them there.      */
 } minipsd_info;
 
 /** \brief The index of a colour channel in minipsd_layer_view.channel. */
@@ -542,7 +550,8 @@ MINIPSDDEF int minipsd_reader_workspace_size(size_t *size);
  * \brief Starts reading a PSD: its header, its image resources and the number of layers.
  *
  * Needs the bytes up to the layer count, resources included (so a whole ICC profile and a
- * thumbnail), and nothing after.  A buffer that ends sooner gives MINIPSD_ERR_SHORT: read more and
+ * thumbnail), and nothing after; for layers in a global block (see minipsd_info.layer_tail), up
+ * to their count in that block.  A buffer that ends sooner gives MINIPSD_ERR_SHORT: read more and
  * call again, on the same workspace; minipsd_reader_needed says how much.  Nothing is allocated or
  * copied, and calling init again restarts every iteration.
  *
@@ -640,7 +649,8 @@ MINIPSDDEF int minipsd_layer_next_block(const minipsd_layer_view *layer, size_t 
  * \brief Where one channel's samples go: the first sample, and the steps to the next one.
  *
  * The library cannot see the size of the memory behind data: it writes exactly the samples of the
- * rows it decodes, at data + y * row_step + x * pixel_step, and nothing else.
+ * rows it decodes, at data + y * row_step + x * pixel_step, and nothing else.  Steps count bytes,
+ * whatever the depth; a 16-bit sample is two bytes, a uint16_t in host order.
  */
 typedef struct minipsd_plane {
     uint8_t  *data;       /*!< Sample (0, 0) of the channel; NULL: the channel is not written.      */
@@ -653,14 +663,15 @@ typedef struct minipsd_plane {
  *
  * One shape for every layout: interleaved RGBA (minipsd_target_rgba), BGRA (swap two planes),
  * planar, a sub-rectangle of a larger image (offset data), or only some channels (the rest NULL).
- * Its row 0 receives the first decoded row.  Samples are 8-bit; straight, not premultiplied, alpha.
+ * Its row 0 receives the first decoded row.  Samples are of minipsd_decode_opts.depth; straight, not
+ * premultiplied, alpha.
  */
 typedef struct minipsd_target {
     minipsd_plane channel[4]; /*!< R, G, B, A. */
 } minipsd_target;
 
 /**
- * \brief Which rows to decode.  NULL options decode the whole image.
+ * \brief Which rows to decode, and how.  NULL options decode the whole image into 8-bit samples.
  *
  * Fields are only ever added at the end, and zero keeps the previous behaviour.
  */
@@ -668,6 +679,8 @@ typedef struct minipsd_decode_opts {
     uint32_t y_first;    /*!< The first row, counted from the layer's top.                     */
     uint32_t y_count;    /*!< How many rows; 0: from y_first to the end.                        */
     int      keep_matte; /*!< Composite only: non-zero keeps the white matte, as stored.        */
+    int      depth;      /*!< The target's bits a sample: 0 or 8, or 16 (a uint16_t in host
+                              order).  It must be the file's (minipsd_info.depth).               */
 } minipsd_decode_opts;
 
 /**
@@ -678,6 +691,17 @@ typedef struct minipsd_decode_opts {
  * \param row_stride Bytes from a row to the next: width * 4 for a tight image.
  */
 MINIPSDDEF void minipsd_target_rgba(minipsd_target *t, uint8_t *rgba, size_t row_stride);
+
+/**
+ * \brief Points a target at interleaved 16-bit RGBA: four planes two bytes apart, a pixel step of 8.
+ *
+ * Decode into it with minipsd_decode_opts.depth 16.
+ *
+ * \param t          The target to fill; nothing happens when it is NULL.
+ * \param rgba       The first pixel; NULL leaves every plane NULL.
+ * \param row_stride Bytes from a row to the next: width * 8 for a tight image.
+ */
+MINIPSDDEF void minipsd_target_rgba16(minipsd_target *t, uint16_t *rgba, size_t row_stride);
 
 /**
  * \brief Decodes a layer's pixels, or a band of its rows, into the target.
@@ -695,10 +719,11 @@ MINIPSDDEF void minipsd_target_rgba(minipsd_target *t, uint8_t *rgba, size_t row
  * \param opts   The rows; NULL for all of them.
  * \return MINIPSD_OK or an error code.
  *
- * \retval MINIPSD_ERR_ARG         r (never initialised), layer or target is NULL, or the band
- *                                 lies outside the layer.
+ * \retval MINIPSD_ERR_ARG         r (never initialised), layer or target is NULL, the band lies
+ *                                 outside the layer, or opts->depth is not 0, 8 or 16.
  * \retval MINIPSD_ERR_LIMIT       The call would write more than max_decoded_bytes.
- * \retval MINIPSD_ERR_UNSUPPORTED The file is not 8-bit RGB, or a channel is ZIP-compressed.
+ * \retval MINIPSD_ERR_UNSUPPORTED The file is not 8- or 16-bit RGB, its depth is not opts->depth,
+ *                                 or a channel is ZIP-compressed.
  * \retval MINIPSD_ERR_SHORT       A channel the target asks for is not all in the buffer;
  *                                 minipsd_reader_needed says how far it must reach.
  * \retval MINIPSD_ERR_FORMAT      A channel the target asks for is missing or malformed.
@@ -711,8 +736,9 @@ MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view 
  *
  * The composite is what a reader that ignores layers shows: the full canvas, info.width by the
  * rows asked for.  The file stores its colour matted against white; by default the matte is
- * undone, giving straight alpha, exact where alpha is 255 and within about 255 / (2 * alpha)
- * levels below, since 8-bit matting has already merged nearby colours (0 where alpha is 0).
+ * undone, giving straight alpha, exact where alpha is full and within about max / (2 * alpha)
+ * levels below (max is 255, or 65535 at 16 bits), since matting has already merged nearby colours
+ * (0 where alpha is 0).
  * Un-matting reads each pixel's alpha back from the target, so it then needs an A plane.  A file
  * whose composite has no transparency (info.composite_has_alpha is 0) decodes as opaque.  As in
  * minipsd_decode_layer, every check comes before the first sample is written.
@@ -723,9 +749,11 @@ MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view 
  * \return MINIPSD_OK or an error code.
  *
  * \retval MINIPSD_ERR_ARG         r (never initialised) or target is NULL, the band lies outside
- *                                 the image, or the matte is to be undone with no A plane.
+ *                                 the image, the matte is to be undone with no A plane, or
+ *                                 opts->depth is not 0, 8 or 16.
  * \retval MINIPSD_ERR_LIMIT       The call would write more than max_decoded_bytes.
- * \retval MINIPSD_ERR_UNSUPPORTED The file is not 8-bit RGB, or the image is ZIP-compressed.
+ * \retval MINIPSD_ERR_UNSUPPORTED The file is not 8- or 16-bit RGB, its depth is not opts->depth,
+ *                                 or the image is ZIP-compressed.
  * \retval MINIPSD_ERR_SHORT       The rows of a channel the target asks for are not all in the
  *                                 buffer; minipsd_reader_needed says how far it must reach.
  * \retval MINIPSD_ERR_FORMAT      The image is malformed.
@@ -735,8 +763,9 @@ MINIPSDDEF int minipsd_decode_composite(minipsd_reader *r, const minipsd_target 
 /**
  * \brief Decodes a layer's mask, or a band of its rows, into one plane.
  *
- * The mask is decoded as stored: its rectangle's width by the rows asked for, one byte per pixel,
- * 255 where the layer shows; its colour outside the rectangle and its flags are in the view.  As in
+ * The mask is decoded as stored: its rectangle's width by the rows asked for, one sample per pixel
+ * at the file's depth (opts->depth), full where the layer shows; its colour outside the rectangle
+ * and its flags are in the view.  As in
  * minipsd_decode_layer, every check comes before the first sample is written, and opts.keep_matte
  * does not apply.
  *
@@ -773,7 +802,8 @@ enum {
 typedef struct minipsd_read_opts {
     int stored; /*!< Non-zero: each layer keeps its channels as stored (minipsd_layer.stored), not
                      decoded, so writing it back copies them: a fraction of the memory, and no
-                     encoding.  A layer without a transparency channel is decoded all the same. */
+                     encoding, and ZIP-compressed channels pass.  A layer without a transparency
+                     channel gets an opaque one when written.                                    */
 } minipsd_read_opts;
 
 /**
@@ -798,8 +828,10 @@ MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_li
  * document lives as long as the block.  Each layer comes with its rectangle, opacity, visibility,
  * blend key, clipping, flags, decoded pixels (with opts->stored, its channels as stored) and its
  * blocks as they are; the composite as the file stores it, with composite_matted set, so writing
- * the document gives the same image back.  A file without
- * layers gets one, "Background", holding its image.  A file without a resolution gets 72 dpi.
+ * the document gives the same image back.  The document has the file's depth, 8 or 16 bits.  A
+ * file without layers gets one, "Background", holding its image.  A file without a resolution
+ * gets 72 dpi.  Layers a 16-bit file keeps in its 'Lr16' block become the document's layers, and
+ * the block leaves layer_tail.
  *
  * \param data       The whole file.
  * \param size       How many bytes data holds.
@@ -813,8 +845,9 @@ MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_li
  * \return MINIPSD_OK or an error code.
  *
  * \retval MINIPSD_ERR_ARG         doc or block is NULL, or block_size is too small.
- * \retval MINIPSD_ERR_UNSUPPORTED Not 8-bit RGB, ZIP-compressed pixels, a PSB, or a layer wider or
- *                                 taller than MINIPSD_MAX_SIDE.
+ * \retval MINIPSD_ERR_UNSUPPORTED Not 8- or 16-bit RGB, ZIP-compressed pixels to decode (with
+ *                                 opts->stored they are copied), a PSB, or a layer wider or taller
+ *                                 than MINIPSD_MAX_SIDE.
  * \retval MINIPSD_ERR_SIZE        The document does not fit in memory (a block above SIZE_MAX).
  * \retval MINIPSD_ERR_FORMAT, MINIPSD_ERR_SHORT, MINIPSD_ERR_LIMIT  As the reader.
  */

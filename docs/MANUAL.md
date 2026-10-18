@@ -208,6 +208,16 @@ minipsd_layer layers[4] = {
 };
 ```
 
+A 16-bit document sets `depth`. Every sample, of the layers, the masks and the composite, is then
+a `uint16_t` in host order, 0 to 65535; the pointers keep their type, so cast:
+
+```c
+uint16_t     *deep = malloc((size_t)width * height * 4 * sizeof *deep);   /* straight alpha */
+minipsd_layer layer = { .name = "Deep", .rgba = (const uint8_t *)deep, .opacity = 255 };
+minipsd_doc   doc = { .width = width, .height = height, .dpi = 300.0, .layers = &layer, .layer_count = 1,
+                      .depth = 16 };
+```
+
 The composite, the flattened image that viewers and thumbnails show, is yours to render when
 the layers use anything beyond plain "over" (libvips does most of it, see
 [Working with libvips](SPECIFICATION.md#working-with-libvips)). Give it in straight alpha, the
@@ -407,8 +417,20 @@ which records open and close them.
 
 Pixels come as stored: straight alpha, the layer's opacity and visibility left in the view. A
 `minipsd_decode_opts` with `y_first` and `y_count` decodes a band of rows into the target's first
-row, so a huge layer can go through a small buffer in strips. Only 8-bit RGB files decode
-(`MINIPSD_ERR_UNSUPPORTED` otherwise; every other file is still described).
+row, so a huge layer can go through a small buffer in strips. 8- and 16-bit RGB files decode
+(`MINIPSD_ERR_UNSUPPORTED` otherwise; every other file is still described). A 16-bit file decodes
+into 16-bit samples only, `uint16_t` in host order; say so in the options:
+
+```c
+uint16_t           *rgba16 = malloc((size_t)w * h * 4 * sizeof *rgba16);
+minipsd_decode_opts deep = { .depth = 16 };   /* info.depth; 0 or 8 for an 8-bit file */
+minipsd_target_rgba16(&t, rgba16, (size_t)w * 8);
+rc = minipsd_decode_layer(r, &layer, &t, &deep);
+```
+
+Photoshop compresses the layers of its 16-bit files with ZIP, which minipsd does not decode
+(`MINIPSD_ERR_UNSUPPORTED`): their names, rectangles and blocks are read, their composite decodes,
+and they round trip with `stored` (see [Round trip](#round-trip)).
 
 ### The composite
 
@@ -487,9 +509,10 @@ flowchart TD
 ```
 
 [examples/resave.c](../examples/resave.c) is the whole program: it inverts the colours of one
-layer, copies every other one, and frees the file's bytes before writing. A layer that has no
-transparency channel, and the one layer of a file without layers, come decoded even with
-`stored`: there is nothing to copy for them.
+layer, copies every other one, and frees the file's bytes before writing. The one layer of a file
+without layers comes decoded even with `stored`: there is nothing to copy for it. A layer without
+a transparency channel is copied, and gets an opaque one when written. `stored` is also how
+Photoshop's 16-bit files go through: their ZIP channels are copied byte for byte.
 
 **What is lost, and a request.** `lost` is 0 when the document carries everything. Otherwise its
 bits say what writing the document back would drop:

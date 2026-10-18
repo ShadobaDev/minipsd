@@ -28,54 +28,60 @@ static void check_short(const minipsd_reader *r, int rc, size_t size)
 }
 
 /* Decodes a width x height image (a layer, or the composite when layer is NULL) whole, then its
-   middle row with the matte kept. */
-static void decode(minipsd_reader *r, const minipsd_layer_view *layer, uint64_t width, uint64_t height, size_t size)
+   middle row with the matte kept; at 16 bits for a 16-bit file. */
+static void decode(minipsd_reader *r, const minipsd_layer_view *layer, uint64_t width, uint64_t height, int depth,
+                   size_t size)
 {
     minipsd_target      t;
-    minipsd_decode_opts band = {0, 1, 1};
-    uint8_t             pixel[4];
-    uint8_t            *rgba = pixel;
-    uint64_t            bytes = width * height * 4;
+    minipsd_decode_opts all = {0, 0, 0, 0}, band = {0, 1, 1, 0};
+    uint16_t            pixel[4];
+    uint8_t            *rgba = (uint8_t *)pixel;
+    const unsigned      wide = depth == 16;
+    uint64_t            bytes = width * height * 4 << wide;
     int                 rc;
+    all.depth = band.depth = wide ? 16 : 8;
     if (bytes > FUZZ_MAX_DECODED) {
-        minipsd_target_rgba(&t, pixel, 0);
-        rc = layer ? minipsd_decode_layer(r, layer, &t, NULL) : minipsd_decode_composite(r, &t, NULL);
+        minipsd_target_rgba(&t, rgba, 0);
+        rc = layer ? minipsd_decode_layer(r, layer, &t, &all) : minipsd_decode_composite(r, &t, &all);
         if (rc == MINIPSD_OK) abort();
         return;
     }
     if (bytes && !(rgba = (uint8_t *)malloc((size_t)bytes))) return;
-    minipsd_target_rgba(&t, rgba, (size_t)width * 4);
-    rc = layer ? minipsd_decode_layer(r, layer, &t, NULL) : minipsd_decode_composite(r, &t, NULL);
+    if (wide) minipsd_target_rgba16(&t, (uint16_t *)rgba, (size_t)width * 8);
+    else      minipsd_target_rgba(&t, rgba, (size_t)width * 4);
+    rc = layer ? minipsd_decode_layer(r, layer, &t, &all) : minipsd_decode_composite(r, &t, &all);
     check_short(r, rc, size);
     band.y_first = (uint32_t)(height / 2);
     rc = layer ? minipsd_decode_layer(r, layer, &t, &band) : minipsd_decode_composite(r, &t, &band);
     check_short(r, rc, size);
-    if (rgba != pixel) free(rgba);
+    if (rgba != (uint8_t *)pixel) free(rgba);
 }
 
 /* A layer's mask, as decode does for its pixels: whole, then a band; refused over the limit. */
-static void decode_mask(minipsd_reader *r, const minipsd_layer_view *layer, size_t size)
+static void decode_mask(minipsd_reader *r, const minipsd_layer_view *layer, int depth, size_t size)
 {
     const uint64_t      width = (uint64_t)((int64_t)layer->mask.right - layer->mask.left);
     const uint64_t      height = (uint64_t)((int64_t)layer->mask.bottom - layer->mask.top);
-    minipsd_decode_opts band = {0, 1, 0};
+    const unsigned      wide = depth == 16;
+    minipsd_decode_opts all = {0, 0, 0, 0}, band = {0, 1, 0, 0};
     minipsd_plane       plane;
-    uint8_t             one;
+    uint16_t            one;
     int                 rc;
     if (layer->mask.right < layer->mask.left || layer->mask.bottom < layer->mask.top) abort();   /* never inverted */
-    plane.data = &one; plane.pixel_step = 1; plane.row_step = 0;
-    if (width * height > FUZZ_MAX_DECODED) {
-        if (minipsd_decode_mask(r, layer, &plane, NULL) == MINIPSD_OK) abort();
+    all.depth = band.depth = wide ? 16 : 8;
+    plane.data = (uint8_t *)&one; plane.pixel_step = (ptrdiff_t)1 << wide; plane.row_step = 0;
+    if ((width * height << wide) > FUZZ_MAX_DECODED) {
+        if (minipsd_decode_mask(r, layer, &plane, &all) == MINIPSD_OK) abort();
         return;
     }
-    if (width * height && !(plane.data = (uint8_t *)malloc((size_t)(width * height)))) return;
-    plane.row_step = (ptrdiff_t)width;
-    rc = minipsd_decode_mask(r, layer, &plane, NULL);
+    if (width && height && !(plane.data = (uint8_t *)malloc((size_t)(width * height << wide)))) return;
+    plane.row_step = (ptrdiff_t)(width << wide);
+    rc = minipsd_decode_mask(r, layer, &plane, &all);
     check_short(r, rc, size);
     band.y_first = (uint32_t)(height / 2);
     rc = minipsd_decode_mask(r, layer, &plane, &band);
     check_short(r, rc, size);
-    if (plane.data != &one) free(plane.data);
+    if (plane.data != (uint8_t *)&one) free(plane.data);
 }
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
@@ -101,11 +107,12 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         (void)minipsd_layer_name(&layer, name, sizeof name, &need);   /* often too small: truncation too */
         for (pos = 0; minipsd_layer_next_block(&layer, &pos, &block) == MINIPSD_MORE;) {}
         if (layer.right < layer.left || layer.bottom < layer.top) abort();   /* never inverted */
-        decode(r, &layer, (uint64_t)((int64_t)layer.right - layer.left), (uint64_t)((int64_t)layer.bottom - layer.top), size);
-        if (layer.has_mask) decode_mask(r, &layer, size);
+        decode(r, &layer, (uint64_t)((int64_t)layer.right - layer.left), (uint64_t)((int64_t)layer.bottom - layer.top),
+               info.depth, size);
+        if (layer.has_mask) decode_mask(r, &layer, info.depth, size);
         if (layer.kind > MINIPSD_KIND_GROUP_END) abort();
     }
     check_short(r, rc, size);
-    decode(r, NULL, info.width, info.height, size);
+    decode(r, NULL, info.width, info.height, info.depth, size);
     return 0;
 }

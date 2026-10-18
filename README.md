@@ -56,21 +56,22 @@ for a file (UTF-8 paths on Windows), a buffer and a non-blocking pipe are in
 
 ## What it writes
 
-An 8-bit RGB document with transparency: layers anywhere on or off the canvas (by default the
+An RGB document with transparency, 8 or 16 bits a channel: layers anywhere on or off the canvas (by default the
 full canvas), or empty, with UTF-8 names, opacity and visibility; the merged composite image,
 yours or composed as a best effort; the resolution; an optional ICC profile; groups, layer
 masks, blend modes, clipping, and blocks and resources kept from a file (text, effects), as
 they are.
 Channels are PackBits RLE or raw. Each side is limited to 30 000 px.
 
-Not written (yet): 16-bit, PSB. The full contract is in [docs/SPECIFICATION.md](docs/SPECIFICATION.md).
+Not written (yet): 32-bit, other colour modes, PSB. The full contract is in [docs/SPECIFICATION.md](docs/SPECIFICATION.md).
 
 ## What it reads
 
 Any PSD (not PSB): its size, colour mode, depth, dpi, ICC profile, resources, and every layer
 with its name, rectangle, opacity, visibility, blend mode and raw additional data. Pixels of
-8-bit RGB files decode, layers and composite, into memory of any layout, or whole into a
-document that `minipsd_write` takes back. A file can be read from its start only, and untrusted
+8- and 16-bit RGB files decode, layers and composite, into memory of any layout, or whole into a
+document that `minipsd_write` takes back. ZIP-compressed channels (Photoshop's 16-bit layers)
+are not decoded, but copied as they are when such a file is read and written back. A file can be read from its start only, and untrusted
 files are bounded by caller limits. How it does on 315 files from
 other programs: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 

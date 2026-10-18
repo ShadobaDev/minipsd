@@ -31,9 +31,9 @@ canvas templates.
 - **No hidden state:** the writer and the reader live in memory the caller lends them (a
   workspace) and hold nothing else; there is no global state and nothing to initialise or shut
   down. `minipsd_write` takes a complete document and produces a complete file in one call.
-- **Writes a subset, reads any PSD:** it writes 8-bit RGB documents
+- **Writes a subset, reads any PSD:** it writes 8- and 16-bit RGB documents
   ([What goes into the file](#what-goes-into-the-file)); it describes every PSD of version 1 and
-  decodes the pixels of 8-bit RGB ones ([What is read](#what-is-read)).
+  decodes the pixels of 8- and 16-bit RGB ones ([What is read](#what-is-read)).
 - **Lightweight first, extensible second:** a feature is added only when it can be added
   without making the simple case harder.
 
@@ -43,14 +43,16 @@ A PSD file is a sequence of five sections, all integers **big-endian**:
 
 | # | Section | What minipsd puts there |
 |---|---|---|
-| 1 | **File header** (26 bytes): signature `8BPS`, version (1 = PSD, 2 = PSB), channel count, height, width, bit depth, colour mode | version 1, 4 channels, 8-bit, RGB |
+| 1 | **File header** (26 bytes): signature `8BPS`, version (1 = PSD, 2 = PSB), channel count, height, width, bit depth, colour mode | version 1, 4 channels, 8 or 16 bits, RGB |
 | 2 | **Colour mode data**: a length, then a palette for indexed/duotone modes | empty (length 0) |
 | 3 | **Image resources**: a length, then `8BIM` blocks, each with a numeric ID | 1005 resolution, optionally 1039 ICC profile |
 | 4 | **Layer and mask information**: layer records (bounds, channels, blend mode, opacity, flags, name, *additional layer info* blocks such as `luni`), then each layer's channel pixel data | the layers |
 | 5 | **Image data**: the merged ("composite") image, used by readers that ignore layers and for thumbnails | the composite |
 
 Channel pixel data is either raw or **PackBits RLE**: a per-row byte-count table followed by
-the compressed rows. Sides are capped at 30 000 px in PSD; PSB (version 2) lifts that to
+the compressed rows; a 16-bit sample is two bytes, high first, and RLE packs a row's bytes.
+Photoshop compresses 16-bit layers with ZIP instead, and keeps their records in a global block
+`Lr16` after an empty layer info. Sides are capped at 30 000 px in PSD; PSB (version 2) lifts that to
 300 000 px and widens several length fields.
 
 Reference: Adobe's *Photoshop File Formats Specification*. When it and real readers disagree,
@@ -109,7 +111,8 @@ The declarations, with every parameter and return code, are in
 | `minipsd_layer_name(layer, utf8, cap, &needed)` | a layer's name as UTF-8 (`luni`, else the legacy name as Latin-1) |
 | `minipsd_layer_next_block(layer, &pos, &block)` | a layer's additional-information blocks, each a raw view |
 | `minipsd_target_rgba(&target, rgba, row_stride)` | a target for interleaved RGBA, the common case |
-| `minipsd_decode_layer(r, layer, target, opts)` | a layer's pixels, or a band of its rows, as stored (opacity and visibility not applied), into the caller's planes; 8-bit RGB, raw or PackBits |
+| `minipsd_target_rgba16(&target, rgba, row_stride)` | the same for 16-bit samples, `uint16_t` |
+| `minipsd_decode_layer(r, layer, target, opts)` | a layer's pixels, or a band of its rows, as stored (opacity and visibility not applied), into the caller's planes; 8- or 16-bit RGB, raw or PackBits |
 | `minipsd_decode_composite(r, target, opts)` | the composite (merged) image, or a band of its rows, un-matted to straight alpha unless `keep_matte` |
 | `minipsd_decode_mask(r, layer, plane, opts)` | a layer's mask, or a band of its rows, into one plane |
 | `minipsd_read_size(data, size, limits, opts, &block_size)` | the block `minipsd_read_into` needs for a whole file |
@@ -118,13 +121,16 @@ The declarations, with every parameter and return code, are in
 | `minipsd_error_string(code)` | a short English text for a return code |
 
 The reader describes any version-1 PSD, whatever its colour mode or depth; it decodes the pixels
-of 8-bit RGB files, layers and composite.
+of 8- and 16-bit RGB files, layers and composite.
 
+- **Depth.** A decode call writes samples of `opts->depth`: 8 (and 0, `NULL` opts), or 16, a
+  `uint16_t` in host order. It must be the file's depth; there is no conversion. The steps of a
+  plane count bytes either way.
 - **Un-matting.** The file stores the composite's colour matted against white; the reader undoes
-  it, `c = 255 - (255 - s) * 255 / a` rounded and clamped, `0` where `a == 0`. That is exact where
-  `a == 255` and within about `255 / (2a)` levels below: 8-bit matting has already merged nearby
-  colours. It reads each alpha back from the target, so it needs the target's `A` plane.
-  `keep_matte` returns the bytes as stored.
+  it, `c = max - (max - s) * max / a` rounded and clamped (`max` is 255, or 65535 at 16 bits),
+  `0` where `a == 0`. That is exact where `a == max` and within about `max / (2a)` levels below:
+  matting has already merged nearby colours. It reads each alpha back from the target, so it needs
+  the target's `A` plane. `keep_matte` returns the samples as stored.
 - **A composite without transparency** (a positive layer count) decodes as opaque; a fourth
   channel is then not transparency and is not read.
 
@@ -140,7 +146,7 @@ of 8-bit RGB files, layers and composite.
 | `minipsd_bytes` | a read-only view into the caller's buffer |
 | `minipsd_resource`, `minipsd_layer_view`, `minipsd_block` | an image resource, a layer record, an additional-information block, as views |
 | `minipsd_target`, `minipsd_plane` | where decoded samples go: per channel R, G, B, A a pointer, a pixel step and a row step; any layout |
-| `minipsd_decode_opts` | the rows to decode and, for the composite, `keep_matte`; `NULL` for all rows, un-matted |
+| `minipsd_decode_opts` | the rows to decode, the target's `depth` and, for the composite, `keep_matte`; `NULL` for all rows, 8-bit, un-matted |
 
 **Defaults and field meanings**
 - A zero-initialised document selects RLE (`MINIPSD_RLE = 0`).
@@ -160,7 +166,7 @@ of 8-bit RGB files, layers and composite.
 | `MINIPSD_ERR_ALLOC` | -4 | `MINIPSD_MALLOC` returned NULL |
 | `MINIPSD_ERR_OPEN` | -5 | not returned by minipsd; reserved for the caller's file code (`examples/write_file.c`) |
 | `MINIPSD_ERR_FORMAT` | -6 | reader: not a well-formed PSD |
-| `MINIPSD_ERR_UNSUPPORTED` | -7 | reader: a valid PSD outside what minipsd reads: a PSB (version 2); for decoding, a file not 8-bit RGB or a ZIP-compressed channel |
+| `MINIPSD_ERR_UNSUPPORTED` | -7 | reader: a valid PSD outside what minipsd reads: a PSB (version 2); for decoding, a file not 8- or 16-bit RGB, of another depth than `opts->depth`, or a ZIP-compressed channel |
 | `MINIPSD_ERR_SHORT` | -8 | reader: the buffer ends inside data the call needs; read more, `minipsd_reader_needed` says how much |
 | `MINIPSD_ERR_LIMIT` | -9 | reader: over `minipsd_limits`: the canvas's or a layer's side, the layer count, or the bytes of a decode call; the file is not known to be bad |
 
@@ -173,7 +179,7 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
 | Name | Owner | Size | Must stay valid | May live in |
 |---|---|---|---|---|
 | `minipsd_doc`, `minipsd_layer[]` | caller; borrowed | `sizeof`; `layer_count` layers | the call; for the pull writer, from init for as long as the writer is used | stack, static, heap |
-| raw document data: layer pixels (`rgba`) or stored channels (`stored`), names, ICC profile, the supplied `composite`, kept `extra`, `resources` and `layer_tail` | caller; borrowed, read in place, never copied | a layer's rectangle times 4 bytes (or its channels' stored size); `width * height * 4` for the composite | as `minipsd_doc` | wherever the application keeps it |
+| raw document data: layer pixels (`rgba`) or stored channels (`stored`), names, ICC profile, the supplied `composite`, kept `extra`, `resources` and `layer_tail` | caller; borrowed, read in place, never copied | a layer's rectangle times 4 samples, of 1 or 2 bytes (or its channels' stored size); `width * height * 4` samples for the composite | as `minipsd_doc` | wherever the application keeps it |
 | `minipsd_workspace` of the writer | caller; lent to the writer | `minipsd_writer_workspace_size()` | for as long as the writer is used | heap; stack or static sized for the largest document |
 | `minipsd_writer` | inside `minipsd_workspace`; opaque | part of the workspace | as the workspace | the caller keeps only the pointer |
 | raw PSD bytes | passed to the callback of `minipsd_write()` | pieces of up to 4 KiB, in order | the callback copies what it keeps | the callback decides |
@@ -200,7 +206,9 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
 
 ## What goes into the file
 
-- PSD version 1, 8 bits per channel, RGB, 4 channels (R, G, B, transparency).
+- PSD version 1, RGB, 4 channels (R, G, B, transparency), 8 bits per channel or, with `depth`
+  16, 16: every sample (`rgba`, mask `pixels`, `composite`) is then a `uint16_t` in host order,
+  written big-endian. The layers go in the layer info at both depths, never in `Lr16`.
 - **Layers:**
   - each at its rectangle (`top, left, bottom, right`; all zero is the full canvas), which may
     reach past the canvas or lie wholly outside it; a side of at most 30 000 px, since RLE row
@@ -215,7 +223,8 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
   - after the writer's own `luni`, the blocks kept from a file (`extra`), as they are, except a
     kept `luni`: the name wins;
   - channel data encoded from `rgba`, or copied as it is from `stored` (any compression the
-    file had, ZIP included), so a layer that was not changed is not encoded again;
+    file had, ZIP included), so a layer that was not changed is not encoded again; a stored
+    layer without transparency gets an opaque transparency channel;
   - groups (`kind`), bottom first: a divider (`lsct` type 3), the group's layers, then the
     group's top record (type 1 open, 2 closed) with its name, visibility and mode in its `lsct`
     block (`blend`, Pass Through by default; the record keeps `norm`). A kept `lsct` of the same
@@ -232,8 +241,8 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
     clipping, groups and effects are not drawn;
   - transparency is the first extra channel, signalled by writing the layer count as a
     **negative** number, as the format specifies;
-  - **colour is matted against white:** `c*a + 255*(1-a)`. Photoshop stores it this way and
-    readers subtract the white back out. The writer mattes, a supplied composite too, unless
+  - **colour is matted against white:** `c*a + max*(1-a)`, `max` being 255 or 65535. Photoshop
+    stores it this way and readers subtract the white back out. The writer mattes, a supplied composite too, unless
     `composite_matted` says it already is: then it is written byte for byte.
 - **Image resources:**
   - 1005 ResolutionInfo: dpi as 16.16 fixed point, unit inches; a kept 1005 that says the same
@@ -267,8 +276,11 @@ them; nothing is copied or allocated. Results on real files from other programs:
 - **Which files:**
   - every PSD of version 1 is described, whatever its colour mode (bitmap, grey, indexed, RGB,
     CMYK, multichannel, duotone, Lab) or depth (1, 8, 16, 32 bits);
-  - pixels are decoded from 8-bit RGB files only, raw or PackBits; any other file, and a
-    ZIP-compressed channel, gives `MINIPSD_ERR_UNSUPPORTED` from the decode call;
+  - pixels are decoded from 8- and 16-bit RGB files only, raw or PackBits; any other file, and
+    a ZIP-compressed channel (Photoshop's at 16 bits), gives `MINIPSD_ERR_UNSUPPORTED` from the
+    decode call;
+  - the layers of a file whose layer info is empty come from its global block `Lr16` or `Lr32`
+    (Photoshop's 16- and 32-bit files);
   - a PSB (version 2) is refused by `minipsd_reader_init` with `MINIPSD_ERR_UNSUPPORTED`; four
     wrong bytes at the start are `MINIPSD_ERR_FORMAT`.
 - **Header and resources:** size, channels, depth, colour mode; dpi from resource 1005
@@ -291,13 +303,14 @@ them; nothing is copied or allocated. Results on real files from other programs:
   `keep_matte`; a file whose layer count is positive has no transparency in it, and its composite
   decodes as opaque.
 - **The layer tail:** the global layer mask information and the global additional-information
-  blocks that follow the layer info, as one raw view (`minipsd_info.layer_tail`).
+  blocks that follow the layer info, as one raw view (`minipsd_info.layer_tail`), an `Lr16` the
+  layers came from included. Global blocks are padded to four bytes past the length they state.
 - **Not read:** the colour mode data (palettes).
-- **As a document** (`minipsd_read`): 8-bit RGB files; each layer's rectangle, name, opacity,
-  visibility, blend key, clipping, flags, kind, mask, decoded pixels (or, with `opts->stored`,
-  its channels as stored) and blocks, the composite as stored
-  (`composite_matted`), the dpi (72 when none is stored), the ICC profile, every resource and the
-  layer tail, all copied into one block. A file without layers gets one,
+- **As a document** (`minipsd_read`): 8- and 16-bit RGB files, at their depth; each layer's
+  rectangle, name, opacity, visibility, blend key, clipping, flags, kind, mask, decoded pixels
+  (or, with `opts->stored`, its channels as stored, ZIP ones too) and blocks, the composite as
+  stored (`composite_matted`), the dpi (72 when none is stored), the ICC profile, every resource
+  and the layer tail without the `Lr16` its layers came from, all copied into one block. A file without layers gets one,
   "Background", holding its image. Anything else is reported in `lost` (`MINIPSD_LOST_*`), never
   dropped silently.
 - **A prefix is enough** for what lies inside it: `MINIPSD_ERR_SHORT` with
@@ -415,7 +428,8 @@ Platemaker is the first consumer. Breaking any of these breaks it:
   through a shared build of minipsd, so no expectation comes from the code under test. It
   checks size, depth, mode, dpi, layer names (Unicode), opacity, visibility, bounds, every layer
   pixel exactly, and the composite against an independent "over" within the matting tolerance.
-  Removing the white matte makes it fail with the `(255, 0, 105)` pink.
+  Removing the white matte makes it fail with the `(255, 0, 105)` pink. A 16-bit document is
+  checked the same way, every channel's samples as psd-tools decodes them.
 - 8-bit rounding through matting and un-matting may shift a colour by one level (the pink
   returns as `(255, 105, 179)`); Photoshop behaves the same, so this is expected, not a bug.
 - Verified by hand: GIMP opens the output; Procreate opens a 1600x10240 template as a canvas
@@ -435,7 +449,9 @@ Platemaker is the first consumer. Breaking any of these breaks it:
   (`encode(decode(x)) == x`).
 - **Files from other programs:** every `.psd` in `tests/data/` (committed, origin and licence in
   its README) and `tests/fixtures/` (local, never committed) is read whole and in parts, and every
-  layer and the composite of an 8-bit RGB one must decode; `examples/read_file.c` runs on each.
+  layer and the composite of an 8- or 16-bit RGB one must decode, but for ZIP-compressed channels,
+  which must go through `minipsd_read` as stored and come back byte for byte; `examples/read_file.c`
+  runs on each.
   With `MINIPSD_PSD_TOOLS_FILES` the same test reads psd-tools' 279 test files, fetched at a
   pinned release; a file known to be malformed is listed with the error it must give.
 - **Fuzzing:** a libFuzzer target takes any bytes through every reader call under ASan and UBSan,

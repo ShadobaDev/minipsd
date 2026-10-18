@@ -23,12 +23,14 @@ fetch them from a pinned psd-tools release, verified by its SHA-256.
 
 ## How to read the results
 
-- **decoded:** 8-bit RGB. The header, resources and every layer record are read, and every
-  layer's pixels and the composite are decoded. This is the subset minipsd supports today.
-- **described:** another colour mode or depth. Everything but the pixels is read: size, colour
-  mode, depth, dpi, ICC profile, resources, and every layer with its name, rectangle, opacity,
-  visibility, blend mode and blocks. Decoding the pixels returns `MINIPSD_ERR_UNSUPPORTED`. This
-  is a choice of scope ([ROADMAP.md](ROADMAP.md), stage 6), not a failure.
+- **decoded:** 8- or 16-bit RGB. The header, resources and every layer record are read, and
+  every layer's pixels and the composite are decoded. This is the subset minipsd supports today.
+- **described:** another colour mode or depth, or ZIP-compressed layers (Photoshop's 16-bit
+  ones). Everything but those pixels is read: size, colour mode, depth, dpi, ICC profile,
+  resources, and every layer with its name, rectangle, opacity, visibility, blend mode and blocks.
+  Decoding the pixels returns `MINIPSD_ERR_UNSUPPORTED`; ZIP channels are still copied when the
+  file is read as a document with `stored` and written back. This is a choice of scope
+  ([ROADMAP.md](ROADMAP.md), stage 6), not a failure.
 - **refused:** the reader does not open the file, with the reason.
 - **failed:** an error other than the above: a malformed file, or a bug. Each is listed. A
   malformed file that the tests know about is in `knownBad` in `tests/test_reader.cpp`, with the
@@ -51,8 +53,8 @@ python tools/compat_report.py build/msvc/examples/Debug/read_file.exe build/msvc
 
 | Result | Files | Meaning |
 |---|---|---|
-| decoded | 220 | every layer and the composite decoded to pixels |
-| described | 57 | header, resources and layers read; pixels not decoded, outside 8-bit RGB |
+| decoded | 221 | every layer and the composite decoded to pixels |
+| described | 56 | header, resources and layers read; pixels not decoded: outside 8- and 16-bit RGB, or ZIP |
 | refused | 37 | the reader does not open the file (see below) |
 | failed | 1 | malformed, or a reader bug (see below) |
 
@@ -64,7 +66,7 @@ python tools/compat_report.py build/msvc/examples/Debug/read_file.exe build/msvc
 | 8-bit grey | 14 | not yet: described only |
 | 8-bit CMYK | 13 | not yet: described only |
 | 32-bit RGB | 9 | not yet: described only |
-| 16-bit RGB | 4 | not yet: described only |
+| 16-bit RGB | 4 | decoded, but ZIP-compressed layers in 3 |
 | 8-bit Lab | 4 | not yet: described only |
 | 1-bit bitmap | 3 | not yet: described only |
 | 16-bit grey | 3 | not yet: described only |
@@ -94,14 +96,15 @@ minipsd decodes each layer's pixels as stored and hands these features over as r
 | Feature | Layers | Files |
 |---|---|---|
 | Blend modes other than normal | 272 | 47 |
-| Layer groups | 307 | 81 |
-| Layer masks and other extra channels | 679 | 121 |
-| Adjustment layers | 163 | 63 |
-| Fill layers (solid, gradient, pattern) | 500 | 110 |
-| Text layers | 31 | 12 |
+| Layer groups | 312 | 86 |
+| Layer masks | 442 | 132 |
+| Other channels, not read (alpha, spot, CMYK's black) | 316 | 12 |
+| Adjustment layers | 183 | 68 |
+| Fill layers (solid, gradient, pattern) | 517 | 123 |
+| Text layers | 33 | 13 |
 | Smart objects | 334 | 7 |
 | Layer effects | 372 | 42 |
-| Vector masks and shapes | 1043 | 107 |
+| Vector masks and shapes | 1057 | 113 |
 
 Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`) 12, exclusion (`smud`) 11, color burn (`idiv`) 10, hard mix (`hMix`) 10, divide (`fdiv`) 10, screen (`scrn`) 10, hard light (`hLit`) 10, overlay (`over`) 9, lighten (`lite`) 9, color dodge (`div `) 9, soft light (`sLit`) 9, difference (`diff`) 9, subtract (`fsub`) 9, linear burn (`lbrn`) 9, vivid light (`vLit`) 9, linear light (`lLit`) 9, pin light (`pLit`) 9, lighter color (`lgCl`) 9, dissolve (`diss`) 9, hue (`hue `) 7, saturation (`sat `) 7, color (`colr`) 7, luminosity (`lum `) 7, darker color (`dkCl`) 7, pass through (`pass`) 5.
 
@@ -114,7 +117,7 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 | `0layers_tblocks.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
 | `0layers_tblocks.psd` | decoded |  |
 | `16bit5x5.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
-| `16bit5x5.psd` | described | 16-bit RGB: pixels not decoded yet |
+| `16bit5x5.psd` | described | 16-bit RGB: ZIP-compressed layers, copied, not decoded |
 | `1layer.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
 | `1layer.psd` | decoded |  |
 | `1layer2.psd` | decoded |  |
@@ -159,12 +162,12 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 | `adjustments/levels_rgb.psd` | decoded |  |
 | `adjustments/posterize_16bits_cmyk.psd` | described | 16-bit CMYK: pixels not decoded yet |
 | `adjustments/posterize_16bits_grayscale.psd` | described | 16-bit grey: pixels not decoded yet |
-| `adjustments/posterize_16bits_rgb.psd` | described | 16-bit RGB: pixels not decoded yet |
+| `adjustments/posterize_16bits_rgb.psd` | described | 16-bit RGB: ZIP-compressed layers, copied, not decoded |
 | `adjustments/posterize_cmyk.psd` | described | 8-bit CMYK: pixels not decoded yet |
 | `adjustments/posterize_grayscale.psd` | described | 8-bit grey: pixels not decoded yet |
 | `adjustments/posterize_rgb.psd` | decoded |  |
 | `adjustments/threshold_16bits_grayscale.psd` | described | 16-bit grey: pixels not decoded yet |
-| `adjustments/threshold_16bits_rgb.psd` | described | 16-bit RGB: pixels not decoded yet |
+| `adjustments/threshold_16bits_rgb.psd` | described | 16-bit RGB: ZIP-compressed layers, copied, not decoded |
 | `adjustments/threshold_cmyk.psd` | described | 8-bit CMYK: pixels not decoded yet |
 | `adjustments/threshold_grayscale.psd` | described | 8-bit grey: pixels not decoded yet |
 | `adjustments/threshold_rgb.psd` | decoded |  |
@@ -223,7 +226,7 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 | `colormodes/4x4_16bit_grayscale.psd` | described | 16-bit grey: pixels not decoded yet |
 | `colormodes/4x4_16bit_lab.psd` | described | 16-bit Lab: pixels not decoded yet |
 | `colormodes/4x4_16bit_multichannel.psd` | described | 16-bit multichannel: pixels not decoded yet |
-| `colormodes/4x4_16bit_rgb.psd` | described | 16-bit RGB: pixels not decoded yet |
+| `colormodes/4x4_16bit_rgb.psd` | decoded |  |
 | `colormodes/4x4_1bit_bitmap.psd` | described | 1-bit bitmap: pixels not decoded yet |
 | `colormodes/4x4_32bit_grayscale.psd` | described | 32-bit grey: pixels not decoded yet |
 | `colormodes/4x4_32bit_rgb.psd` | described | 32-bit RGB: pixels not decoded yet |

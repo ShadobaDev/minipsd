@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
 
 namespace {
 
@@ -108,11 +109,50 @@ TEST(MinipsdCompositeTest, UnmattingUndoesTheMatteWithinItsRounding)
     for (unsigned a = 0; a <= 255; ++a)
         for (unsigned c = 0; c <= 255; ++c) {
             const unsigned s = (c * a + 255u * (255u - a) + 127u) / 255u;   // the writer's matte
-            const unsigned back = mpsd__unmatte(s, a);
+            const unsigned back = mpsd__unmatte(s, a, 255);
             if (a == 0) { ASSERT_EQ(back, 0u) << "no colour where nothing is"; continue; }
             const int tolerance = a == 255 ? 0 : 1 + 255 / (2 * static_cast<int>(a));
             ASSERT_LE(std::abs(static_cast<int>(back) - static_cast<int>(c)), tolerance) << "c " << c << ", a " << a;
         }
-    EXPECT_EQ(mpsd__unmatte(0, 1), 0u) << "clamped, not wrapped";
-    EXPECT_EQ(mpsd__unmatte(255, 1), 255u);
+    EXPECT_EQ(mpsd__unmatte(0, 1, 255), 0u) << "clamped, not wrapped";
+    EXPECT_EQ(mpsd__unmatte(255, 1, 255), 255u);
+
+    // 16 bits, sampled: the same bound, max / (2a) levels.
+    for (std::uint32_t a = 0; a <= 65535; a += a < 512 ? 1 : 257)
+        for (std::uint32_t c = 0; c <= 65535; c += 4369) {
+            const std::uint32_t s = static_cast<std::uint32_t>((std::uint64_t(c) * a + 65535ull * (65535 - a) + 32767) / 65535);
+            const std::uint32_t back = mpsd__unmatte(s, a, 65535);
+            if (a == 0) { ASSERT_EQ(back, 0u); continue; }
+            const std::int64_t tolerance = a == 65535 ? 0 : 1 + 65535 / (2 * std::int64_t(a));
+            ASSERT_LE(std::llabs(std::int64_t(back) - std::int64_t(c)), tolerance) << "c " << c << ", a " << a;
+        }
+    EXPECT_EQ(mpsd__unmatte(0, 1, 65535), 0u) << "clamped, not wrapped";
+}
+
+// 16 bits: the same "over" and the same matte, against 65535.
+TEST(MinipsdCompositeTest, SixteenBitLayersComposeAndMatte)
+{
+    const std::uint16_t red[4] = {65535, 0, 0, 65535}, blue[4] = {0, 0, 65535, 32768};
+    const minipsd_layer layers[2] = {{.name = "Red", .rgba = reinterpret_cast<const std::uint8_t *>(red), .opacity = 255},
+                                     {.name = "Blue", .rgba = reinterpret_cast<const std::uint8_t *>(blue), .opacity = 255}};
+    minipsd_doc d = docOf(1, 1, layers, 2);
+    d.depth = 16;
+    std::uint16_t buffer[4];
+    mpsd__composite c;
+    mpsd__composite_init(&c, &d, reinterpret_cast<std::uint8_t *>(buffer));
+    std::uint16_t got[4];
+    std::memcpy(got, mpsd__composite_row(&c, 0), sizeof got);
+    EXPECT_NEAR(got[0], 32767, 1) << "half blue over opaque red";
+    EXPECT_EQ(got[1], 0);
+    EXPECT_NEAR(got[2], 32768, 1);
+    EXPECT_EQ(got[3], 65535);
+
+    const std::uint16_t half[4] = {0, 65535, 0, 32768};   // over white: 65535 * (1 - a) + c * a
+    const minipsd_layer one{.name = "Half", .rgba = reinterpret_cast<const std::uint8_t *>(half), .opacity = 255};
+    d = docOf(1, 1, &one, 1);
+    d.depth = 16;
+    std::memcpy(got, mpsd__composite_row(&c, 0), sizeof got);
+    EXPECT_EQ(got[0], 32767);
+    EXPECT_EQ(got[1], 65535);
+    EXPECT_EQ(got[3], 32768);
 }

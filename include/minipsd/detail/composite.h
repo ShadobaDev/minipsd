@@ -15,8 +15,11 @@
 
 typedef struct mpsd__composite {
     const minipsd_doc *doc;     /* pointer to the PSD document */
-    uint8_t           *row;     /* width * 4, the caller's */
+    uint8_t           *row;     /* width * 4 samples, the caller's */
 } mpsd__composite;
+
+/* Is the document 16-bit: two bytes a sample? */
+static unsigned mpsd__doc_wide(const minipsd_doc *d) { return d->depth == 16; }
 
 static int mpsd__contributes(const minipsd_layer *l) { return l->rgba && !l->hidden && l->opacity; }
 
@@ -56,10 +59,12 @@ static void mpsd__composite_init(mpsd__composite *c, const minipsd_doc *d, uint8
 /* The visible layers' row y blended "over" into row, straight alpha: the best effort. */
 static void mpsd__compose(const minipsd_doc *d, uint8_t *row, uint32_t y)
 {
+    const unsigned wide = mpsd__doc_wide(d), pixel = 4u << wide;
+    const float    max  = wide ? 65535.0f : 255.0f;
     size_t i;
     int64_t x;
     MPSD__COMPOSED();
-    memset(row, 0, (size_t)d->width * 4);
+    memset(row, 0, (size_t)d->width * pixel);
     for (i = 0; i < d->layer_count; ++i) {      /* each layer at its offset, clipped to the canvas */
         const minipsd_layer *l  = &d->layers[i];
         const mpsd__rect     r  = mpsd__layer_rect(d, l);
@@ -68,18 +73,21 @@ static void mpsd__compose(const minipsd_doc *d, uint8_t *row, uint32_t y)
         const int64_t        x1 = r.right < (int64_t)d->width ? r.right : (int64_t)d->width;
         const uint8_t *src;
         if (!mpsd__contributes(l) || ly < 0 || ly >= (int64_t)r.height) continue;
-        src = l->rgba + (size_t)ly * r.width * 4;
+        src = l->rgba + (size_t)ly * r.width * pixel;
         for (x = x0; x < x1; ++x) {
-            uint8_t       *o  = row + (size_t)x * 4;
-            const uint8_t *px = src + (size_t)(x - r.left) * 4;
-            const float sa = px[3] / 255.0f * (l->opacity / 255.0f);
-            const float da = o[3] / 255.0f;
+            uint8_t       *o  = row + (size_t)x * pixel;
+            const uint8_t *px = src + (size_t)(x - r.left) * pixel;
+            const float sa = (float)mpsd__sample(px + (3u << wide), wide) / max * (l->opacity / 255.0f);
+            const float da = (float)mpsd__sample(o + (3u << wide), wide) / max;
             const float oa = sa + da * (1.0f - sa);
             unsigned k;
             if (oa <= 0.0f) continue;
-            for (k = 0; k < 3; ++k)
-                o[k] = (uint8_t)((px[k] * sa + o[k] * da * (1.0f - sa)) / oa + 0.5f);
-            o[3] = (uint8_t)(oa * 255.0f + 0.5f);
+            for (k = 0; k < 3; ++k) {
+                const float c = ((float)mpsd__sample(px + (k << wide), wide) * sa
+                                 + (float)mpsd__sample(o + (k << wide), wide) * da * (1.0f - sa)) / oa;
+                mpsd__set_sample(o + (k << wide), wide, (uint32_t)(c + 0.5f));
+            }
+            mpsd__set_sample(o + (3u << wide), wide, (uint32_t)(oa * max + 0.5f));
         }
     }
 }
@@ -89,30 +97,34 @@ static void mpsd__compose(const minipsd_doc *d, uint8_t *row, uint32_t y)
    caller's row, then matted there. */
 static const uint8_t *mpsd__composite_row(mpsd__composite *c, uint32_t y)
 {
-    const minipsd_doc *d = c->doc;
+    const minipsd_doc *d    = c->doc;
+    const unsigned     wide = mpsd__doc_wide(d), pixel = 4u << wide;
+    const uint32_t     max  = wide ? 65535u : 255u;
+    const size_t       size = (size_t)d->width * pixel;
     uint32_t x;
     if (!d->composite)              mpsd__compose(d, c->row, y);
-    else if (d->composite_matted)   return d->composite + (size_t)y * d->width * 4;
-    else                            memcpy(c->row, d->composite + (size_t)y * d->width * 4, (size_t)d->width * 4);
+    else if (d->composite_matted)   return d->composite + (size_t)y * size;
+    else                            memcpy(c->row, d->composite + (size_t)y * size, size);
     for (x = 0; x < d->width; ++x) {          /* the merged image is stored over white */
-        uint8_t *o = c->row + (size_t)x * 4;
-        const unsigned a = o[3];
-        int k;
-        for (k = 0; k < 3; ++k)
-            o[k] = (uint8_t)((o[k] * a + 255u * (255u - a) + 127u) / 255u);
+        uint8_t       *o = c->row + (size_t)x * pixel;
+        const uint32_t a = mpsd__sample(o + (3u << wide), wide);
+        unsigned k;
+        for (k = 0; k < 3; ++k)               /* at most max * max + max / 2: fits 32 bits */
+            mpsd__set_sample(o + (k << wide), wide, (mpsd__sample(o + (k << wide), wide) * a + max * (max - a) + max / 2) / max);
     }
     return c->row;
 }
 
-/* Undoes the white matte of one stored sample s at alpha a: c = 255 - (255 - s) * 255 / a, rounded
-   and clamped; 0 where a is 0, since a transparent pixel has no colour.  Exact at a == 255; below,
-   8-bit matting has already merged nearby colours, about 255 / (2a) levels apart. */
-static uint8_t mpsd__unmatte(unsigned s, unsigned a)
+/* Undoes the white matte of one stored sample s at alpha a, both up to max (255, or 65535 for 16
+   bits): c = max - (max - s) * max / a, rounded and clamped; 0 where a is 0, since a transparent
+   pixel has no colour.  Exact at a == max; below, matting has already merged nearby colours, about
+   max / (2a) levels apart. */
+static uint32_t mpsd__unmatte(uint32_t s, uint32_t a, uint32_t max)
 {
-    unsigned d;
+    uint32_t d;
     if (a == 0) return 0;
-    d = ((255u - s) * 255u + a / 2) / a;
-    return (uint8_t)(d >= 255u ? 0u : 255u - d);
+    d = ((max - s) * max + a / 2) / a;
+    return d >= max ? 0u : max - d;
 }
 
 #endif /* MPSD__COMPOSITE_DONE */

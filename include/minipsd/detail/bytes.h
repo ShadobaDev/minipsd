@@ -1,7 +1,7 @@
 /**
  * \file minipsd/detail/bytes.h
- * \brief Internal: the output sink, big-endian integers in both directions, and additional-
- *        information blocks.  Included by the writer and the reader.
+ * \brief Internal: the output sink, big-endian integers in both directions, samples of one or two
+ *        bytes, and additional-information blocks.  Included by the writer and the reader.
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
@@ -9,6 +9,8 @@
 
 #ifndef MPSD__BYTES_DONE
 #define MPSD__BYTES_DONE
+
+#include <string.h>
 
 /* --- output: a sink either counts the bytes (the sizing pass) or sends them on --- */
 
@@ -52,6 +54,32 @@ static int mpsd__tag(const uint8_t *p, const char *tag)
     for (i = 0; i < 4; ++i)
         if (p[i] != (uint8_t)tag[i]) return 0;
     return 1;
+}
+
+/* --- samples: one byte, or (wide) two in host order, a uint16_t --- */
+
+/* Where byte i of a row as the file stores it (big-endian) lies in memory, the samples step bytes
+   apart: a sample's high byte comes first in the file, second in memory on a little-endian host. */
+static ptrdiff_t mpsd__at(size_t i, ptrdiff_t step, unsigned wide)
+{
+    static const uint16_t one = 1;
+    const unsigned lane = wide & *(const uint8_t *)&one;
+    return (ptrdiff_t)(i >> wide) * step + (ptrdiff_t)((i & wide) ^ lane);
+}
+
+static uint32_t mpsd__sample(const uint8_t *p, unsigned wide)
+{
+    uint16_t v;
+    if (!wide) return *p;
+    memcpy(&v, p, 2);
+    return v;
+}
+
+static void mpsd__set_sample(uint8_t *p, unsigned wide, uint32_t v)
+{
+    const uint16_t s = (uint16_t)v;
+    if (wide) memcpy(p, &s, 2);
+    else      *p = (uint8_t)v;
 }
 
 /* --- additional information: a run of blocks, '8BIM' (or '8B64'), a key, a length, the data --- */

@@ -11,8 +11,8 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   (`MINIPSD_ERR_SHORT` with `minipsd_reader_needed`); `minipsd_reader_next_resource`,
   `minipsd_reader_next_layer`, `minipsd_layer_name` and `minipsd_layer_next_block` walk its
   resources, layer records and their blocks as views, with no allocation and no copy.
-- `minipsd_decode_layer`: a layer's pixels, or a band of its rows, from an 8-bit RGB file (raw or
-  PackBits) into caller memory of any layout, described by `minipsd_target`
+- `minipsd_decode_layer`: a layer's pixels, or a band of its rows, from an 8- or 16-bit RGB file
+  (raw or PackBits) into caller memory of any layout, described by `minipsd_target`
   (`minipsd_target_rgba` for interleaved RGBA).
 - `minipsd_decode_composite`: the merged image, or a band of its rows, un-matted to straight
   alpha (or as stored, with `keep_matte`).
@@ -27,7 +27,7 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   `minipsd_doc`. The writer writes that image, matted against white unless marked as already
   matted, and composes nothing. Without one the layers are composed as before, now documented as
   a best effort.
-- `minipsd_read`: a whole 8-bit RGB file into a `minipsd_doc` that `minipsd_write` takes as it
+- `minipsd_read`: a whole 8- or 16-bit RGB file into a `minipsd_doc` that `minipsd_write` takes as it
   is, every byte copied into one block so the file can be freed at once; `minipsd_doc_free`;
   `minipsd_read_size` and `minipsd_read_into` for the caller's own memory. `lost`
   (`MINIPSD_LOST_*`) says what the document could not carry: blending ranges, extra channels.
@@ -36,9 +36,14 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
 - Layer masks: `minipsd_mask` on `minipsd_layer` (rectangle, colour, flags, pixels or the stored
   channel, and a file's real mask and mask parameters kept), the mask in the layer view, and
   `minipsd_decode_mask`.
+- 16-bit documents: `depth` on `minipsd_doc`, every sample a `uint16_t` in host order; the
+  reader decodes 16-bit layers, masks and composites with `depth` in `minipsd_decode_opts` and
+  `minipsd_target_rgba16`, and finds the layers Photoshop keeps in its `Lr16` block. ZIP
+  channels are not decoded; read with `stored`, they are copied as they are.
 - Pass-through re-save: `minipsd_read_opts.stored` keeps each layer's channels as the file
   stores them (`minipsd_layer.stored`), and the writer copies them instead of encoding pixels, so
-  changing one layer encodes only that one.
+  changing one layer encodes only that one. A stored layer without transparency gets an opaque
+  transparency channel.
 - Content kept from a file and written back as it is: `blend`, `clipping`, `flags` and `extra`
   (additional-information blocks: text, effects, groups, smart objects) on `minipsd_layer`;
   `resources` and `layer_tail` (global layer mask and blocks) on `minipsd_doc`. The document's

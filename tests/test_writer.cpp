@@ -291,7 +291,164 @@ TEST(MinipsdWriterTest, GroupsAndMasksAreWritten)
             EXPECT_EQ(write(*back), file) << "stored " << keep;
             minipsd_doc_free(back);
         }
+
+        // A prefix that ends inside the mask's channel: the decode asks for the rest.
+        const std::size_t end = static_cast<std::size_t>(v[1].mask_offset + v[1].mask.stored.size);
+        Bytes prefixWorkspace(256);
+        minipsd_reader *p = nullptr;
+        ASSERT_EQ(minipsd_reader_init(&p, file.data(), end - 1, prefixWorkspace.data(), prefixWorkspace.size(), nullptr, &info), MINIPSD_OK);
+        minipsd_layer_view pv;
+        ASSERT_EQ(minipsd_reader_next_layer(p, &pv), MINIPSD_MORE);
+        ASSERT_EQ(minipsd_reader_next_layer(p, &pv), MINIPSD_MORE);
+        EXPECT_EQ(minipsd_decode_mask(p, &pv, &plane, nullptr), MINIPSD_ERR_SHORT);
+        EXPECT_EQ(minipsd_reader_needed(p), end);
     }
+
+    // A kept real mask (channel -3) goes out as it is, after the mask's own channel.
+    const Bytes realRaw = {0, 0};
+    minipsd_mask withReal = mask;
+    withReal.real = view(realRaw);
+    const minipsd_layer one{.name = "Real", .rgba = px.data(), .opacity = 255, .mask = &withReal};
+    const Bytes file = write(docOf(6, 4, &one, 1));
+    Bytes workspace(256);
+    minipsd_reader *r = nullptr;
+    minipsd_info info{};
+    ASSERT_EQ(minipsd_reader_init(&r, file.data(), file.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
+    minipsd_layer_view v;
+    ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
+    EXPECT_EQ(Bytes(v.mask.real.data, v.mask.real.data + v.mask.real.size), realRaw);
+}
+
+namespace {
+
+Bytes be32(std::size_t n)
+{
+    return {static_cast<std::uint8_t>(n >> 24), static_cast<std::uint8_t>(n >> 16), static_cast<std::uint8_t>(n >> 8),
+            static_cast<std::uint8_t>(n)};
+}
+
+// A file of minipsd's laid out as Photoshop keeps a 16-bit one: the layer info empty, its content in
+// a global block 'Lr16', padded to four past the length it states.  The file has no layer tail of
+// its own.
+Bytes asPhotoshop16(const Bytes &file)
+{
+    Reader r(file);
+    r.skip(26);
+    r.skip(r.u32());                                           // colour mode data
+    r.skip(r.u32());                                           // resources
+    const std::size_t   section = r.pos();
+    const std::uint32_t length = r.u32(), info = r.u32();
+    EXPECT_EQ(length, 4 + info + 4) << "an empty global layer mask, nothing more";
+    Bytes layers(file.begin() + std::ptrdiff_t(r.pos()), file.begin() + std::ptrdiff_t(r.pos() + info));
+    if (layers.size() % 4 == 0) layers.resize(layers.size() + 2);   // so the block is padded past its length
+    const Bytes content = be32(0) + be32(0) + tagged("Lr16", layers)    // layer info, global mask, the block
+                          + Bytes(2, 0) + tagged("Patt", {});
+    return Bytes(file.begin(), file.begin() + std::ptrdiff_t(section)) + be32(content.size()) + content
+           + Bytes(file.begin() + std::ptrdiff_t(section + 4 + length), file.end());
+}
+
+} // namespace
+
+// 16 bits: samples in host order, written big-endian; read back by the reader at depth 16, as a
+// document, and from Photoshop's layout, where the layers sit in 'Lr16'.
+TEST(MinipsdWriterTest, SixteenBitDocumentsAreWrittenAndReadBack)
+{
+    const std::uint32_t w = 6, h = 4;
+    std::vector<std::uint16_t> px(std::size_t(5) * 3 * 4), ramp(std::size_t(4) * 2);
+    for (std::size_t i = 0; i < px.size(); ++i) px[i] = static_cast<std::uint16_t>(i * 2111 + (i % 4 == 3 ? 30000 : 0));
+    for (std::size_t i = 0; i < ramp.size(); ++i) ramp[i] = static_cast<std::uint16_t>(i * 9000 + 1);
+    const auto bytes = [](const std::vector<std::uint16_t> &v) { return reinterpret_cast<const std::uint8_t *>(v.data()); };
+    const minipsd_mask mask{.top = 1, .left = 1, .bottom = 3, .right = 5, .color = 255, .pixels = bytes(ramp)};
+    const minipsd_layer layers[2] = {
+        {.name = "Deep", .rgba = bytes(px), .opacity = 200, .top = 1, .left = 1, .bottom = 4, .right = 6, .mask = &mask},
+        {.name = "Empty", .opacity = 255}};
+    for (int compression : {MINIPSD_RLE, MINIPSD_RAW}) {
+        SCOPED_TRACE(compression);
+        minipsd_doc d = docOf(w, h, layers, 2);
+        d.compression = compression;
+        d.depth = 16;
+        const Bytes file = write(d);
+        EXPECT_EQ(pull(d, 7), file);
+        EXPECT_EQ(pullTotal(d), file.size());
+
+        // Through the reader: the samples as given, at depth 16 only.
+        auto check = [&](const Bytes &f) {
+            Bytes workspace(256);
+            minipsd_reader *r = nullptr;
+            minipsd_info info{};
+            ASSERT_EQ(minipsd_reader_init(&r, f.data(), f.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
+            EXPECT_EQ(info.depth, 16);
+            ASSERT_EQ(info.layer_count, 2u);
+            minipsd_layer_view v;
+            ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
+            std::vector<std::uint16_t> got(px.size()), gotMask(ramp.size());
+            minipsd_target t;
+            minipsd_target_rgba16(&t, got.data(), 5 * 8);
+            minipsd_decode_opts deep{0, 0, 0, 16};
+            EXPECT_EQ(minipsd_decode_layer(r, &v, &t, &deep), MINIPSD_OK);
+            EXPECT_EQ(got, px);
+            const minipsd_plane plane{reinterpret_cast<std::uint8_t *>(gotMask.data()), 2, 8};
+            ASSERT_TRUE(v.has_mask);
+            EXPECT_EQ(minipsd_decode_mask(r, &v, &plane, &deep), MINIPSD_OK);
+            EXPECT_EQ(gotMask, ramp);
+            EXPECT_EQ(minipsd_decode_layer(r, &v, &t, nullptr), MINIPSD_ERR_UNSUPPORTED) << "8-bit samples from a 16-bit file";
+            deep.depth = 12;
+            EXPECT_EQ(minipsd_decode_layer(r, &v, &t, &deep), MINIPSD_ERR_ARG);
+            // The composite: the layer at opacity 200 over nothing, un-matted within the bound.
+            std::vector<std::uint16_t> canvas(std::size_t(w) * h * 4);
+            minipsd_target_rgba16(&t, canvas.data(), w * 8);
+            deep.depth = 16;
+            ASSERT_EQ(minipsd_decode_composite(r, &t, &deep), MINIPSD_OK);
+            const std::uint16_t *in = &px[0], *out = &canvas[(std::size_t(1) * w + 1) * 4];   // the layer's top-left pixel
+            EXPECT_NEAR(out[3], in[3] * 200.0 / 255.0, 1.0);
+            EXPECT_NEAR(out[0], in[0], 1 + 65535 / (2 * out[3]));
+        };
+        check(file);
+
+        // As a document, decoded or stored: the same bytes.  A stored layer without transparency
+        // gets an opaque one.
+        for (int keep : {0, 1}) {
+            const minipsd_read_opts opts{keep};
+            minipsd_doc *back = nullptr;
+            std::uint32_t lost = 99;
+            ASSERT_EQ(minipsd_read(file.data(), file.size(), nullptr, &opts, &back, &lost), MINIPSD_OK);
+            EXPECT_EQ(lost, 0u);
+            EXPECT_EQ(back->depth, 16);
+            EXPECT_EQ(write(*back), file) << "stored " << keep;
+            if (keep) {
+                std::vector<minipsd_bytes> channels(back->layers[0].stored, back->layers[0].stored + 4);
+                channels[MINIPSD_CH_A] = {};
+                std::vector<minipsd_layer> edited(back->layers, back->layers + 2);
+                edited[0].stored = channels.data();
+                minipsd_doc e = *back;
+                e.layers = edited.data();
+                minipsd_doc *opaque = nullptr;
+                const Bytes f = write(e);
+                ASSERT_EQ(minipsd_read(f.data(), f.size(), nullptr, nullptr, &opaque, nullptr), MINIPSD_OK);
+                const auto *got = reinterpret_cast<const std::uint16_t *>(opaque->layers[0].rgba);
+                for (std::size_t i = 0; i < px.size(); ++i) ASSERT_EQ(got[i], i % 4 == 3 ? 65535 : px[i]) << i;
+                minipsd_doc_free(opaque);
+            }
+            minipsd_doc_free(back);
+        }
+
+        // Photoshop's layout reads as the same layers; as a document, 'Lr16' and its padding leave
+        // the tail, the block after it stays, and the layers go back to the layer info.
+        const Bytes photoshop = asPhotoshop16(file);
+        check(photoshop);
+        minipsd_doc *back = nullptr;
+        ASSERT_EQ(minipsd_read(photoshop.data(), photoshop.size(), nullptr, nullptr, &back, nullptr), MINIPSD_OK);
+        EXPECT_EQ(Bytes(back->layer_tail.data, back->layer_tail.data + back->layer_tail.size), be32(0) + tagged("Patt", {}));
+        const Bytes again = write(*back);
+        check(again);
+        back->layer_tail = {};
+        EXPECT_EQ(write(*back), file) << "without the kept block: minipsd's file again";
+        minipsd_doc_free(back);
+    }
+
+    minipsd_doc d = docOf(w, h, layers, 2);
+    d.depth = 12;
+    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_ARG);
 }
 
 TEST(MinipsdWriterTest, PassThroughEncodesOnlyTheLayerThatChanged)
