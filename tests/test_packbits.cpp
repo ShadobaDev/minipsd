@@ -103,11 +103,11 @@ TEST(MinipsdPackbitsTest, SixteenBitSamplesGoOutBigEndian)
     std::vector<std::uint16_t> back(w * 4, 0xEEEE);
     auto *out = reinterpret_cast<std::uint8_t *>(back.data());
     for (int k = 0; k < 4; ++k) {
-        const Bytes packed = pack(bytes + 2 * k, 2 * w, 8, 1);
+        const Bytes packed = pack(bytes + std::ptrdiff_t(2) * k, 2 * w, 8, 1);
         Bytes big;   // what the file holds, unpacked: each sample high byte first
         for (std::size_t x = 0; x < w; ++x) { big.push_back(px[x * 4 + k] >> 8); big.push_back(px[x * 4 + k] & 0xFF); }
         EXPECT_EQ(unpackAll(packed, 2 * w), big) << "channel " << k;
-        ASSERT_EQ(mpsd__unpackbits(packed.data(), packed.size(), out + 2 * k, 8, static_cast<std::uint32_t>(2 * w), 1), 1) << k;
+        ASSERT_EQ(mpsd__unpackbits(packed.data(), packed.size(), out + std::ptrdiff_t(2) * k, 8, static_cast<std::uint32_t>(2 * w), 1), 1) << k;
     }
     EXPECT_EQ(back, px);
     EXPECT_EQ(pack(bytes + 4, 2 * w, 8, 1).size(), 8u) << "400 zero bytes: four repeats";

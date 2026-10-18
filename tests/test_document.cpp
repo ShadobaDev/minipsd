@@ -138,6 +138,13 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
     EXPECT_EQ(masked({.top = 2, .left = 0, .bottom = 1, .right = 2, .pixels = two}), MINIPSD_ERR_ARG) << "inverted";
     EXPECT_EQ(masked({.top = 0, .left = 0, .bottom = 1, .right = MINIPSD_MAX_SIDE + 1, .pixels = two}), MINIPSD_ERR_SIZE);
     EXPECT_EQ(masked({.top = 0, .left = 0, .bottom = 2, .right = 2, .stored = {two, 4}}), MINIPSD_ERR_ARG) << "stored rows short";
+    const std::uint8_t raw[6] = {0, 0, 1, 2, 3, 4}, countless[4] = {0, 1, 0, 0};
+    EXPECT_EQ(masked({.top = 0, .left = 0, .bottom = 2, .right = 2, .stored = {raw, 6}}), MINIPSD_OK) << "stored raw rows";
+    EXPECT_EQ(masked({.top = 0, .left = 0, .bottom = 2, .right = 2, .stored = {countless, 4}}), MINIPSD_ERR_ARG) << "RLE without its row counts";
+    EXPECT_EQ(masked({.top = 0, .left = 0, .bottom = 2, .right = 2, .stored = {nullptr, 6}}), MINIPSD_ERR_ARG) << "a size without data";
+    EXPECT_EQ(masked({.top = 0, .left = 0, .bottom = MINIPSD_MAX_SIDE + 1, .right = 1, .pixels = two}), MINIPSD_ERR_SIZE);
+    EXPECT_EQ(masked({.top = 0, .left = 0, .bottom = 0, .right = 0, .rest = {nullptr, 2}}), MINIPSD_ERR_ARG) << "rest without data";
+    EXPECT_EQ(masked({.top = 0, .left = 0, .bottom = 0, .right = 0, .real = {two, 1}}), MINIPSD_ERR_ARG) << "a real mask without its marker";
 
     // The resources' length is 32-bit; the ICC size alone decides it, so no ICC byte is read and a
     // 4-byte buffer stands in for 4 GiB.

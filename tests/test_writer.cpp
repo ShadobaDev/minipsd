@@ -199,7 +199,7 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     ASSERT_EQ(minipsd_reader_init(&r, file.data(), file.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
     EXPECT_EQ(Bytes(info.icc.data, info.icc.data + info.icc.size), icc) << "icc wins over a kept 1039";
     EXPECT_EQ(Bytes(info.layer_tail.data, info.layer_tail.data + info.layer_tail.size), tail);
-    minipsd_resource res;
+    minipsd_resource res{};
     std::vector<int> ids;
     while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE) {
         ids.push_back(res.id);
@@ -279,6 +279,43 @@ TEST(MinipsdWriterTest, GroupsAndMasksAreWritten)
         ASSERT_EQ(minipsd_decode_mask(r, &v[1], &plane, nullptr), MINIPSD_OK);
         EXPECT_EQ(got, ramp);
         EXPECT_EQ(minipsd_decode_mask(r, &v[0], &plane, nullptr), MINIPSD_ERR_ARG) << "no mask";
+        const minipsd_decode_opts deep{0, 0, 0, 16};
+        EXPECT_EQ(minipsd_decode_mask(r, &v[1], &plane, &deep), MINIPSD_ERR_UNSUPPORTED) << "16-bit samples from an 8-bit file";
+
+        // A mask's refusals, as a layer's, before a sample is written; a band of one row.
+        EXPECT_EQ(minipsd_decode_mask(nullptr, &v[1], &plane, nullptr), MINIPSD_ERR_ARG);
+        EXPECT_EQ(minipsd_decode_mask(r, &v[1], nullptr, nullptr), MINIPSD_ERR_ARG);
+        const minipsd_decode_opts past{4, 0, 0}, tooMany{1, 3, 0}, oneRow{1, 1, 0};
+        EXPECT_EQ(minipsd_decode_mask(r, &v[1], &plane, &past), MINIPSD_ERR_ARG);
+        EXPECT_EQ(minipsd_decode_mask(r, &v[1], &plane, &tooMany), MINIPSD_ERR_ARG);
+        Bytes row(5, 0xEE);
+        const minipsd_plane rowPlane{row.data(), 1, 5};
+        EXPECT_EQ(minipsd_decode_mask(r, &v[1], &rowPlane, &oneRow), MINIPSD_OK);
+        EXPECT_EQ(row, Bytes(ramp.begin() + 5, ramp.begin() + 10));
+        const minipsd_plane nowhere{nullptr, 1, 5};
+        EXPECT_EQ(minipsd_decode_mask(r, &v[1], &nowhere, nullptr), MINIPSD_ERR_ARG) << "samples to write, no memory";
+        {
+            Bytes ws(256);
+            minipsd_reader *lr = nullptr;
+            minipsd_limits lim{};
+            lim.max_decoded_bytes = 14;   // 15 mask samples
+            minipsd_layer_view lv;
+            ASSERT_EQ(minipsd_reader_init(&lr, file.data(), file.size(), ws.data(), ws.size(), &lim, &info), MINIPSD_OK);
+            ASSERT_EQ(minipsd_reader_next_layer(lr, &lv), MINIPSD_MORE);
+            ASSERT_EQ(minipsd_reader_next_layer(lr, &lv), MINIPSD_MORE);
+            EXPECT_EQ(minipsd_decode_mask(lr, &lv, &plane, nullptr), MINIPSD_ERR_LIMIT);
+        }
+        {   // the mask's channel marked ZIP: described, not decoded
+            Bytes zip = file;
+            zip[static_cast<std::size_t>(v[1].mask_offset) + 1] = 2;
+            Bytes ws(256);
+            minipsd_reader *zr = nullptr;
+            minipsd_layer_view zv;
+            ASSERT_EQ(minipsd_reader_init(&zr, zip.data(), zip.size(), ws.data(), ws.size(), nullptr, &info), MINIPSD_OK);
+            ASSERT_EQ(minipsd_reader_next_layer(zr, &zv), MINIPSD_MORE);
+            ASSERT_EQ(minipsd_reader_next_layer(zr, &zv), MINIPSD_MORE);
+            EXPECT_EQ(minipsd_decode_mask(zr, &zv, &plane, nullptr), MINIPSD_ERR_UNSUPPORTED);
+        }
         EXPECT_EQ(v[1].other_channels, 0);
 
         // Read back as a document and written again: the same bytes, and the same with stored.
@@ -317,6 +354,32 @@ TEST(MinipsdWriterTest, GroupsAndMasksAreWritten)
     minipsd_layer_view v;
     ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
     EXPECT_EQ(Bytes(v.mask.real.data, v.mask.real.data + v.mask.real.size), realRaw);
+}
+
+// Rectangles without area: stored channels without transparency, and a mask with pixels.  Each
+// channel goes out as its compression marker alone, no rows.
+TEST(MinipsdWriterTest, ChannelsOverNoAreaHaveNoRows)
+{
+    const Bytes marker = {0, 0}, canvas(std::size_t(2) * 2 * 4, 255), px = testImage(2, 2);
+    const minipsd_bytes stored[4] = {view(marker), view(marker), view(marker), {}};
+    const std::uint8_t two[4] = {1, 2, 3, 4};
+    const minipsd_mask noArea{.pixels = two};
+    const minipsd_layer layers[2] = {
+        {.name = "Stored", .opacity = 255, .top = 0, .left = 0, .bottom = 0, .right = 2, .stored = stored},
+        {.name = "Masked", .rgba = px.data(), .opacity = 255, .mask = &noArea}};
+    minipsd_doc d = docOf(2, 2, layers, 2);
+    d.composite = canvas.data();
+    const Bytes file = write(d);
+    Bytes workspace(256);
+    minipsd_reader *r = nullptr;
+    minipsd_info info{};
+    ASSERT_EQ(minipsd_reader_init(&r, file.data(), file.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
+    minipsd_layer_view v;
+    ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
+    EXPECT_EQ(v.channel[MINIPSD_CH_A].size, 2u) << "an opaque transparency, with no rows to fill";
+    ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
+    ASSERT_TRUE(v.has_mask);
+    EXPECT_EQ(v.mask.stored.size, 2u) << "the mask's pixels have no area to cover";
 }
 
 namespace {
@@ -383,7 +446,7 @@ TEST(MinipsdWriterTest, SixteenBitDocumentsAreWrittenAndReadBack)
             ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
             std::vector<std::uint16_t> got(px.size()), gotMask(ramp.size());
             minipsd_target t;
-            minipsd_target_rgba16(&t, got.data(), 5 * 8);
+            minipsd_target_rgba16(&t, got.data(), std::size_t(5) * 8);
             minipsd_decode_opts deep{0, 0, 0, 16};
             EXPECT_EQ(minipsd_decode_layer(r, &v, &t, &deep), MINIPSD_OK);
             EXPECT_EQ(got, px);
@@ -394,14 +457,16 @@ TEST(MinipsdWriterTest, SixteenBitDocumentsAreWrittenAndReadBack)
             EXPECT_EQ(minipsd_decode_layer(r, &v, &t, nullptr), MINIPSD_ERR_UNSUPPORTED) << "8-bit samples from a 16-bit file";
             deep.depth = 12;
             EXPECT_EQ(minipsd_decode_layer(r, &v, &t, &deep), MINIPSD_ERR_ARG);
+            EXPECT_EQ(minipsd_decode_mask(r, &v, &plane, &deep), MINIPSD_ERR_ARG);
+            EXPECT_EQ(minipsd_decode_composite(r, &t, &deep), MINIPSD_ERR_ARG);
             // The composite: the layer at opacity 200 over nothing, un-matted within the bound.
             std::vector<std::uint16_t> canvas(std::size_t(w) * h * 4);
-            minipsd_target_rgba16(&t, canvas.data(), w * 8);
+            minipsd_target_rgba16(&t, canvas.data(), std::size_t(w) * 8);
             deep.depth = 16;
             ASSERT_EQ(minipsd_decode_composite(r, &t, &deep), MINIPSD_OK);
             const std::uint16_t *in = &px[0], *out = &canvas[(std::size_t(1) * w + 1) * 4];   // the layer's top-left pixel
             EXPECT_NEAR(out[3], in[3] * 200.0 / 255.0, 1.0);
-            EXPECT_NEAR(out[0], in[0], 1 + 65535 / (2 * out[3]));
+            EXPECT_NEAR(out[0], in[0], 1.0 + 65535.0 / (2.0 * out[3]));
         };
         check(file);
 

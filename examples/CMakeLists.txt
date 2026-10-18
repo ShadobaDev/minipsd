@@ -68,7 +68,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 # read_file: on what write_memory wrote, and on every PSD from other programs (tests/data,
-# committed; tests/fixtures, local only).  A layer or composite that fails to decode fails it.
+# committed; tests/fixtures, local only, unless MINIPSD_TEST_FIXTURES is off).  A layer or
+# composite that fails to decode fails it.
 set_tests_properties(example.write_memory PROPERTIES FIXTURES_SETUP minipsd-example-psd)
 add_test(NAME example.read_file COMMAND read_file "${CMAKE_CURRENT_BINARY_DIR}/out-write_memory/out.psd")
 set_tests_properties(example.read_file PROPERTIES
@@ -83,7 +84,11 @@ composite:
 ]*
 as a document: everything kept"
     FAIL_REGULAR_EXPRESSION "not decoded")
-file(GLOB _other_psds "${PROJECT_SOURCE_DIR}/tests/data/*.psd" "${PROJECT_SOURCE_DIR}/tests/fixtures/*.psd")
+file(GLOB _other_psds "${PROJECT_SOURCE_DIR}/tests/data/*.psd")
+if(_minipsd_fixtures)
+    file(GLOB _local_psds "${_minipsd_fixtures}/*.psd")
+    list(APPEND _other_psds ${_local_psds})
+endif()
 foreach(_psd IN LISTS _other_psds)
     get_filename_component(_name "${_psd}" NAME_WE)
     add_test(NAME example.read_file.${_name} COMMAND read_file "${_psd}")

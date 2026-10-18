@@ -9,6 +9,8 @@
 
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
+#include <utility>
 
 namespace {
 int g_allocs_left = -1;   // allocations that still succeed; -1: all of them
@@ -48,5 +50,25 @@ TEST(MinipsdAllocTest, EachFailedAllocationIsReported)
     g_allocs_left = 1;
     const int rc = minipsd_write(&d, count, &size);
     EXPECT_EQ(rc, MINIPSD_OK) << "one allocation is all a write needs: " << minipsd_error_string(rc);
+
+    // minipsd_read: one allocation, the document's block.  Fail it.
+    unsigned char file[1024];
+    std::size_t   n = 0;
+    const auto into = [](void *user, const void *data, std::size_t len) -> int {
+        auto *out = static_cast<std::pair<unsigned char *, std::size_t *> *>(user);
+        std::memcpy(out->first + *out->second, data, len);
+        *out->second += len;
+        return 1;
+    };
+    std::pair<unsigned char *, std::size_t *> sink{file, &n};
+    g_allocs_left = -1;
+    ASSERT_EQ(minipsd_write(&d, into, &sink), MINIPSD_OK);
+    minipsd_doc *doc = reinterpret_cast<minipsd_doc *>(1);
+    g_allocs_left = 0;
+    EXPECT_EQ(minipsd_read(file, n, nullptr, nullptr, &doc, nullptr), MINIPSD_ERR_ALLOC);
+    EXPECT_EQ(doc, nullptr);
+    g_allocs_left = 1;
+    ASSERT_EQ(minipsd_read(file, n, nullptr, nullptr, &doc, nullptr), MINIPSD_OK) << "one allocation is all a read needs";
+    minipsd_doc_free(doc);
     g_allocs_left = -1;
 }

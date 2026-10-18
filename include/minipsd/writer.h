@@ -380,7 +380,8 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *d)
         int k;
         if (w < 0 || h < 0 || (!l->rgba && !l->stored && w && h)) return MINIPSD_ERR_ARG;
         if (w > MINIPSD_MAX_SIDE || h > MINIPSD_MAX_SIDE) return MINIPSD_ERR_SIZE;
-        if (l->mask && (rc = mpsd__mask_ok(l->mask, mpsd__doc_wide(d))) != MINIPSD_OK) return rc;
+        rc = l->mask ? mpsd__mask_ok(l->mask, mpsd__doc_wide(d)) : MINIPSD_OK;
+        if (rc != MINIPSD_OK) return rc;
         if (mpsd__layer_extra_size(l) > MPSD__MAX_SECTION) return MINIPSD_ERR_SIZE;
         if (!l->stored) continue;
         if (!l->rgba && !d->composite) return MINIPSD_ERR_ARG;   /* nothing to compose it from */

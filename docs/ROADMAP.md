@@ -39,6 +39,7 @@ The order of work from 0.1.0 to the design in [CODE-ARCH.md](CODE-ARCH.md). Case
 | [5. Round trip and conveniences](#5-round-trip-and-conveniences) | layer rectangles, full import, cheap re-save, kept unknown content | batched, when decided |
 | [6. Format features](#6-format-features) | blend modes, groups, masks, 16-bit, PSB | batched, when decided |
 | [7. Interoperability](#7-interoperability) | libvips | batched, when decided |
+| [8. Test quality](#8-test-quality) | branch coverage of compound conditions | with any release |
 | [Not scheduled](#not-scheduled) | large cases, only on real demand | — |
 
 ---
@@ -308,6 +309,21 @@ feature; a supplied composite needs nothing. See
       [Working with libvips](SPECIFICATION.md#working-with-libvips)), then written with it;
       built and run only when pkg-config finds `vips`. A "With libvips" chapter in
       [MANUAL.md](MANUAL.md).
+
+## 8. Test quality
+
+- [ ] **S8.1** Branch coverage of compound conditions: each operand of an `&&` / `||` taken on its
+      own, where today only the main path is tested. The list as gcovr gives it (CI's
+      `linux-coverage`, "Missing" with `--txt-metric branch`): blend keys with a zero first byte
+      (`writer.h`, the group mode and the record's key); `lsct` blocks shorter than 4 bytes or of
+      another kind than the layer's; `flags` with 0x02 and `hidden` 0; a kept 1005 not 16 bytes
+      long; a resource name with a size and no data; mask and `stored` combinations without area;
+      each header field refused on its own (a version 0 or 3 among them); each NULL argument of
+      `minipsd_decode_mask`; `minipsd_read` over its limit through a layer rather than the
+      composite.
+      *Done when:* those lines leave gcovr's "Missing" column. What stays there is unreachable by
+      construction (the second pass of `mpsd__read`, a block above `SIZE_MAX` on 64 bits, a
+      `malloc` that does not align), which puts the ceiling at about 97-98 %.
 
 ## Not scheduled
 

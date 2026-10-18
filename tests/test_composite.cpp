@@ -96,12 +96,12 @@ TEST(MinipsdCompositeTest, ALayerBlendsAtItsRectangleClippedToTheCanvas)
     const Bytes px = {1, 2, 3, 255,  4, 5, 6, 255,
                       7, 8, 9, 255,  10, 11, 12, 255};
     const minipsd_layer edge{.name = "Edge", .rgba = px.data(), .opacity = 255, .top = -1, .left = 3, .bottom = 1, .right = 5};
-    Bytes want(4 * 3 * 4, 0);
-    std::copy(px.begin() + 8, px.begin() + 12, want.begin() + 3 * 4);
+    Bytes want(std::size_t(4) * 3 * 4, 0);
+    std::copy(px.begin() + 8, px.begin() + 12, want.begin() + std::ptrdiff_t(3) * 4);
     EXPECT_EQ(composite(4, 3, &edge, 1), matted(want));
 
     const minipsd_layer outside{.name = "Out", .rgba = px.data(), .opacity = 255, .top = 3, .left = -2, .bottom = 5, .right = 0};
-    EXPECT_EQ(composite(4, 3, &outside, 1), matted(Bytes(4 * 3 * 4, 0))) << "wholly off the canvas: nothing";
+    EXPECT_EQ(composite(4, 3, &outside, 1), matted(Bytes(std::size_t(4) * 3 * 4, 0))) << "wholly off the canvas: nothing";
 }
 
 TEST(MinipsdCompositeTest, UnmattingUndoesTheMatteWithinItsRounding)

@@ -235,41 +235,41 @@ typedef struct minipsd_mask {
  * Every pointer is borrowed: it must stay valid for the duration of the write call, and minipsd
  * never frees or copies what it points to.
  */
-typedef struct minipsd_layer {
-    const char    *name;    /*!< UTF-8; NULL means "".                                            */
-    const uint8_t *rgba;    /*!< (right - left) * (bottom - top) * 4 samples, rows top down, straight
-                                 (not premultiplied) alpha; NULL means an empty layer.  A sample is
-                                 a byte, or with depth 16 a uint16_t in host order (two bytes).  */
-    uint8_t        opacity; /*!< 255 is opaque, 0 is fully transparent.                            */
-    uint8_t        hidden;  /*!< Non-zero: the layer starts hidden (and stays out of the composite). */
+typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Padding): fields are only added at the end */
+    const char    *name;        /*!< UTF-8; NULL means "".                                            */
+    const uint8_t *rgba;        /*!< (right - left) * (bottom - top) * 4 samples, rows top down, straight
+                                    (not premultiplied) alpha; NULL means an empty layer.  A sample is
+                                    a byte, or with depth 16 a uint16_t in host order (two bytes).  */
+    uint8_t        opacity;     /*!< 255 is opaque, 0 is fully transparent.                            */
+    uint8_t        hidden;      /*!< Non-zero: the layer starts hidden (and stays out of the composite). */
     int32_t        top, left, bottom, right; /*!< The layer's rectangle on the canvas, as in
-                                 minipsd_layer_view; all four zero: the full canvas.  It may reach
-                                 past the canvas, or lie wholly outside it.  An empty layer's has
-                                 no area.                                                       */
-    char           blend[4]; /*!< The blend mode's four-character key, such as "mul "; all zero:
-                                 "norm".  Written as given; the composed composite draws every
-                                 mode as normal.                                                */
-    uint8_t        clipping; /*!< Non-zero: clipped to the layer below.  Written as given.        */
-    uint8_t        flags;    /*!< The record's other flag bits, written as given: 0x01 transparency
-                                 locked, 0x08 and 0x10 pixel data irrelevant (groups' markers).
-                                 Bit 0x02 is ignored: hidden says it.                           */
-    minipsd_bytes  extra;    /*!< Additional-information blocks kept from a file (text, effects,
-                                 groups, ...), as minipsd_layer_view.extra holds them: written
-                                 after the layer's own name, except a 'luni' block, since name
-                                 wins.                                                          */
+                                    minipsd_layer_view; all four zero: the full canvas.  It may reach
+                                    past the canvas, or lie wholly outside it.  An empty layer's has
+                                    no area.                                                       */
+    char           blend[4];    /*!< The blend mode's four-character key, such as "mul "; all zero:
+                                    "norm".  Written as given; the composed composite draws every
+                                    mode as normal.                                                */
+    uint8_t        clipping;    /*!< Non-zero: clipped to the layer below.  Written as given.        */
+    uint8_t        flags;       /*!< The record's other flag bits, written as given: 0x01 transparency
+                                    locked, 0x08 and 0x10 pixel data irrelevant (groups' markers).
+                                    Bit 0x02 is ignored: hidden says it.                           */
+    minipsd_bytes  extra;       /*!< Additional-information blocks kept from a file (text, effects,
+                                    groups, ...), as minipsd_layer_view.extra holds them: written
+                                     after the layer's own name, except a 'luni' block, since name
+                                    wins.                                                          */
     const minipsd_bytes *stored; /*!< NULL: rgba is encoded.  Otherwise four channels as a file
-                                 stores them (R, G, B, transparency, as minipsd_layer_view.channel:
-                                 the compression marker, then the rows), copied as they are
-                                 instead of encoding rgba: a layer never decoded is never encoded
-                                 again.  Each is checked against the rectangle; transparency of
-                                 size 0 is none, written opaque.  rgba may then be NULL, as long
-                                 as the document supplies its composite.                       */
-    uint8_t        kind;     /*!< MINIPSD_KIND_*: a layer, or a group's top record or divider.
-                                 Groups nest bottom first: a divider, the group's layers, then
-                                 its top record, which carries the group's name, visibility and
-                                 mode (blend; zero: pass through).  Written as an 'lsct' block,
-                                 or a kept one of the same kind as it is.                       */
-    const minipsd_mask *mask; /*!< The layer mask; NULL: none.                                   */
+                                    stores them (R, G, B, transparency, as minipsd_layer_view.channel:
+                                    the compression marker, then the rows), copied as they are
+                                    instead of encoding rgba: a layer never decoded is never encoded
+                                    again.  Each is checked against the rectangle; transparency of
+                                     size 0 is none, written opaque.  rgba may then be NULL, as long
+                                    as the document supplies its composite.                       */
+    uint8_t        kind;        /*!< MINIPSD_KIND_*: a layer, or a group's top record or divider.
+                                    Groups nest bottom first: a divider, the group's layers, then
+                                    its top record, which carries the group's name, visibility and
+                                    mode (blend; zero: pass through).  Written as an 'lsct' block,
+                                    or a kept one of the same kind as it is.                       */
+    const minipsd_mask *mask;   /*!< The layer mask; NULL: none.                                   */
 } minipsd_layer;
 
 /**

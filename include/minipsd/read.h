@@ -54,10 +54,10 @@ static minipsd_bytes mpsd__copy(mpsd__arena *a, minipsd_bytes src)
    padded to four bytes past its length, as the reader walks it. */
 static minipsd_bytes mpsd__copy_tail(mpsd__arena *a, const minipsd_reader *r, minipsd_bytes tail)
 {
-    const uint64_t at = tail.data ? (uint64_t)(tail.data - r->data) : 0;
-    uint64_t       end;
-    minipsd_bytes  before, after, out;
-    if (!tail.data || r->li_start <= at || r->li_start > at + tail.size) return mpsd__copy(a, tail);
+    uint64_t      at, end;
+    minipsd_bytes before, after, out;
+    if (!tail.data || r->li_start <= (uint64_t)(tail.data - r->data)) return mpsd__copy(a, tail);
+    at  = (uint64_t)(tail.data - r->data);
     end = r->li_start - 2 + mpsd__pad((size_t)(r->li_end - (r->li_start - 2)), 4);   /* data: count, records, ... */
     if (end > at + tail.size) end = at + tail.size;
     before.data = tail.data;                                    /* the block: '8BIM', key, length, count */
@@ -122,7 +122,7 @@ static int mpsd__read_resources(minipsd_reader **r, const void *data, size_t siz
 static int mpsd__read(const void *data, size_t size, const minipsd_limits *limits, const minipsd_read_opts *opts,
                       mpsd__arena *a, minipsd_doc **out, uint32_t *lost)
 {
-    uint8_t             workspace[sizeof(minipsd_reader) + 2 * MPSD__ALIGN];
+    uint8_t             workspace[sizeof(minipsd_reader) + (size_t)2 * MPSD__ALIGN];
     minipsd_reader     *r;
     minipsd_info        info;
     minipsd_layer_view  v;

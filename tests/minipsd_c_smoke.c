@@ -131,13 +131,13 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
         minipsd_target      t;
         minipsd_decode_opts deep;
         smoke_buf           c;
-        for (i = 0; i < 3 * 2 * 4; ++i) px16[i] = (uint16_t)(px[i] * 257u);
+        for (i = 0; i < sizeof px16 / sizeof px16[0]; ++i) px16[i] = (uint16_t)(px[i] * 257u);
         layers[0].rgba = (const uint8_t *)px16;
         doc.depth      = 16;
         c.data = file; c.size = 0; c.capacity = sizeof file;
         memset(&deep, 0, sizeof deep);
         deep.depth = 16;
-        minipsd_target_rgba16(&t, got16, 3 * 8);
+        minipsd_target_rgba16(&t, got16, (size_t)3 * 8);
         if (minipsd_write(&doc, smoke_out, &c) != MINIPSD_OK
             || minipsd_reader_init(&rd, file, c.size, rws, sizeof rws, NULL, &info) != MINIPSD_OK || info.depth != 16
             || minipsd_reader_next_layer(rd, &lv) != MINIPSD_MORE

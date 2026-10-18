@@ -1618,7 +1618,7 @@ TEST(MinipsdReadTest, AFileBecomesADocumentThatStandsAlone)
         if (a.rgba) { EXPECT_EQ(Bytes(a.rgba, a.rgba + px.size()), px); }
     }
     EXPECT_EQ(r->composite_matted, 1);
-    EXPECT_EQ(Bytes(r->composite, r->composite + 7 * 4 * 4), read(original).composite) << "as stored";
+    EXPECT_EQ(Bytes(r->composite, r->composite + std::ptrdiff_t(7) * 4 * 4), read(original).composite) << "as stored";
     EXPECT_EQ(write(*r), original) << "written back: the same bytes";
 
     EXPECT_EQ(minipsd_read_into(original.data(), original.size(), nullptr, nullptr, nullptr, need, &r, nullptr), MINIPSD_ERR_ARG);
@@ -1646,6 +1646,32 @@ TEST(MinipsdReadTest, ItRefusesWhatTheReaderRefusesAndWhatItCannotHold)
     s.layers = {simpleRec()};
     s.count = -1;
     readDoc(build(s).bytes, &lost, MINIPSD_ERR_UNSUPPORTED);
+
+    // A layer the writer could not take back: a side above MINIPSD_MAX_SIDE, wide or tall.
+    for (const bool wide : {true, false}) {
+        Spec big;
+        Rec r = simpleRec();
+        (wide ? r.right : r.bottom) = MINIPSD_MAX_SIDE + 1;
+        big.layers = {r};
+        big.count = -1;
+        big.image = rawImage(4, 2, 2, 0);
+        readDoc(build(big).bytes, &lost, MINIPSD_ERR_UNSUPPORTED);
+    }
+
+    // A flat file over the limit: its image counts once as the composite, once as its layer.
+    Spec flat;
+    flat.channels = 3;
+    flat.count = 0;
+    flat.image = rawImage(3, 2, 2, 0);
+    minipsd_limits small{};
+    small.max_decoded_bytes = 2 * 2 * 4 * 2 - 1;
+    readDoc(build(flat).bytes, &lost, MINIPSD_ERR_LIMIT, &small);
+
+    // A file cut inside its layer tail: everything before it is read, then the composite is short.
+    Open o(file);
+    const auto tailEnd = static_cast<std::size_t>(o.info.layer_tail.data - o.blob.data()) + o.info.layer_tail.size;
+    readDoc(Bytes(file.begin(), file.begin() + std::ptrdiff_t(tailEnd - 1)), &lost, MINIPSD_ERR_SHORT);
+    EXPECT_EQ(minipsd_read(file.data(), file.size(), nullptr, nullptr, nullptr, &lost), MINIPSD_ERR_ARG);
 }
 
 TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
@@ -1665,6 +1691,126 @@ TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
     EXPECT_EQ(Bytes(d->layers[0].rgba, d->layers[0].rgba + 16), (Bytes{0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255,
                                                                      0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255}));
     EXPECT_EQ(minipsd_doc_check(d.get()), MINIPSD_OK) << "the writer takes it as it is";
+}
+
+// A flat 16-bit file: its one layer decoded at 16 bits, opaque as 65535.
+TEST(MinipsdReadTest, AFlat16BitFileIsOpaqueAt65535)
+{
+    Spec s;
+    s.channels = 3;
+    s.depth = 16;
+    s.count = 0;
+    s.image = rawImage(3, 4, 2, 0x40);   // 2 x 2 samples of two bytes: 0x4040
+    const Doc d = readDoc(build(s).bytes, nullptr);
+    ASSERT_TRUE(d);
+    EXPECT_EQ(d->depth, 16);
+    std::uint16_t px[4];
+    std::memcpy(px, d->layers[0].rgba, sizeof px);
+    EXPECT_EQ(px[0], 0x4040);
+    EXPECT_EQ(px[3], 65535);
+}
+
+// Layers kept in a global block, as Photoshop keeps them at 16 and 32 bits: found after the global
+// layer mask, behind other blocks, each padded to four past its length; the walk stops quietly at
+// what is not a block.  A document read from them leaves that block out of its tail.
+TEST(MinipsdReaderTest, LayersInAGlobalBlock)
+{
+    Out info;
+    info.u16(static_cast<unsigned>(std::int16_t(-1))).raw(record(simpleRec())).raw(channelData(simpleRec()));
+    Bytes layers = info.b;
+    layers.resize(layers.size() + (6 - layers.size() % 4) % 4);   // a length of 2 mod 4: padded past it
+    auto block = [](const char *sig, const char *key, std::uint32_t length, const Bytes &data) {
+        Out o;
+        o.str(sig).str(key).u32(length).raw(data);
+        return o.b;
+    };
+    auto cat = [](std::initializer_list<Bytes> parts) {
+        Out o;
+        for (const Bytes &p : parts) o.raw(p);
+        return o.b;
+    };
+    const Bytes mask(4, 0), pad(2, 0), patt = block("8BIM", "Patt", 0, {});
+    const auto n = static_cast<std::uint32_t>(layers.size());
+    struct Case {
+        const char *what;
+        Bytes       tail;
+        int         rc;
+        std::size_t layers;
+        Bytes       kept;   // the document's layer tail
+    };
+    const Case cases[] = {
+        {"behind another block", cat({mask, patt, block("8BIM", "Lr16", n, layers), pad, patt}), MINIPSD_OK, 1, cat({mask, patt, patt})},
+        {"'8B64', 'Lr32', last, its padding missing", cat({mask, block("8B64", "Lr32", n, layers)}), MINIPSD_OK, 1, mask},
+        {"empty", cat({mask, block("8BIM", "Lr16", 0, {})}), MINIPSD_OK, 0, {}},
+        {"one byte long", cat({mask, block("8BIM", "Lr16", 1, {0, 0, 0, 0})}), MINIPSD_ERR_FORMAT, 0, {}},
+        {"not a block", cat({mask, Bytes(12, 'x')}), MINIPSD_OK, 0, {}},
+        {"a block past the tail", cat({mask, block("8BIM", "Patt", 1000, {})}), MINIPSD_OK, 0, {}},
+        {"a tail too short for a global mask", Bytes(2, 0), MINIPSD_OK, 0, {}},
+    };
+    for (const Case &c : cases) {
+        SCOPED_TRACE(c.what);
+        Spec s;
+        s.hasRawSection = true;
+        s.rawLayerSection = cat({Out().u32(static_cast<std::uint32_t>(4 + c.tail.size())).u32(0).b, c.tail});
+        s.image = rawImage(4, 2, 2, 0x80);
+        const Built file = build(s);
+        Open o(file.bytes);
+        ASSERT_EQ(o.rc, c.rc);
+        if (c.rc != MINIPSD_OK) continue;
+        EXPECT_EQ(o.info.layer_count, c.layers);
+        minipsd_layer_view v;
+        if (c.layers) {
+            ASSERT_EQ(minipsd_reader_next_layer(o.r, &v), MINIPSD_MORE);
+            EXPECT_EQ(nameOf(v), "L");
+            Bytes px(std::size_t(2) * 2 * 4);
+            EXPECT_EQ(decodeRgba(o.r, v, 2, px), MINIPSD_OK);
+            const Doc d = readDoc(file.bytes, nullptr);
+            ASSERT_TRUE(d);
+            EXPECT_EQ(Bytes(d->layer_tail.data, d->layer_tail.data + d->layer_tail.size), c.kept);
+        }
+        EXPECT_EQ(minipsd_reader_next_layer(o.r, &v), MINIPSD_OK);
+
+        // A prefix ending in the global mask's length, then in a block's header: init asks for more.
+        const std::size_t tail = file.resourcesEnd + 8;
+        for (const std::size_t cut : {tail + 2, tail + 4 + 6}) {
+            if (cut >= tail + c.tail.size()) continue;
+            Open p(file.bytes, cut);
+            EXPECT_EQ(p.rc, MINIPSD_ERR_SHORT) << cut;
+        }
+    }
+}
+
+// What a record says about its mask and its kind, at the edges: an inverted mask rectangle comes
+// back empty, as a layer's; a mask with an area and no channel is malformed when decoded; an
+// 'lsct' too short or of an unknown type leaves a layer, and the first one that says a kind wins.
+TEST(MinipsdReaderTest, MaskAndKindAtTheEdges)
+{
+    auto maskData = [](std::int32_t top, std::int32_t left, std::int32_t bottom, std::int32_t right) {
+        Out o;
+        o.u32(static_cast<std::uint32_t>(top)).u32(static_cast<std::uint32_t>(left));
+        o.u32(static_cast<std::uint32_t>(bottom)).u32(static_cast<std::uint32_t>(right)).u8(255).u8(0).zeros(2);
+        return o.b;
+    };
+    Rec inverted = simpleRec();
+    inverted.mask = maskData(5, 6, 1, 2);
+    const OneLayer a(inverted);
+    ASSERT_TRUE(a.v.has_mask);
+    EXPECT_EQ(std::tie(a.v.mask.top, a.v.mask.left, a.v.mask.bottom, a.v.mask.right), std::make_tuple(5, 6, 5, 6));
+
+    Rec noChannel = simpleRec();
+    noChannel.mask = maskData(0, 0, 2, 2);
+    OneLayer b(noChannel);
+    Bytes plane(4);
+    const minipsd_plane p{plane.data(), 1, 2};
+    EXPECT_EQ(minipsd_decode_mask(b.o.r, &b.v, &p, nullptr), MINIPSD_ERR_FORMAT);
+
+    auto lsct = [](std::uint32_t type) { return block("lsct", Out().u32(type).b); };
+    Rec unknown = simpleRec();
+    unknown.blocks = Out().raw(block("lsct", {})).raw(lsct(7)).b;
+    EXPECT_EQ(OneLayer(unknown).v.kind, MINIPSD_KIND_LAYER) << "too short, then an unknown type";
+    Rec twice = simpleRec();
+    twice.blocks = Out().raw(lsct(MINIPSD_KIND_GROUP)).raw(lsct(MINIPSD_KIND_GROUP_END)).b;
+    EXPECT_EQ(OneLayer(twice).v.kind, MINIPSD_KIND_GROUP) << "the first kind";
 }
 
 TEST(MinipsdReadTest, LostSaysWhatTheDocumentCannotCarry)

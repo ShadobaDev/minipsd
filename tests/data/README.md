@@ -11,7 +11,8 @@ allows it. Keep them small (a few hundred KiB); every file is listed below.
 |---|---|---|---|---|
 
 Private files (your own projects) go to `tests/fixtures/` instead: the same tests read them, and
-git ignores that directory.
+git ignores that directory. `-DMINIPSD_TEST_FIXTURES=OFF` leaves them out; the `linux-coverage`
+preset does, so its coverage is the one CI measures.
 
 A larger set is fetched, not committed: configure with `-DMINIPSD_PSD_TOOLS_FILES=ON` and the same
 test also reads psd-tools' own test files (MIT; 279 PSDs from Photoshop and others: every colour
