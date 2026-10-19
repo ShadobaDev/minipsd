@@ -321,9 +321,11 @@ feature; a supplied composite needs nothing. See
         count's sign.
   - [x] **S6.7d** A layer without a transparency channel written without one.
   - [ ] **S6.7e** Names: the legacy name and `luni` kept as stored while the name is unchanged.
-  - [ ] **S6.7f** The record's rectangle and flags, the layer info's padding (Photoshop: 4, others
-        2 or none), the layer tail.
-  - [ ] **S6.7g** Layers in `Lr16`, files without layers, channel data re-encoded.
+  - [x] **S6.7f** An empty layer's channels kept as stored; the layer info's padding (Photoshop:
+        4, others 2 or none).
+  - [ ] **S6.7g** The record's inverted rectangle, the channels' order, a layer tail the file
+        does not have.
+  - [ ] **S6.7h** Layers in `Lr16`, files without layers.
 - [ ] **S6.8** Channels beyond RGBA (alpha and spot channels, of layers and of the composite)
       kept; until then `MINIPSD_LOST_CHANNELS`.
 - [ ] **S6.9** ZIP channels (compression 2, and 3 with prediction), Photoshop's 16- and 32-bit

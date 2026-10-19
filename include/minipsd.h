@@ -283,9 +283,9 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
     uint8_t        opacity;     /*!< 255 is opaque, 0 is fully transparent.                            */
     uint8_t        hidden;      /*!< Non-zero: the layer starts hidden (and stays out of the composite). */
     int32_t        top, left, bottom, right; /*!< The layer's rectangle on the canvas, as in
-                                    minipsd_layer_view; all four zero: the full canvas.  It may reach
-                                    past the canvas, or lie wholly outside it.  An empty layer's has
-                                    no area.                                                       */
+                                    minipsd_layer_view; all four zero, with rgba and no stored: the
+                                    full canvas.  It may reach past the canvas, or lie wholly
+                                    outside it.  An empty layer's has no area.                     */
     char           blend[4];    /*!< The blend mode's four-character key, such as "mul "; all zero:
                                     "norm".  Written as given; the composed composite draws every
                                     mode as normal.                                                */
@@ -371,6 +371,10 @@ typedef struct minipsd_doc {
                                               green, blue), or 4, the fourth transparency (the
                                               layer count is then written negative).  Ignored
                                               without composite_stored.                       */
+    uint8_t              layer_info_align; /*!< The layer info's length is padded to a multiple
+                                              of this: 0 or 2, even (the default); 4, as
+                                              Photoshop pads it; 1, not padded.  minipsd_read
+                                              sets the file's.                                 */
 } minipsd_doc;
 
 /**

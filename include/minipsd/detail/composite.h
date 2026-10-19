@@ -35,7 +35,7 @@ static mpsd__rect mpsd__layer_rect(const minipsd_doc *d, const minipsd_layer *l)
 {
     mpsd__rect r;
     r.top = l->top; r.left = l->left; r.bottom = l->bottom; r.right = l->right;
-    if ((l->rgba || l->stored) && !(r.top | r.left | r.bottom | r.right)) {
+    if (l->rgba && !l->stored && !(r.top | r.left | r.bottom | r.right)) {   /* stored: the file's own rectangle */
         r.bottom = (int32_t)d->height;
         r.right  = (int32_t)d->width;
     }

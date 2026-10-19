@@ -616,7 +616,8 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *d, const minipsd_write_opts 
     /* The dpi is stored as 16.16 fixed point: it must round to 1 .. 2^32 - 1.  NaN fails both. */
     res = d->dpi * MPSD__FIXED_ONE + 0.5;
     if (!d->layers || d->layer_count < 1 || d->layer_count > MPSD__MAX_LAYERS || !(res >= 1.0 && res < 4294967296.0)
-        || (d->depth != 0 && d->depth != 8 && d->depth != 16) || d->format > MINIPSD_PSB)
+        || (d->depth != 0 && d->depth != 8 && d->depth != 16) || d->format > MINIPSD_PSB
+        || (d->layer_info_align > 2 && d->layer_info_align != 4))
         return MINIPSD_ERR_ARG;
     rc = mpsd__kept_ok(d, out);
     if (rc != MINIPSD_OK) return rc;
@@ -666,7 +667,10 @@ static int mpsd__measure_layers(const minipsd_doc *d, unsigned psb, uint64_t *si
         for (k = (size_t)first; k < (size_t)n; ++k)
             *content += sizes[i * MPSD__CHANNELS + k] = mpsd__layer_channel_size(d, &d->layers[i], (int)k, psb);
     }
-    *info = (*content + 1) / 2 * 2;
+    {
+        const uint64_t align = d->layer_info_align ? d->layer_info_align : 2;   /* even by default */
+        *info = (*content + align - 1) / align * align;
+    }
     return mpsd__len_size(psb) + *info + mpsd__tail_size(d, psb) > mpsd__max_layers_section(psb) ? MINIPSD_ERR_SIZE : MINIPSD_OK;
 }
 

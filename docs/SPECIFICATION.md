@@ -283,6 +283,9 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
   - 1039 ICC profile, only when `icc` is set;
   - a later kept 1005 or 1039 goes: `dpi` and `icc` win;
   - a resource of odd length is padded to even.
+- **The layer info's padding:** its length padded to even, or as `layer_info_align` says: to 4,
+  as Photoshop pads it, or not at all; `minipsd_read` finds the file's (the strictest rule its
+  length fits).
 - **After the layer info:** the kept `layer_tail` (global layer mask, global blocks) as it is,
   or an empty global layer mask.
 - **Compression:** PackBits RLE (runs from 3 bytes, packets up to 128 bytes) or raw.

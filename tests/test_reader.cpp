@@ -2257,6 +2257,7 @@ void expectConvertsBack(const minipsd_doc &d)
     const Doc c = readDoc(converted, nullptr, MINIPSD_OK, nullptr, &keep);
     ASSERT_TRUE(c);
     EXPECT_EQ(c->format, other.format);
+    c->layer_info_align = d.layer_info_align;   // a length the other format padded may fit either rule
     EXPECT_EQ(write(*c, MINIPSD_OK, &back), as) << "into the other format and back: the same bytes";
 }
 

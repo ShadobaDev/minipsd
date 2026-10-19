@@ -274,6 +274,23 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     ASSERT_EQ(res.id, 1005);
     EXPECT_EQ(res.data.data[7], 1) << "shown in inches";
 
+    // The layer info's padding: none, even (the default) or Photoshop's 4; minipsd_read finds it
+    // again, so the file comes back as it was.
+    const minipsd_read_opts keep{1};
+    for (const std::uint8_t align : {std::uint8_t(1), std::uint8_t(2), std::uint8_t(4)}) {
+        SCOPED_TRACE(align);
+        d.layer_info_align = align;
+        const Bytes padded = write(d);
+        EXPECT_EQ(pull(d, 7), padded);
+        minipsd_doc *again = nullptr;
+        ASSERT_EQ(minipsd_read(padded.data(), padded.size(), nullptr, &keep, &again, nullptr), MINIPSD_OK);
+        EXPECT_EQ(write(*again), padded);
+        minipsd_doc_free(again);
+    }
+    d.layer_info_align = 3;
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG);
+    d.layer_info_align = 0;
+
     // No profile: a kept one goes with it.
     d.icc = nullptr; d.icc_size = 0;
     const Bytes noIcc = write(d);

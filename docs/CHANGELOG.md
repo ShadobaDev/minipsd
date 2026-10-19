@@ -82,6 +82,11 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   three. A supplied `composite` still wins.
 - A stored layer without a transparency channel is written without one, as its file has it,
   instead of with an opaque one.
+- `minipsd_read` with `opts->stored` keeps an empty layer's channels too (their compression
+  markers), and `layer_info_align` at the end of `minipsd_doc` keeps how the file pads its layer
+  info (Photoshop to 4 bytes, others to 2 or not at all); the writer pads as it says, even by
+  default. A layer's all-zero rectangle means the full canvas only with `rgba`: stored channels
+  take the rectangle as it is.
 
 ## [0.2.0] — 2026-10-15
 
