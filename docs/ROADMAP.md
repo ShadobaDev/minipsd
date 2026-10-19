@@ -323,11 +323,11 @@ feature; a supplied composite needs nothing. See
   - [x] **S6.7e** Names: the legacy name and `luni` kept as stored while the name is unchanged.
   - [x] **S6.7f** An empty layer's channels kept as stored; the layer info's padding (Photoshop:
         4, others 2 or none).
-  - [ ] **S6.7g** The record's inverted rectangle, the channels' order, a layer tail the file
-        does not have.
+  - [x] **S6.7g** An empty layer's inverted rectangle, a layer tail the file does not have.
   - [ ] **S6.7h** Layers in `Lr16`, files without layers.
 - [ ] **S6.8** Channels beyond RGBA (alpha and spot channels, of layers and of the composite)
-      kept; until then `MINIPSD_LOST_CHANNELS`.
+      kept, in the file's order (GIMP writes transparency last); until then
+      `MINIPSD_LOST_CHANNELS`.
 - [ ] **S6.9** ZIP channels (compression 2, and 3 with prediction), Photoshop's 16- and 32-bit
       layers, decoded through the caller's inflate: minipsd implements no deflate. A function
       pointer and its `user` at the end of `minipsd_decode_opts` (and of `minipsd_read_opts`, so

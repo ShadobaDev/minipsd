@@ -91,6 +91,10 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   name as stored, and while `name` still says what the file's names say, the legacy name and the
   kept `luni` are written as they are (another program's code page, a counted NUL); a renamed
   layer gets the writer's own.
+- With `opts->stored`, `minipsd_read` keeps an empty layer's rectangle as stored, inverted too
+  (Photoshop's fill layers), and a file whose layer and mask section ends with its layer info
+  (GIMP's) as such: `layer_tail` with data and no size, which the writer writes as nothing at
+  all. An inverted rectangle is refused only for a layer with `rgba`.
 
 ## [0.2.0] — 2026-10-15
 

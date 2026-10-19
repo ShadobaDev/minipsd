@@ -1776,6 +1776,38 @@ TEST(MinipsdReadTest, AStoredLayerWithoutTransparencyIsWrittenWithoutOne)
     }
 }
 
+// Photoshop's empty fill layer, its rectangle inverted, in a file that ends the layer and mask
+// section with the layer info, as GIMP's do: as stored, both come back as they were.
+TEST(MinipsdReadTest, AStoredFileKeepsAnInvertedRectangleAndNoLayerTail)
+{
+    Rec fill;
+    fill.bottom = -1;
+    fill.channels = {chan(-1, 2, 0), chan(0, 2, 0), chan(1, 2, 0), chan(2, 2, 0)};
+    fill.pascal = "Fill";
+    Out info;
+    info.u16(0xFFFF).raw(record(fill)).raw(channelData(fill));   // one layer, the composite with alpha
+    if (info.b.size() & 1) info.u8(0);
+    Spec s;
+    s.hasRawSection   = true;
+    s.rawLayerSection = Out().u32(static_cast<std::uint32_t>(4 + info.b.size())).u32(static_cast<std::uint32_t>(info.b.size())).raw(info.b).b;
+    s.image = rawImage(4, 2, 2, 0x80);
+    const Bytes file = build(s).bytes;
+    const minipsd_read_opts keep{1};
+    const Doc d = readDoc(file, nullptr, MINIPSD_OK, nullptr, &keep);
+    ASSERT_TRUE(d);
+    const minipsd_layer &l = d->layers[0];
+    EXPECT_EQ(std::tie(l.top, l.left, l.bottom, l.right), std::make_tuple(0, 0, -1, 0)) << "as stored";
+    EXPECT_EQ(d->layer_tail.size, 0u);
+    EXPECT_NE(d->layer_tail.data, nullptr) << "nothing at all, not an empty global mask";
+    EXPECT_EQ(write(*d), file) << "the same bytes";
+    d->layer_tail.data = nullptr;
+    EXPECT_EQ(write(*d).size(), file.size() + 4) << "cleared: an empty global layer mask";
+
+    const Doc decoded = readDoc(file, nullptr);
+    ASSERT_TRUE(decoded);
+    EXPECT_EQ(decoded->layers[0].bottom, 0) << "decoded: the reader's empty rectangle";
+}
+
 TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
 {
     Spec s;

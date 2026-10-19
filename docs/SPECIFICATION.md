@@ -289,7 +289,10 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
   as Photoshop pads it, or not at all; `minipsd_read` finds the file's (the strictest rule its
   length fits).
 - **After the layer info:** the kept `layer_tail` (global layer mask, global blocks) as it is,
-  or an empty global layer mask.
+  or an empty global layer mask; nothing at all for one with data and no size, as `minipsd_read`
+  keeps a file that ends the section with its layer info.
+- **An empty layer's rectangle** is written as given, inverted too, as a file stored it
+  (Photoshop's fill layers: 0, 0, -1, 0); `minipsd_read` keeps it so with `opts->stored`.
 - **Compression:** PackBits RLE (runs from 3 bytes, packets up to 128 bytes) or raw.
   Row byte counts are computed in a separate sizing pass, so output streams forward through the
   callback and never seeks back.

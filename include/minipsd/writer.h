@@ -504,7 +504,7 @@ static int mpsd__tail_out(mpsd__sink *s, const minipsd_doc *d, unsigned out)
     const minipsd_bytes t    = d->layer_tail;
     const unsigned      from = mpsd__doc_psb(d);
     size_t              at;
-    if (!t.size) { mpsd__u32(s, 0); return MINIPSD_OK; }
+    if (!t.size) { if (!t.data) mpsd__u32(s, 0); return MINIPSD_OK; }   /* data with no size: nothing at all */
     if (from == out || t.size < MPSD__LEN) { mpsd__put(s, t.data, t.size); return MINIPSD_OK; }   /* too short to hold a length */
     if (mpsd__get32(t.data) > t.size - MPSD__LEN) return MINIPSD_ERR_UNSUPPORTED;
     at = MPSD__LEN + mpsd__get32(t.data);
@@ -657,7 +657,7 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *d, const minipsd_write_opts 
         const minipsd_layer *l = &d->layers[i];
         const int64_t w = (int64_t)l->right - l->left, h = (int64_t)l->bottom - l->top;
         int k;
-        if (w < 0 || h < 0 || (!l->rgba && !l->stored && w && h)) return MINIPSD_ERR_ARG;
+        if (((w < 0 || h < 0) && l->rgba && !l->stored) || (!l->rgba && !l->stored && w > 0 && h > 0)) return MINIPSD_ERR_ARG;
         if (w > mpsd__max_side(out) || h > mpsd__max_side(out)) return MINIPSD_ERR_SIZE;
         rc = l->mask ? mpsd__mask_ok(d, l->mask, out) : MINIPSD_OK;
         for (k = MPSD__CH_MASK; rc == MINIPSD_OK && k < mpsd__channel_count(l); ++k) rc = mpsd__retable_ok(d, l, k, out);

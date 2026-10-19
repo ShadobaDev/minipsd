@@ -151,6 +151,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     if (rc != MINIPSD_OK) return rc;
 
     for (i = 0; i < info.layer_count; ++i) {
+        const uint64_t at = r->record_next;                     /* the record, its rectangle first */
         uint64_t       w, h;
         char          *name;
         minipsd_bytes  extra, pascal, copies[MPSD__RGBA], *stored = NULL;
@@ -212,6 +213,12 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         layers[i].hidden  = v.hidden;
         layers[i].top     = v.top;    layers[i].left  = v.left;
         layers[i].bottom  = v.bottom; layers[i].right = v.right;
+        if (stored && (v.bottom == v.top || v.right == v.left)) {   /* an empty one as stored, inverted too */
+            layers[i].top    = (int32_t)mpsd__get32(r->data + (size_t)at);
+            layers[i].left   = (int32_t)mpsd__get32(r->data + (size_t)at + 4);
+            layers[i].bottom = (int32_t)mpsd__get32(r->data + (size_t)at + 8);
+            layers[i].right  = (int32_t)mpsd__get32(r->data + (size_t)at + 12);
+        }
         memcpy(layers[i].blend, v.blend, 4);
         layers[i].clipping = v.clipping;
         layers[i].flags    = (uint8_t)(v.flags & ~MPSD__FLAG_HIDDEN);
@@ -262,6 +269,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     if (info.channels > 3u + (info.composite_has_alpha ? 1u : 0u))
         loss |= MINIPSD_LOST_CHANNELS;                          /* TODO(S6.8): alpha and spot channels */
     tail = mpsd__copy_tail(a, r, info.layer_tail);
+    if (info.layer_tail.data && !info.layer_tail.size) tail.data = (const uint8_t *)a->base;   /* nothing at all, as the file */
     if (info.icc.size) {
         uint8_t *icc = (uint8_t *)mpsd__take(a, info.icc.size, 0);
         if (icc) memcpy(icc, info.icc.data, info.icc.size);

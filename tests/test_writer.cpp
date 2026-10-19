@@ -120,6 +120,14 @@ TEST(MinipsdWriterTest, ALayerIsWrittenAtItsRectangle)
         EXPECT_TRUE(p.layers[3].rgba.empty());
         EXPECT_EQ(p.composite.size(), 8u * 4 * 4) << "the composite stays the canvas";
     }
+
+    // Inverted: an empty layer's, as a file stores it, is written as it is; a layer with pixels
+    // cannot have one.
+    minipsd_layer inverted[2] = {layers[0], {.name = "Fill", .opacity = 255, .bottom = -1}};
+    minipsd_doc d = docOf(8, 4, inverted, 2);
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK);
+    inverted[0].bottom = 0;
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG);
 }
 
 TEST(MinipsdWriterTest, ASuppliedCompositeIsMattedAndWrittenWithoutComposing)

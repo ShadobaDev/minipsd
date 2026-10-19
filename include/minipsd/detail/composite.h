@@ -41,7 +41,7 @@ static mpsd__rect mpsd__layer_rect(const minipsd_doc *d, const minipsd_layer *l)
     }
     r.width  = (uint32_t)((int64_t)r.right - r.left);
     r.height = (uint32_t)((int64_t)r.bottom - r.top);
-    if ((!l->rgba && !l->stored) || !r.width || !r.height) r.width = r.height = 0;
+    if ((!l->rgba && !l->stored) || r.right <= r.left || r.bottom <= r.top) r.width = r.height = 0;   /* inverted: empty */
     return r;
 }
 

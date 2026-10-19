@@ -129,6 +129,19 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
         minipsd_doc_free(rdoc);
         if (rc != MINIPSD_OK || c.size != b.size || memcmp(back, b.data, b.size) != 0)
             return -110;
+
+        /* As stored: nothing decoded, every byte copied, the same file again. */
+        {
+            minipsd_read_opts keep;
+            keep.stored = 1;
+            if (minipsd_read(b.data, b.size, NULL, &keep, &rdoc, &lost) != MINIPSD_OK || lost != 0)
+                return -113;
+            c.size = 0;
+            rc = minipsd_write(rdoc, NULL, smoke_out, &c);
+            minipsd_doc_free(rdoc);
+            if (rc != MINIPSD_OK || c.size != b.size || memcmp(back, b.data, b.size) != 0)
+                return -114;
+        }
     }
 
     /* 16 bits: the same layer at 257 times each sample, written and decoded back. */
