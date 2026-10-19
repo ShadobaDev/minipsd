@@ -1742,6 +1742,8 @@ TEST(MinipsdReadTest, ItRefusesWhatTheReaderRefusesAndWhatItCannotHold)
     readDoc(badMarker, &lost, MINIPSD_ERR_FORMAT, nullptr, &keep);
     lim.max_decoded_bytes = 1;   // nothing decoded: neither the layer nor the composite
     readDoc(file, &lost, MINIPSD_OK, &lim, &keep);
+    readDoc(Bytes(file.begin(), file.begin() + std::ptrdiff_t(tailEnd + 1)), &lost, MINIPSD_ERR_SHORT, nullptr, &keep);   // one byte of its marker
+    readDoc(Bytes(file.begin(), file.begin() + std::ptrdiff_t(tailEnd - 1)), &lost, MINIPSD_ERR_SHORT, nullptr, &keep);   // cut before it
 }
 
 TEST(MinipsdReadTest, AStoredLayerWithoutTransparencyIsWrittenWithoutOne)
@@ -1806,6 +1808,59 @@ TEST(MinipsdReadTest, AStoredFileKeepsAnInvertedRectangleAndNoLayerTail)
     const Doc decoded = readDoc(file, nullptr);
     ASSERT_TRUE(decoded);
     EXPECT_EQ(decoded->layers[0].bottom, 0) << "decoded: the reader's empty rectangle";
+}
+
+// What stored does not copy: a composite with a fourth channel that is not transparency, or a
+// fifth, is decoded (and the rest lost); a layer without all of R, G, B is not copied (and
+// refused, as decoding refuses it); an empty
+// layer's rectangle with no width is kept as stored; a layer info of odd length is not padded.
+TEST(MinipsdReadTest, StoredCopiesOnlyWhatItCanWriteBack)
+{
+    const minipsd_read_opts keep{1};
+    for (const unsigned channels : {4u, 5u}) {
+        SCOPED_TRACE(channels);
+        Spec s;
+        s.channels = channels;
+        s.layers   = {simpleRec()};
+        s.count    = channels == 4 ? 1 : -1;                    // four: the fourth is not transparency
+        s.image    = rawImage(channels, 2, 2, 0x80);
+        std::uint32_t lost = 0;
+        const Doc d = readDoc(build(s).bytes, &lost, MINIPSD_OK, nullptr, &keep);
+        ASSERT_TRUE(d);
+        EXPECT_NE(d->composite, nullptr) << "decoded";
+        EXPECT_EQ(d->composite_stored.size, 0u);
+        EXPECT_EQ(lost, static_cast<std::uint32_t>(MINIPSD_LOST_CHANNELS));
+    }
+
+    Rec noBlue = simpleRec();
+    noBlue.channels.pop_back();                                 // transparency, red, green
+    Rec wide = simpleRec();
+    wide.top = 0; wide.left = 0; wide.bottom = 2; wide.right = 0;   // no width
+    wide.channels = {chan(-1, 2, 0), chan(0, 2, 0), chan(1, 2, 0), chan(2, 2, 0)};
+    Spec s;
+    s.layers = {noBlue};
+    s.count  = -1;
+    s.image  = rawImage(4, 2, 2, 0x80);
+    readDoc(build(s).bytes, nullptr, MINIPSD_ERR_FORMAT, nullptr, &keep);   // no blue: not copied, and refused decoding
+    s.layers = {wide};
+    const Doc e = readDoc(build(s).bytes, nullptr, MINIPSD_OK, nullptr, &keep);
+    ASSERT_TRUE(e);
+    EXPECT_EQ(std::tie(e->layers[0].top, e->layers[0].left, e->layers[0].bottom, e->layers[0].right),
+              std::make_tuple(0, 0, 2, 0)) << "as stored";
+
+    // A layer info whose length is odd: not padded, as the file has it.
+    Rec odd = simpleRec();
+    odd.pascal = "Od";                                          // 1 + 2 bytes, padded to 4 in the record
+    Out info;
+    info.u16(0xFFFF).raw(record(odd)).raw(channelData(odd)).u8(7);   // a byte past the channels: odd
+    Spec o;
+    o.hasRawSection   = true;
+    o.rawLayerSection = Out().u32(static_cast<std::uint32_t>(4 + info.b.size() + 4)).u32(static_cast<std::uint32_t>(info.b.size())).raw(info.b).u32(0).b;
+    o.image = rawImage(4, 2, 2, 0x80);
+    ASSERT_EQ(info.b.size() % 2, 1u);
+    const Doc od = readDoc(build(o).bytes, nullptr, MINIPSD_OK, nullptr, &keep);
+    ASSERT_TRUE(od);
+    EXPECT_EQ(od->layer_info_align, 1);
 }
 
 TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)

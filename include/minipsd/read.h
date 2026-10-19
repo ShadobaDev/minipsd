@@ -264,7 +264,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         composite.data = r->data + (size_t)r->image_start;
         composite.size = size - (size_t)r->image_start;
         if (!mpsd__stored_ok(composite, info.width, info.channels * info.height, wide, r->psb))   /* as decoding says it */
-            return composite.size >= MPSD__MARKER_SIZE && mpsd__get16(composite.data) <= MPSD__COMP_ZIP_PREDICTED ? MINIPSD_ERR_SHORT : MINIPSD_ERR_FORMAT;
+            return composite.size >= MPSD__MARKER_SIZE && mpsd__get16(composite.data) > MPSD__COMP_ZIP_PREDICTED ? MINIPSD_ERR_FORMAT : MINIPSD_ERR_SHORT;
         composite = mpsd__copy(a, composite);
     }
     pixels = keep_composite ? NULL : (uint8_t *)mpsd__take(a, canvas, (int)wide);

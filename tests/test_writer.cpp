@@ -299,6 +299,22 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG);
     d.layer_info_align = 0;
 
+    // An 'Lr32' block says where the layers go too; a tail that is not blocks after its mask
+    // holds none, its bytes written as they are.
+    const Bytes lr32 = Bytes(4, 0) + tagged("Lr32", {});
+    d.layer_tail = view(lr32);
+    {
+        const Bytes in32 = write(d);
+        ASSERT_EQ(minipsd_reader_init(&r, in32.data(), in32.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
+        EXPECT_EQ(info.layer_count, 1u) << "found in the block";
+        EXPECT_EQ(Bytes(info.layer_tail.data + 8, info.layer_tail.data + 12), (Bytes{'L', 'r', '3', '2'}));
+    }
+    const Bytes notBlocks = Bytes(4, 0) + Bytes(14, 'x');
+    d.layer_tail = view(notBlocks);
+    const Bytes withBytes = write(d);
+    EXPECT_NE(std::search(withBytes.begin(), withBytes.end(), notBlocks.begin(), notBlocks.end()), withBytes.end()) << "as they are";
+    d.layer_tail = view(tail);
+
     // No profile: a kept one goes with it.
     d.icc = nullptr; d.icc_size = 0;
     const Bytes noIcc = write(d);
@@ -943,6 +959,29 @@ TEST(MinipsdWriterTest, UnicodeNameGoesToLuniAndAsciiToThePascalString)
     EXPECT_EQ(k.layers[0].pascalName, "Caf\xE9");
     EXPECT_TRUE(k.layers[0].unicodeName.empty()) << "the file had none";
 
+    // Kept names that do not say the name: shorter, longer, another; a 'luni' too short for its
+    // count, or counting more than it holds; no name at all for an empty one.  The second kept
+    // 'luni' goes, the first is kept.
+    const Bytes kot = tagged("luni", {0, 0, 0, 4, 0, 'K', 0, 'o', 0, 't', 0, 0});   // its NUL counted: not the writer's
+    const struct {
+        const char *name;
+        Bytes       luni;
+        bool        kept;
+    } names[] = {
+        {"Ko", kot, false}, {"Kota", kot, false}, {"Kit", kot, false}, {"Kot", kot, true},
+        {"A", tagged("luni", {0, 1}), false}, {"A", tagged("luni", {0, 0, 0, 9, 0, 'A'}), false},
+        {nullptr, tagged("luni", {0, 0, 0, 0}), true},
+        {"Kot", kot + tagged("TySh", Bytes(4, 1)) + tagged("luni", {0, 0, 0, 1, 0, 'X', 0, 0}), true},
+    };
+    for (const auto &n : names) {
+        SCOPED_TRACE(n.name ? n.name : "(null)");
+        const minipsd_layer one{.name = n.name, .rgba = px.data(), .opacity = 255, .extra = view(n.luni)};
+        const Psd q = read(write(docOf(2, 2, &one, 1)));
+        const std::string mine = n.name ? n.name : "";
+        if (n.kept) { EXPECT_EQ(q.layers[0].unicodeName.size(), mine.size() + (n.name ? 1u : 0u)) << "the kept 'luni', its NUL too"; }
+        else        { EXPECT_EQ(q.layers[0].unicodeName, std::u16string(mine.begin(), mine.end())) << "the writer's own"; }
+    }
+
     // Refused: bytes the pointer cannot give, or more than a Pascal string holds.
     minipsd_doc d = docOf(2, 2, &latin, 1);
     latin.name_pascal = {nullptr, 3};
@@ -1002,6 +1041,16 @@ TEST(MinipsdWriterTest, RefusesBeforeWritingAnything)
     EXPECT_EQ(minipsd_write(&d, nullptr, collect, &out), minipsd_doc_check(&d, nullptr)) << "no width";
     d = docOf(2, 2, &layer, 1);
     EXPECT_EQ(minipsd_write(&d, nullptr, nullptr, nullptr), MINIPSD_ERR_ARG) << "no callback";
+    d = docOf(2, 2, nullptr, 1);
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "a layer count, no layers";
+    d = docOf(2, 2, &layer, 0);
+    d.composite = px.data();
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK) << "no layers, a composite: flat";
+    {
+        const Psd flat = read(write(d));
+        EXPECT_TRUE(flat.layers.empty());
+        EXPECT_EQ(flat.composite, matted(px));
+    }
     minipsd_layer ranged = layer;
     ranged.blending_range_count = 1;
     d = docOf(2, 2, &ranged, 1);
