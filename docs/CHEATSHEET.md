@@ -41,15 +41,18 @@ cmake --preset linux-asan && cmake --build --preset linux-asan && ctest --preset
 cmake --preset linux-tidy && cmake --build --preset linux-tidy   # findings fail the build
 
 cmake --preset linux-coverage && cmake --build --preset linux-coverage && ctest --preset linux-coverage
+find build/linux-coverage \( -name '*.c.gcda' -o -name '*.c.gcno' \) -delete   # the C units: see below
 gcovr --root . --filter include/ --merge-lines --exclude-throw-branches \
       --txt-metric branch --txt build/linux-coverage          # lines and branches missing a test
 ```
 
 `--merge-lines` counts each line of a header once, although several test files compile it;
 `--exclude-throw-branches` drops the exception edges of the C++ builds, which C code never takes.
-Coverage data adds up across runs: delete `build/linux-coverage` for a clean report. CI fails
-below 100 % of lines or 95 % of branches and publishes the report to Coveralls. Branches stop
-just short of 100 % where gcovr keeps the C and C++ copies of a function apart.
+The C units (the C smoke test, the examples, the fuzz replay) are left out, as CI leaves them
+out: they check the header builds and behaves as C, and gcc numbers a line's branches
+differently in C, so gcovr would list those lines twice and the duplicates would hide which test
+is missing. Coverage data adds up across runs: delete `build/linux-coverage` for a clean report.
+CI fails below 100 % of lines or 95 % of branches and publishes the report to Coveralls.
 
 ## Fuzzing
 
