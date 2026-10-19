@@ -56,7 +56,8 @@ static minipsd_bytes mpsd__copy(mpsd__arena *a, minipsd_bytes src)
 static minipsd_bytes mpsd__copy_tail(mpsd__arena *a, const minipsd_reader *r, minipsd_bytes tail)
 {
     uint64_t      at, end;
-    minipsd_bytes before, after, out;
+    minipsd_bytes before, key, after, out;
+    uint8_t      *length;
     if (!tail.data || r->li_start <= (uint64_t)(tail.data - r->data)) return mpsd__copy(a, tail);
     at  = (uint64_t)(tail.data - r->data);
     end = r->li_start - MPSD__LAYER_COUNT + mpsd__pad((size_t)(r->li_end - (r->li_start - MPSD__LAYER_COUNT)), 4);   /* data: count, records, ... */
@@ -65,10 +66,15 @@ static minipsd_bytes mpsd__copy_tail(mpsd__arena *a, const minipsd_reader *r, mi
     before.size = (size_t)(r->li_start - MPSD__LAYER_COUNT - MPSD__BLOCK_LEN - mpsd__len_size(r->psb) - at);
     after.data  = r->data + (size_t)end;
     after.size  = (size_t)(at + tail.size - end);
-    out   = mpsd__copy(a, before);                              /* the two copies lie end to end */
-    after = mpsd__copy(a, after);
-    if (!out.data) out.data = after.data;
-    out.size += after.size;
+    key.data = before.data + before.size;                       /* '8BIM' and the key, kept: where the layers go */
+    key.size = MPSD__BLOCK_LEN;
+    out    = mpsd__copy(a, before);                             /* the copies lie end to end */
+    key    = mpsd__copy(a, key);
+    length = (uint8_t *)mpsd__take(a, mpsd__len_size(r->psb), 0);   /* a length of 0: its layers are the document's */
+    if (length) memset(length, 0, mpsd__len_size(r->psb));
+    after  = mpsd__copy(a, after);
+    if (!out.data) out.data = key.data;
+    out.size += MPSD__BLOCK_LEN + mpsd__len_size(r->psb) + after.size;
     return out;
 }
 
@@ -115,7 +121,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     minipsd_layer      *layers;
     uint8_t            *pixels, *flat = NULL;
     minipsd_bytes       tail, composite = { NULL, 0 };
-    int                 keep_composite;
+    int                 keep_composite, tail_none = 0;
     uint8_t             align = 0;
     const uint64_t      max = limits ? limits->max_decoded_bytes : 0;
     uint64_t            decoded, canvas;
@@ -140,7 +146,8 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
        transparency; anything more is decoded, the rest reported lost. */
     keep_composite = opts && opts->stored && (info.channels == 3 || (info.channels == MPSD__RGBA && info.composite_has_alpha));
     decoded = keep_composite ? 0 : canvas;                      /* the composite */
-    count   = info.layer_count ? info.layer_count : 1;          /* a flat file: its image as one layer */
+    /* A flat file: its image as one layer; stored, as it is, no layer, the composite copied. */
+    count   = info.layer_count ? info.layer_count : keep_composite ? 0 : 1;
     d       = (minipsd_doc *)mpsd__take(a, sizeof *d, 1);
     layers  = (minipsd_layer *)mpsd__take(a, (uint64_t)count * sizeof *layers, 1);
     if (d) {
@@ -261,7 +268,9 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         composite = mpsd__copy(a, composite);
     }
     pixels = keep_composite ? NULL : (uint8_t *)mpsd__take(a, canvas, (int)wide);
-    if (!info.layer_count) {
+    if (!count) {
+        if (!info.layer_tail.data) tail_none = 1;               /* no layer and mask section at all */
+    } else if (!info.layer_count) {
         flat     = (uint8_t *)mpsd__take(a, canvas, (int)wide);
         decoded += canvas;
         if (max && decoded > max) return MINIPSD_ERR_LIMIT;
@@ -269,7 +278,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     if (info.channels > 3u + (info.composite_has_alpha ? 1u : 0u))
         loss |= MINIPSD_LOST_CHANNELS;                          /* TODO(S6.8): alpha and spot channels */
     tail = mpsd__copy_tail(a, r, info.layer_tail);
-    if (info.layer_tail.data && !info.layer_tail.size) tail.data = (const uint8_t *)a->base;   /* nothing at all, as the file */
+    if ((info.layer_tail.data && !info.layer_tail.size) || tail_none) tail.data = (const uint8_t *)a->base;   /* nothing at all, as the file */
     if (info.icc.size) {
         uint8_t *icc = (uint8_t *)mpsd__take(a, info.icc.size, 0);
         if (icc) memcpy(icc, info.icc.data, info.icc.size);

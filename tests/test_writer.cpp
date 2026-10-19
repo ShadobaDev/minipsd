@@ -579,15 +579,23 @@ TEST(MinipsdWriterTest, SixteenBitDocumentsAreWrittenAndReadBack)
             minipsd_doc_free(back);
         }
 
-        // Photoshop's layout reads as the same layers; as a document, 'Lr16' and its padding leave
-        // the tail, the block after it stays, and the layers go back to the layer info.
+        // Photoshop's layout reads as the same layers; as a document, an empty 'Lr16' stays in the
+        // tail where it was, the block after it too, and the layers go back into it.
         const Bytes photoshop = asPhotoshop16(file);
         check(photoshop);
         minipsd_doc *back = nullptr;
         ASSERT_EQ(minipsd_read(photoshop.data(), photoshop.size(), nullptr, nullptr, &back, nullptr), MINIPSD_OK);
-        EXPECT_EQ(Bytes(back->layer_tail.data, back->layer_tail.data + back->layer_tail.size), be32(0) + tagged("Patt", {}));
+        EXPECT_EQ(Bytes(back->layer_tail.data, back->layer_tail.data + back->layer_tail.size),
+                  be32(0) + tagged("Lr16", {}) + tagged("Patt", {}));
         const Bytes again = write(*back);
         check(again);
+        Bytes workspace(256);
+        minipsd_reader *r = nullptr;
+        minipsd_info info{};
+        ASSERT_EQ(minipsd_reader_init(&r, again.data(), again.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
+        EXPECT_EQ(info.layer_count, back->layer_count);
+        EXPECT_EQ(Bytes(info.layer_tail.data + 4, info.layer_tail.data + 12), (Bytes{'8', 'B', 'I', 'M', 'L', 'r', '1', '6'}))
+            << "the layers back in 'Lr16'";
         back->layer_tail = {};
         EXPECT_EQ(write(*back), file) << "without the kept block: minipsd's file again";
         minipsd_doc_free(back);
@@ -779,7 +787,8 @@ TEST(MinipsdWriterTest, AnotherFormatRefusesWhatItCannotTranslate)
         int         rc;
     };
     const Case cases[] = {
-        {"layers in 'Lr16'", be32(0) + tagged("Lr16", {0, 0, 0, 0}), MINIPSD_ERR_UNSUPPORTED},
+        {"layers in 'Lr16': the writer's own", be32(0) + tagged("Lr16", {0, 0, 0, 0}), MINIPSD_OK},
+        {"a second one: kept bytes", be32(0) + tagged("Lr16", {}) + tagged("Lr16", {0, 0, 0, 0}), MINIPSD_ERR_UNSUPPORTED},
         {"not blocks after the mask", be32(0) + Bytes(12, 'x'), MINIPSD_ERR_UNSUPPORTED},
         {"a mask longer than the tail", be32(9), MINIPSD_ERR_UNSUPPORTED},
         {"a block longer than the tail", be32(0) + Bytes{'8', 'B', 'I', 'M', 'P', 'a', 't', 't'} + be32(99), MINIPSD_ERR_UNSUPPORTED},

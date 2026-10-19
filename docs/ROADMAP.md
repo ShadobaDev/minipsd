@@ -308,7 +308,7 @@ feature; a supplied composite needs nothing. See
         checked) are refused until verification puts each in one group or the other.
         *Done when:* psd-tools' PSB files written as PSD, and PSD files as PSB, read back from
         `psd-tools` with the same layers, blocks and pixels.
-- [ ] **S6.7** A file read and written back is the same file, byte for byte: what `minipsd_read`
+- [x] **S6.7** A file read and written back is the same file, byte for byte: what `minipsd_read`
       keeps, `minipsd_write` puts back where the file had it.
       *Done when:* every file of psd-tools' set that `minipsd_read` takes comes back identical
       through `minipsd_read` and `minipsd_write`, but for a listed few with the reason for each;
@@ -324,7 +324,7 @@ feature; a supplied composite needs nothing. See
   - [x] **S6.7f** An empty layer's channels kept as stored; the layer info's padding (Photoshop:
         4, others 2 or none).
   - [x] **S6.7g** An empty layer's inverted rectangle, a layer tail the file does not have.
-  - [ ] **S6.7h** Layers in `Lr16`, files without layers.
+  - [x] **S6.7h** Layers in `Lr16`, files without layers.
 - [ ] **S6.8** Channels beyond RGBA (alpha and spot channels, of layers and of the composite)
       kept, in the file's order (GIMP writes transparency last); until then
       `MINIPSD_LOST_CHANNELS`.

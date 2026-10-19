@@ -583,6 +583,35 @@ def check_kept(name, before, after, stored=False):
     return errors
 
 
+# --- every file, byte for byte -----------------------------------------------------------------------
+
+# Files minipsd_read takes that do not come back identical yet, and why.
+NOT_IDENTICAL = {
+    "colormodes/4x4_8bit_rgba.psd": "S6.8: a fourth composite channel that is not transparency",
+    "effects/stroke-without-vector-mask.psd": "S6.8: a fifth composite channel",
+    "third-party-psds/cactus_top.psd": "S6.8: channels beyond RGBA, transparency written last",
+}
+
+
+def check_identical(lib, files, out):
+    """Every file minipsd_read takes (with stored) comes back the same bytes through minipsd_write."""
+    errors, same = [], 0
+    for source in sorted(files.rglob("*.ps[db]")):
+        name = source.relative_to(files).as_posix()
+        path = out / ("identical-" + name.replace("/", "__"))
+        rc, _ = resave(lib, source, path, stored=True)
+        if rc != MINIPSD_OK:
+            continue                                         # refused: not a document minipsd takes
+        identical = path.read_bytes() == source.read_bytes()
+        if identical and name in NOT_IDENTICAL:
+            errors.append(f"{name}: identical now; remove it from NOT_IDENTICAL")
+        elif not identical and name not in NOT_IDENTICAL:
+            errors.append(f"{name}: read and written back, not the same bytes")
+        same += identical
+    print(f"identical: {same} files, {len(NOT_IDENTICAL)} listed as not yet")
+    return errors
+
+
 # --- PSB through the reader --------------------------------------------------------------------------
 
 MINIPSD_MORE, ZIP = 1, (2, 3)
@@ -731,6 +760,8 @@ def main():
                 found.append(f"{name}: '{lb.name}' mask pixels differ")
         errors += found
         print(f"{'converted' if convert else 'resaved'} {name} (lost {lost}): {'FAILED' if found else 'ok'}")
+    if files:
+        errors += check_identical(lib, files, out)
     for path in sorted(files.rglob("*.psb")) if files else []:
         found = check_psb(lib, path)
         errors += found

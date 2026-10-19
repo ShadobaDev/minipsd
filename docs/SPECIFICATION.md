@@ -164,7 +164,7 @@ of 8- and 16-bit RGB files, layers and composite.
 |---|---|---|
 | `MINIPSD_OK` | 0 | success |
 | `MINIPSD_MORE` | 1 | not an error: `minipsd_writer_fill` has more bytes, an iterator produced an item, or a name needs more room; call again |
-| `MINIPSD_ERR_ARG` | -1 | NULL document or callback, no layers, ICC size without data, or a dpi that 16.16 fixed point cannot hold (see below) |
+| `MINIPSD_ERR_ARG` | -1 | NULL document or callback, no layers and no composite, ICC size without data, or a dpi that 16.16 fixed point cannot hold (see below) |
 | `MINIPSD_ERR_SIZE` | -2 | a side is 0 or above the format's (`MINIPSD_MAX_SIDE`, `MINIPSD_MAX_SIDE_PSB`), or a section is longer than its length field allows (see below) |
 | `MINIPSD_ERR_WRITE` | -3 | the callback returned 0 |
 | `MINIPSD_ERR_ALLOC` | -4 | `MINIPSD_MALLOC` returned NULL |
@@ -213,7 +213,12 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
 - PSD (version 1) or, with `format` `MINIPSD_PSB`, PSB (version 2), RGB, 4 channels (R, G, B,
   transparency), 8 bits per channel or, with `depth` 16, 16: every sample (`rgba`, mask
   `pixels`, `composite`) is then a `uint16_t` in host order, written big-endian. The layers go
-  in the layer info at both depths, never in `Lr16`.
+  in the layer info at both depths, or, when `layer_tail` holds an `Lr16` (or `Lr32`) block, in
+  that block, where it is, with the layer info empty, as Photoshop's 16-bit files have them; what
+  the block held goes, the document's layers win.
+- **No layers:** a document with a composite (supplied or stored) and `layer_count` 0 is written
+  flat: an empty layer info and the tail, or, with a tail of nothing at all, no layer and mask
+  section, as `minipsd_read` keeps a flat file with `opts->stored`.
 - **The format is what the document is.** A PSB is written with its wide fields (eight-byte
   section and channel lengths, four-byte RLE row counts), and everything kept from a file is
   written as it is, so it must be in that format's layout: `minipsd_read` sets `format` to the
@@ -224,7 +229,7 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
   long keys, its data copied; everything else (resources, mask data, raw and ZIP channels, short
   keys' blocks) is the same in both. Refused, before a byte is written:
   - `MINIPSD_ERR_UNSUPPORTED` for a block whose data is itself a layer info of the format
-    (`Lr16`, `Lr32`, `Layr`; `minipsd_read` never keeps them), for a long key no file has
+    (`Layr`, an `Lr16` or `Lr32` past the first, which the writer fills itself), for a long key no file has
     verified yet (`Alph`, `FELS`, `FEid`, `FXid`, `Mt16`, `Mtrn`, `PxSD`, `lnk3`), for a layer tail
     that is not blocks to its end, and for an RLE real mask whose rectangle the mask data does
     not hold. The verified long keys are those psd-tools' PSD and PSB twins hold: `FMsk`, `LMsk`,
@@ -362,8 +367,9 @@ them; nothing is copied or allocated. Results on real files from other programs:
   (or, with `opts->stored`, its channels as stored, ZIP ones too) and blocks, the composite as
   stored (`composite_matted`; with `opts->stored`, its bytes in `composite_stored` when it holds
   R, G, B and at most transparency), the dpi (72 when none is stored), the ICC profile, every resource
-  and the layer tail without the `Lr16` its layers came from, all copied into one block. A file without layers gets one,
-  "Background", holding its image. Anything else is reported in `lost` (`MINIPSD_LOST_*`), never
+  and the layer tail, the `Lr16` its layers came from in it, empty, all copied into one block. A
+  file without layers gets one, "Background", holding its image; with `opts->stored` it stays
+  without, its image the composite, copied. Anything else is reported in `lost` (`MINIPSD_LOST_*`), never
   dropped silently.
 - **A prefix is enough** for what lies inside it: `MINIPSD_ERR_SHORT` with
   `minipsd_reader_needed` says how much more a call needs.

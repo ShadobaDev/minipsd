@@ -1826,17 +1826,26 @@ TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
                                                                      0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255}));
     EXPECT_EQ(minipsd_doc_check(d.get(), nullptr), MINIPSD_OK) << "the writer takes it as it is";
 
-    // Stored: the image copied as the composite, and still decoded as the layer.
+    // Stored: flat as the file is, no layer, its image the composite, copied; the same bytes back,
+    // with a layer and mask section or without one.
     const minipsd_read_opts keep{1};
-    const Doc k = readDoc(build(s).bytes, &lost, MINIPSD_OK, nullptr, &keep);
-    ASSERT_TRUE(k);
-    EXPECT_EQ(k->composite, nullptr);
-    EXPECT_EQ(k->composite_channels, 3);
-    EXPECT_NE(k->layers[0].rgba, nullptr);
-    const Psd copied = read(write(*k)), decoded = read(write(*d));
-    EXPECT_EQ(copied.channels, 3) << "as the file has it";
-    for (std::size_t i = 0; i < copied.composite.size(); ++i)
-        if (i % 4 != 3) { EXPECT_EQ(copied.composite[i], decoded.composite[i]) << i; }   // the same image
+    for (const bool section : {true, false}) {
+        SCOPED_TRACE(section);
+        Spec f = s;
+        f.resources     = Spec().resources;                     // as Photoshop's: a resolution
+        f.hasRawSection = true;                                 // an empty layer info, an empty global mask; or nothing
+        f.rawLayerSection = section ? Out().u32(8).u32(0).u32(0).b : Out().u32(0).b;
+        const Bytes file = build(f).bytes;
+        const Doc k = readDoc(file, &lost, MINIPSD_OK, nullptr, &keep);
+        ASSERT_TRUE(k);
+        EXPECT_EQ(k->layer_count, 0u);
+        EXPECT_EQ(k->composite, nullptr);
+        EXPECT_EQ(k->composite_channels, 3);
+        EXPECT_EQ(write(*k), file);
+        EXPECT_EQ(pull(*k, 7), file);
+        k->composite_stored = {};
+        EXPECT_EQ(minipsd_doc_check(k.get(), nullptr), MINIPSD_ERR_ARG) << "no layer, no composite";
+    }
 }
 
 // A flat 16-bit file: its one layer decoded at 16 bits, opaque as 65535.
@@ -1885,8 +1894,10 @@ TEST(MinipsdReaderTest, LayersInAGlobalBlock)
         Bytes       kept;   // the document's layer tail
     };
     const Case cases[] = {
-        {"behind another block", cat({mask, patt, block("8BIM", "Lr16", n, layers), pad, patt}), MINIPSD_OK, 1, cat({mask, patt, patt})},
-        {"'8B64', 'Lr32', last, its padding missing", cat({mask, block("8B64", "Lr32", n, layers)}), MINIPSD_OK, 1, mask},
+        {"behind another block", cat({mask, patt, block("8BIM", "Lr16", n, layers), pad, patt}), MINIPSD_OK, 1,
+         cat({mask, patt, block("8BIM", "Lr16", 0, {}), patt})},
+        {"'8B64', 'Lr32', last, its padding missing", cat({mask, block("8B64", "Lr32", n, layers)}), MINIPSD_OK, 1,
+         cat({mask, block("8B64", "Lr32", 0, {})})},
         {"empty", cat({mask, block("8BIM", "Lr16", 0, {})}), MINIPSD_OK, 0, {}},
         {"one byte long", cat({mask, block("8BIM", "Lr16", 1, {0, 0, 0, 0})}), MINIPSD_ERR_FORMAT, 0, {}},
         {"not a block", cat({mask, Bytes(12, 'x')}), MINIPSD_OK, 0, {}},

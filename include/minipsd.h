@@ -126,7 +126,8 @@
 enum {
     MINIPSD_OK          =  0, /*!< Success.                                                   */
     MINIPSD_MORE        =  1, /*!< Not an error: the work is not finished, call again.         */
-    MINIPSD_ERR_ARG     = -1, /*!< A NULL document, no layers, or a dpi outside (0, 65536).    */
+    MINIPSD_ERR_ARG     = -1, /*!< A NULL document, no layers nor composite, or a dpi outside
+                                   (0, 65536).                                                  */
     MINIPSD_ERR_SIZE    = -2, /*!< A side is 0 or above the format's (MINIPSD_MAX_SIDE, or
                                    MINIPSD_MAX_SIDE_PSB), or the document is too large for
                                    PSD's 32-bit section lengths (about 4 GiB).                */
@@ -335,7 +336,8 @@ typedef struct minipsd_doc {
                                               for a PSB.                                      */
     double               dpi;            /*!< Above 0, below 65536; recorded, not resampled. */
     const minipsd_layer *layers;         /*!< Bottom first.                                  */
-    size_t               layer_count;    /*!< >= 1.                                          */
+    size_t               layer_count;    /*!< >= 1; 0 with a composite (supplied or stored):
+                                              a flat file, its image the composite.           */
     const uint8_t       *icc;            /*!< Optional ICC profile; NULL means none (sRGB).  */
     size_t               icc_size;       /*!< Size of icc in bytes; 0 when icc is NULL.      */
     int                  compression;    /*!< MINIPSD_RLE or MINIPSD_RAW.                    */
@@ -356,7 +358,10 @@ typedef struct minipsd_doc {
     size_t               resource_count; /*!< How many resources.                            */
     minipsd_bytes        layer_tail;     /*!< The rest of the layer and mask section kept from a
                                               file (minipsd_info.layer_tail): the global layer
-                                              mask and the global blocks, written as they are.
+                                              mask and the global blocks, written as they are;
+                                              an 'Lr16' (or 'Lr32') block among them says
+                                              where the layers go, the layer info left empty,
+                                              as Photoshop's 16-bit files have them.
                                               Empty: no global mask, no blocks (an empty global
                                               mask is written), but with data set and size 0:
                                               nothing at all, as some files end the section.  */
@@ -395,8 +400,9 @@ typedef struct minipsd_write_opts {
     uint16_t format; /*!< The file written: MINIPSD_PSD or MINIPSD_PSB; 0 is the document's own
                           format.  When it differs from the document's, what the document keeps
                           is translated: RLE row counts and long blocks' lengths widen or narrow.
-                          Blocks whose data itself depends on the format ('Lr16', 'Lr32',
-                          'Layr') and long keys not yet verified ('Alph', 'FELS', 'FEid', 'FXid',
+                          Blocks whose data itself depends on the format ('Layr', and an
+                          'Lr16' or 'Lr32' past the first, which holds the layers) and long
+                          keys not yet verified ('Alph', 'FELS', 'FEid', 'FXid',
                           'Mt16', 'Mtrn', 'PxSD', 'lnk3') are refused (MINIPSD_ERR_UNSUPPORTED);
                           a PSB that does not fit a PSD is MINIPSD_ERR_SIZE.                  */
 } minipsd_write_opts;
@@ -413,7 +419,7 @@ typedef struct minipsd_write_opts {
  * \return MINIPSD_OK or an error code.
  *
  * \retval MINIPSD_ERR_ARG  doc is NULL, a format is neither 0, MINIPSD_PSD nor MINIPSD_PSB (the
- *                          document's or opts'), there are no layers (or more than 32767), dpi is outside
+ *                          document's or opts'), there are no layers and no composite (or more than 32767 layers), dpi is outside
  *                          (0, 65536), depth is not 0, 8 or 16, a size is set without its data (icc, a resource, a name,
  *                          extra, layer_tail), a layer with rgba has an inverted rectangle, an empty layer's
  *                          has an area, extra is not a run of well-formed blocks, a stored
@@ -961,8 +967,9 @@ MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_li
  * blocks as they are; the composite as the file stores it, with composite_matted set, so writing
  * the document gives the same image back.  The document has the file's depth, 8 or 16 bits.  A
  * file without layers gets one, "Background", holding its image.  A file without a resolution
- * gets 72 dpi.  Layers a 16-bit file keeps in its 'Lr16' block become the document's layers, and
- * the block leaves layer_tail.
+ * gets 72 dpi.  Layers a 16-bit file keeps in its 'Lr16' block become the document's layers; the
+ * block stays in layer_tail, empty, where the file had it, and the writer puts the layers back
+ * there.  With opts->stored, a file without layers stays without: no layer, the composite copied.
  *
  * \param data       The whole file.
  * \param size       How many bytes data holds.

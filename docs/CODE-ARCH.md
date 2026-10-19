@@ -610,7 +610,7 @@ typedef struct minipsd_read_opts {
   decoded pixels. A block larger than `SIZE_MAX` is `MINIPSD_ERR_SIZE`.
 - **What it accepts:** 8- and 16-bit RGB, as the decoder; the document has the file's `depth`.
   Anything else is `MINIPSD_ERR_UNSUPPORTED`. Layers read from `Lr16` are the document's, so
-  `layer_tail` is copied without that block, and the writer puts them in the layer info.
+  `layer_tail` keeps that block empty, where it was, and the writer puts them back in it.
 - **No allocator passed at run time.** The caller's block and `MINIPSD_MALLOC` cover both cases;
   a `{alloc, free, user}` variant is an addition when a caller needs one.
 

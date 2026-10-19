@@ -95,6 +95,14 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   (Photoshop's fill layers), and a file whose layer and mask section ends with its layer info
   (GIMP's) as such: `layer_tail` with data and no size, which the writer writes as nothing at
   all. An inverted rectangle is refused only for a layer with `rgba`.
+- Photoshop's 16-bit files keep their layers in `Lr16`: `minipsd_read` leaves the block in
+  `layer_tail`, empty, and the writer writes the layers there (the layer info empty), also into
+  the other format. With `opts->stored`, a file without layers stays without: `layer_count` 0,
+  which `minipsd_doc_check` takes with a composite; it is written flat, without a layer and mask
+  section when the file had none.
+- 250 of the 254 files of psd-tools' set and our own that `minipsd_read` takes come back
+  identical through `minipsd_read` (with `opts->stored`) and `minipsd_write`;
+  `tests/psd_tools/roundtrip.py` checks every one.
 
 ## [0.2.0] — 2026-10-15
 
