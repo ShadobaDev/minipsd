@@ -96,6 +96,7 @@ struct Rec {
     unsigned opacity = 255, flags = 0;
     std::string pascal;                 // raw bytes of the legacy name
     Bytes mask;                         // layer mask data
+    Bytes ranges;                       // blending ranges, eight bytes each
     Bytes blocks;                       // additional information (build it with block())
     bool hasRawExtra = false;           // the extra data is exactly rawExtra
     Bytes rawExtra;
@@ -116,7 +117,8 @@ Bytes record(const Rec &r, bool psb = false)
     if (r.hasRawExtra) {
         extra.raw(r.rawExtra);
     } else {
-        extra.u32(static_cast<std::uint32_t>(r.mask.size())).raw(r.mask).u32(0);
+        extra.u32(static_cast<std::uint32_t>(r.mask.size())).raw(r.mask);
+        extra.u32(static_cast<std::uint32_t>(r.ranges.size())).raw(r.ranges);
         extra.u8(static_cast<unsigned>(r.pascal.size())).str(r.pascal);
         extra.zeros((4 - (1 + r.pascal.size()) % 4) % 4);
         extra.raw(r.blocks);
@@ -749,10 +751,12 @@ TEST(MinipsdReaderTest, ChannelsAreFoundByIdWhateverTheirOrderAndOthersAreCounte
     EXPECT_EQ(vb.channel[MINIPSD_CH_A].data, nullptr) << "a layer without transparency";
 }
 
-TEST(MinipsdReaderTest, ALayerMaskAndBlendingRangesAreSkipped)
+TEST(MinipsdReaderTest, BlendingRangesAreReadAfterTheMask)
 {
     Rec r = simpleRec();
     r.mask = Bytes(20, 0x5A);
+    r.ranges = {0, 0, 255, 255, 59, 60, 210, 220,      // grey: this layer left alone; underlying split
+                10, 10, 200, 200, 0, 0, 255, 255};     // the first channel
     r.pascal = "Masked";
     r.blendKey = "mul ";
     r.opacity = 77;
@@ -770,6 +774,36 @@ TEST(MinipsdReaderTest, ALayerMaskAndBlendingRangesAreSkipped)
     EXPECT_EQ(v.flags, 0x0B) << "as stored";
     EXPECT_EQ(v.clipping, 0);
     EXPECT_EQ(v.name_unicode.data, nullptr) << "no 'luni' in this record";
+
+    ASSERT_EQ(v.blending_range_count, 2u);
+    EXPECT_EQ(v.blending_ranges.size, 16u);
+    minipsd_blending_range br{};
+    ASSERT_EQ(minipsd_layer_blending_range(&v, 0, &br), MINIPSD_OK);
+    EXPECT_EQ(Bytes(br.source.black, br.source.black + 2), (Bytes{0, 0}));
+    EXPECT_EQ(Bytes(br.source.white, br.source.white + 2), (Bytes{255, 255}));
+    EXPECT_EQ(Bytes(br.destination.black, br.destination.black + 2), (Bytes{59, 60}));
+    EXPECT_EQ(Bytes(br.destination.white, br.destination.white + 2), (Bytes{210, 220}));
+    ASSERT_EQ(minipsd_layer_blending_range(&v, 1, &br), MINIPSD_OK);
+    EXPECT_EQ(Bytes(br.source.black, br.source.black + 2), (Bytes{10, 10}));
+    EXPECT_EQ(Bytes(br.destination.white, br.destination.white + 2), (Bytes{255, 255}));
+    EXPECT_EQ(minipsd_layer_blending_range(&v, 2, &br), MINIPSD_ERR_ARG) << "past the ranges";
+    EXPECT_EQ(minipsd_layer_blending_range(nullptr, 0, &br), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_layer_blending_range(&v, 0, nullptr), MINIPSD_ERR_ARG);
+    minipsd_layer_view hand = v;
+    hand.blending_ranges.size = 8;   // a view built by hand whose count says more than its bytes
+    EXPECT_EQ(minipsd_layer_blending_range(&hand, 1, &br), MINIPSD_ERR_ARG);
+    hand.blending_ranges.data = nullptr;   // or that has no bytes at all
+    EXPECT_EQ(minipsd_layer_blending_range(&hand, 0, &br), MINIPSD_ERR_ARG);
+
+    Spec none;
+    none.layers = {simpleRec()};
+    none.count = -1;
+    Open on(build(none).bytes);
+    ASSERT_EQ(on.rc, MINIPSD_OK);
+    const minipsd_layer_view vn = nextLayer(on.r);
+    EXPECT_EQ(vn.blending_range_count, 0u) << "length 0: none, as GIMP writes";
+    EXPECT_EQ(vn.blending_ranges.data, nullptr);
+    EXPECT_EQ(minipsd_layer_blending_range(&vn, 0, &br), MINIPSD_ERR_ARG);
 }
 
 TEST(MinipsdReaderTest, ALegacyNameIsLatin1UntilThereIsAUnicodeOne)
@@ -901,6 +935,8 @@ TEST(MinipsdReaderTest, MalformedRecordsAreRefused)
     r.rawExtra = Out().u16(0).b;                          EXPECT_EQ(firstLayerOf(r), MINIPSD_ERR_FORMAT) << "extra data of two bytes";
     r.rawExtra = Out().u32(0).b;                          EXPECT_EQ(firstLayerOf(r), MINIPSD_ERR_FORMAT) << "no blending ranges";
     r.rawExtra = Out().u32(0).u32(50).b;                  EXPECT_EQ(firstLayerOf(r), MINIPSD_ERR_FORMAT) << "blending ranges past the extra data";
+    r.rawExtra = Out().u32(0).u32(12).zeros(12).u8(0).zeros(3).b;
+    EXPECT_EQ(firstLayerOf(r), MINIPSD_ERR_FORMAT) << "blending ranges that are not whole ranges";
     r.rawExtra = Out().u32(0).u32(0).b;                   EXPECT_EQ(firstLayerOf(r), MINIPSD_ERR_FORMAT) << "no name";
     r.rawExtra = Out().u32(0).u32(0).u8(9).zeros(3).b;    EXPECT_EQ(firstLayerOf(r), MINIPSD_ERR_FORMAT) << "a name past the extra data";
     r.rawExtra = Out().u32(0).u32(0).u8(0).zeros(3).zeros(5).b;
@@ -1989,14 +2025,8 @@ TEST(MinipsdReadTest, LostSaysWhatTheDocumentCannotCarry)
         {"a vector mask: a block, kept", 0, [](Spec &, Rec &r) { r.blocks = block("vmsk", Bytes(8, 0)); }},
         {"a resource other than resolution and ICC, kept", 0,
          [](Spec &s, Rec &) { s.resources = resource(1036, Bytes(8, 1)); }},
-        {"blending ranges", MINIPSD_LOST_BLENDING_RANGES, [](Spec &, Rec &r) {
-             Out x;   // no mask; one range pair that is not "0 0 255 255"; the name "L"
-             x.u32(0).u32(8).u8(10).u8(0).u8(255).u8(255).u8(0).u8(0).u8(255).u8(255).u8(1).str("L").zeros(2);
-             r.hasRawExtra = true; r.rawExtra = x.b; }},
-        {"blending ranges left alone", 0, [](Spec &, Rec &r) {
-             Out x;
-             x.u32(0).u32(8).u8(0).u8(0).u8(255).u8(255).u8(0).u8(0).u8(255).u8(255).u8(1).str("L").zeros(2);
-             r.hasRawExtra = true; r.rawExtra = x.b; }},
+        {"blending ranges, kept", 0, [](Spec &, Rec &r) { r.ranges = {10, 0, 255, 255, 0, 0, 200, 255}; }},
+        {"blending ranges left alone, kept", 0, [](Spec &, Rec &r) { r.ranges = {0, 0, 255, 255, 0, 0, 255, 255}; }},
     };
     for (const Case &c : cases) {
         SCOPED_TRACE(c.what);
@@ -2009,7 +2039,14 @@ TEST(MinipsdReadTest, LostSaysWhatTheDocumentCannotCarry)
         std::uint32_t lost = 99;
         const Doc d = readDoc(build(s).bytes, &lost);
         EXPECT_EQ(lost, c.lost);
-        if (d) { EXPECT_EQ(write(*d).empty(), false) << "the document is still written"; }
+        ASSERT_TRUE(d);
+        const Bytes back = write(*d);
+        ASSERT_FALSE(back.empty()) << "the document is still written";
+        Open o(back);
+        ASSERT_EQ(o.rc, MINIPSD_OK);
+        const minipsd_layer_view v = nextLayer(o.r);
+        EXPECT_EQ(Bytes(v.blending_ranges.data, v.blending_ranges.data + v.blending_ranges.size), r.ranges)
+            << "the ranges written back as they were read";
     }
 }
 
@@ -2102,6 +2139,8 @@ void expectKeptAlike(const Bytes &before, const Bytes &after)
         EXPECT_EQ(va.flags, vb.flags);
         EXPECT_EQ(va.kind, vb.kind);
         EXPECT_EQ(blocks(va), blocks(vb));
+        EXPECT_EQ(Bytes(va.blending_ranges.data, va.blending_ranges.data + va.blending_ranges.size),
+                  Bytes(vb.blending_ranges.data, vb.blending_ranges.data + vb.blending_ranges.size)) << "blending ranges";
         ASSERT_EQ(va.has_mask, vb.has_mask);
         if (!va.has_mask) continue;
         const minipsd_mask &ma = va.mask, &mb = vb.mask;
@@ -2200,6 +2239,13 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
             ++layers;
             nameOf(v);
             otherChannels = otherChannels || v.other_channels;
+            if (path.filename() == "minipsd-hamster-blend-if.psd" && layers == 2) {   // Photopea, "Blend If" set
+                minipsd_blending_range br{};
+                EXPECT_EQ(v.blending_range_count, 5u) << "grey, then four channels";
+                ASSERT_EQ(minipsd_layer_blending_range(&v, 0, &br), MINIPSD_OK);
+                EXPECT_EQ(Bytes(br.destination.black, br.destination.black + 2), (Bytes{59, 59}));
+                EXPECT_EQ(Bytes(br.destination.white, br.destination.white + 2), (Bytes{210, 210}));
+            }
             bool zipLayer = false;
             for (const minipsd_bytes &c : v.channel) zipLayer = zipLayer || zipped(c);
             zip = zip || zipLayer || zipped(v.mask.stored);

@@ -180,8 +180,11 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     const Bytes px = testImage(2, 2);
     const Bytes lsct = tagged("lsct", {0, 0, 0, 0}), tysh = tagged("TySh", Bytes(6, 7));   // an 'lsct' of a plain layer
     const Bytes extra = tagged("luni", {0, 0, 0, 1, 0, 'X', 0, 0}) + lsct + tysh;   // a stale name, then two blocks
+    const minipsd_blending_range ranges[2] = {{{{0, 0}, {255, 255}}, {{59, 60}, {210, 220}}},   // grey, then red
+                                              {{{10, 10}, {200, 200}}, {{0, 0}, {255, 255}}}};
     const minipsd_layer layer{.name = "Mine", .rgba = px.data(), .opacity = 200, .hidden = 1,
-                              .blend = {'m', 'u', 'l', ' '}, .clipping = 1, .flags = 0x09, .extra = view(extra)};
+                              .blend = {'m', 'u', 'l', ' '}, .clipping = 1, .flags = 0x09, .extra = view(extra),
+                              .blending_ranges = ranges, .blending_range_count = 2};
     const Bytes cm = {0, 150, 0, 0, 0, 1, 0, 2, 0, 150, 0, 0, 0, 1, 0, 2};   // 150 dpi, shown in centimetres
     const Bytes thumb = {1, 2, 3}, oldIcc = {9, 9}, icc = {5, 6, 7}, nm = {'n', 'm'};
     const minipsd_resource resources[3] = {{1005, view(cm), {}}, {1036, view(thumb), view(nm)}, {1039, view(oldIcc), {}}};
@@ -215,6 +218,8 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     char name[8];
     ASSERT_EQ(minipsd_layer_name(&v, name, sizeof name, nullptr), MINIPSD_OK);
     EXPECT_STREQ(name, "Mine") << "the name wins over a kept 'luni'";
+    EXPECT_EQ(Bytes(v.blending_ranges.data, v.blending_ranges.data + v.blending_ranges.size),
+              (Bytes{0, 0, 255, 255, 59, 60, 210, 220, 10, 10, 200, 200, 0, 0, 255, 255})) << "the ranges, as given";
     const Bytes blocks(v.extra.data, v.extra.data + v.extra.size);
     EXPECT_EQ(Bytes(blocks.end() - static_cast<std::ptrdiff_t>(lsct.size() + tysh.size()), blocks.end()), lsct + tysh)
         << "kept blocks follow the writer's own 'luni', in order";
@@ -625,8 +630,10 @@ TEST(MinipsdWriterTest, AnotherFormatTranslatesWhatTheDocumentKeeps)
                             .real = {real.data(), real.size()}, .rest = {rest.data(), rest.size()}};
     const Bytes extra = tagged("cinf", {1, 2, 3, 4}) + tagged("Patt", {9, 9});
     const Bytes tail  = be32(0) + tagged("FMsk", Bytes(12, 7)) + tagged("Patt", {5});   // the last one unpadded
+    const minipsd_blending_range ranges[1] = {{{{5, 6}, {250, 251}}, {{0, 0}, {255, 255}}}};
     const minipsd_layer layer{.name = "Pic", .rgba = px.data(), .opacity = 255, .top = 1, .left = 1, .bottom = 4, .right = 6,
-                              .extra = {extra.data(), extra.size()}, .mask = &mask};
+                              .extra = {extra.data(), extra.size()}, .mask = &mask, .blending_ranges = ranges,
+                              .blending_range_count = 1};
     minipsd_doc d = docOf(6, 4, &layer, 1);
     d.layer_tail = {tail.data(), tail.size()};
     const Bytes psd = write(d);
@@ -660,6 +667,8 @@ TEST(MinipsdWriterTest, AnotherFormatTranslatesWhatTheDocumentKeeps)
     EXPECT_EQ(minipsd_decode_mask(r, &v, &plane, nullptr), MINIPSD_OK);
     EXPECT_EQ(gotMask, ramp);
     EXPECT_EQ(Bytes(v.mask.real.data, v.mask.real.data + v.mask.real.size), (Bytes{0, 1, 0, 0, 0, 2, 0, 0, 0, 2, 0, 11, 0, 22}));
+    EXPECT_EQ(Bytes(v.blending_ranges.data, v.blending_ranges.data + v.blending_ranges.size),
+              (Bytes{5, 6, 250, 251, 0, 0, 255, 255})) << "the same in a PSB";
     minipsd_block blk;
     std::size_t   pos = 0;
     ASSERT_EQ(minipsd_layer_next_block(&v, &pos, &blk), MINIPSD_MORE);   // 'luni'
@@ -879,6 +888,14 @@ TEST(MinipsdWriterTest, RefusesBeforeWritingAnything)
     EXPECT_EQ(minipsd_write(&d, nullptr, collect, &out), minipsd_doc_check(&d, nullptr)) << "no width";
     d = docOf(2, 2, &layer, 1);
     EXPECT_EQ(minipsd_write(&d, nullptr, nullptr, nullptr), MINIPSD_ERR_ARG) << "no callback";
+    minipsd_layer ranged = layer;
+    ranged.blending_range_count = 1;
+    d = docOf(2, 2, &ranged, 1);
+    EXPECT_EQ(minipsd_write(&d, nullptr, collect, &out), MINIPSD_ERR_ARG) << "a count of blending ranges, no pointer";
+    const minipsd_blending_range one{};
+    ranged.blending_ranges      = &one;
+    ranged.blending_range_count = 0xFFFFFFFFu / 8 + 1;   // never read: refused by its count alone
+    EXPECT_EQ(minipsd_write(&d, nullptr, collect, &out), MINIPSD_ERR_SIZE) << "more blending ranges than a record holds";
 
     // The layer section's length is 32-bit, and only compressing tells it.  The document is refused
     // before a pixel is read, so a 4-byte buffer stands in for gigabytes: RAW channel sizes are
@@ -1040,7 +1057,10 @@ TEST(MinipsdWriterTest, CompiledAsCItWritesTheSameBytes)
 
     Bytes px(std::size_t(3) * 2 * 4);
     for (std::size_t i = 0; i < px.size(); ++i) px[i] = static_cast<std::uint8_t>(i * 17);
-    const minipsd_layer layers[2] = {{"Template", px.data(), 255, 0}, {"Layer", nullptr, 255, 0}};
+    const minipsd_blending_range blendIf = {{{0, 0}, {255, 255}}, {{59, 59}, {210, 210}}};
+    minipsd_layer layers[2] = {{"Template", px.data(), 255, 0}, {"Layer", nullptr, 255, 0}};
+    layers[1].blending_ranges      = &blendIf;
+    layers[1].blending_range_count = 1;
     EXPECT_EQ(Bytes(buf, buf + size), write(docOf(3, 2, layers, 2)));
 }
 

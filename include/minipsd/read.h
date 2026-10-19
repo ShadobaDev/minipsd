@@ -72,24 +72,6 @@ static minipsd_bytes mpsd__copy_tail(mpsd__arena *a, const minipsd_reader *r, mi
     return out;
 }
 
-/* What a layer record holds that the document cannot carry yet.  at is where the record starts;
-   the reader has checked it whole. */
-static uint32_t mpsd__record_loss(const minipsd_reader *r, uint64_t at, const minipsd_layer_view *v)
-{
-    static const uint8_t no_range[8] = { 0, 0, 255, 255, 0, 0, 255, 255 };   /* "Blend If" left alone */
-    const uint8_t *d        = r->data;
-    const uint32_t channels = mpsd__get16(d + (size_t)at + MPSD__RECT_SIZE);
-    uint64_t       extra    = at + mpsd__record_size(channels, r->psb), ranges;
-    uint32_t       loss = 0, length;
-    if (v->other_channels) loss |= MINIPSD_LOST_CHANNELS;          /* TODO(S6.8): alpha and spot channels */
-    length = mpsd__get32(d + (size_t)extra);                        /* the mask data, kept */
-    extra += MPSD__LEN + length;
-    length = mpsd__get32(d + (size_t)extra);
-    for (ranges = extra + MPSD__LEN; ranges + 8 <= extra + MPSD__LEN + length; ranges += 8)   /* a pair of ranges: 8 */
-        if (memcmp(d + (size_t)ranges, no_range, 8) != 0) loss |= MINIPSD_LOST_BLENDING_RANGES;   /* TODO(S6.7) */
-    return loss;
-}
-
 /* Every image resource, copied, in file order: counted on one pass, placed on a second, the reader
    started again in between. */
 static int mpsd__read_resources(minipsd_reader **r, const void *data, size_t size, uint8_t *workspace,
@@ -164,16 +146,17 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     if (rc != MINIPSD_OK) return rc;
 
     for (i = 0; i < info.layer_count; ++i) {
-        const uint64_t at = r->record_next;
         uint64_t       w, h;
         char          *name;
         minipsd_bytes  extra, copies[MPSD__RGBA], *stored = NULL;
         minipsd_mask  *mask = NULL;
+        minipsd_blending_range *ranges;
         uint8_t       *mask_pixels = NULL;
+        uint32_t       j;
         int            k, keep;
         rc = minipsd_reader_next_layer(r, &v);
         if (rc != MINIPSD_MORE) return rc == MINIPSD_OK ? MINIPSD_ERR_FORMAT : rc;
-        loss |= mpsd__record_loss(r, at, &v);
+        if (v.other_channels) loss |= MINIPSD_LOST_CHANNELS;    /* TODO(S6.8): alpha and spot channels */
         w = (uint64_t)((int64_t)v.right - v.left);
         h = (uint64_t)((int64_t)v.bottom - v.top);
         if (w > side || h > side) return MINIPSD_ERR_UNSUPPORTED;   /* the writer's limit */
@@ -189,6 +172,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         }
         pixels = w && h && !keep ? (uint8_t *)mpsd__take(a, w * h * MPSD__RGBA << wide, (int)wide) : NULL;
         extra  = mpsd__copy(a, v.extra);                        /* every block, 'luni' too */
+        ranges = (minipsd_blending_range *)mpsd__take(a, (uint64_t)v.blending_range_count * sizeof *ranges, 1);
         if (pixels) decoded += w * h * MPSD__RGBA << wide;
         if (v.has_mask) {                                       /* the mask: decoded, or stored with the layer */
             const uint64_t mw = (uint64_t)((int64_t)v.mask.right - v.mask.left), mh = (uint64_t)((int64_t)v.mask.bottom - v.mask.top);
@@ -228,6 +212,9 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         layers[i].extra    = extra;
         layers[i].kind     = v.kind;
         layers[i].mask     = mask;
+        for (j = 0; j < v.blending_range_count; ++j) (void)minipsd_layer_blending_range(&v, j, &ranges[j]);
+        layers[i].blending_ranges      = v.blending_range_count ? ranges : NULL;
+        layers[i].blending_range_count = v.blending_range_count;
         if (mask_pixels) {
             minipsd_plane plane;
             plane.data       = mask_pixels;

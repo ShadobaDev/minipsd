@@ -235,6 +235,7 @@ int minipsd_reader_next_resource(minipsd_reader *r, minipsd_resource   *res);   
 int minipsd_reader_next_layer   (minipsd_reader *r, minipsd_layer_view *layer);  /* MORE: got one; OK: no more */
 int minipsd_layer_name          (const minipsd_layer_view *layer, char *utf8, size_t cap, size_t *needed);
 int minipsd_layer_next_block    (const minipsd_layer_view *layer, size_t *pos, minipsd_block *block);  /* MORE / OK */
+int minipsd_layer_blending_range(const minipsd_layer_view *layer, uint32_t i, minipsd_blending_range *range);
 
 int minipsd_decode_layer    (minipsd_reader *r, const minipsd_layer_view *layer,      /* r: for needed */
                              const minipsd_target *target, const minipsd_decode_opts *opts);
@@ -278,7 +279,10 @@ workspace). Every pointer below is a borrowed view into the blob or the caller's
   - the record's additional-info region as one `minipsd_bytes` view, walked with
     `minipsd_layer_next_block(layer, &pos, &block)`, where `pos` is the caller's cursor (start at
     0) and `block` is `{ key, bytes }`. The reader decodes `luni` itself and lists it too; every
-    other block is only a raw view (`R10`).
+    other block is only a raw view (`R10`);
+  - the blending ranges as a view and a count; `minipsd_layer_blending_range` decodes one into
+    the typed `minipsd_blending_range` (a view cannot point a typed array into the caller's
+    buffer), the way `minipsd_layer_name` decodes the name.
 - **`minipsd_layer_name`** converts to UTF-8. It uses `luni` when present and otherwise the Pascal
   string, taken as Latin-1. An unpaired surrogate becomes U+FFFD: a name is for display, so it is
   not an error. It always sets `*needed` (with the terminating NUL) and returns `MINIPSD_MORE`
@@ -608,7 +612,7 @@ typedef struct minipsd_read_opts {
 
 | Flag | What is lost |
 |---|---|
-| `MINIPSD_LOST_BLENDING_RANGES` | the record's blending ranges ("Blend If") |
+| `MINIPSD_LOST_BLENDING_RANGES` | no longer set: the ranges are kept (`minipsd_layer.blending_ranges`) |
 | `MINIPSD_LOST_CHANNELS` | channels other than R, G, B, transparency and masks, of a layer or of the composite (a positive layer count makes a fourth composite channel an alpha channel), and a mask channel without mask data |
 
 - **Every known loss is tracked.** The code that sets a bit carries a `TODO` naming the ROADMAP

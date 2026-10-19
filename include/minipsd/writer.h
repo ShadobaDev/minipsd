@@ -195,7 +195,19 @@ static void mpsd__mask_data(mpsd__sink *s, const minipsd_mask *m)
     else              mpsd__zeros(s, MPSD__MASK_PAD);
 }
 
-/* The extra-data block of a layer record: the mask, no blending ranges, the names, the group
+/* The blending ranges, as given: their length, then each range as detail/format.h lays it out. */
+static void mpsd__blending_ranges(mpsd__sink *s, const minipsd_layer *l)
+{
+    uint32_t i;
+    mpsd__u32(s, l->blending_range_count * MPSD__RANGE_SIZE);   /* minipsd_doc_check bounds the count */
+    for (i = 0; i < l->blending_range_count; ++i) {
+        const minipsd_blending_range *r = &l->blending_ranges[i];
+        mpsd__put(s, r->source.black, 2);      mpsd__put(s, r->source.white, 2);
+        mpsd__put(s, r->destination.black, 2); mpsd__put(s, r->destination.white, 2);
+    }
+}
+
+/* The extra-data block of a layer record: the mask, the blending ranges, the names, the group
    marker, kept blocks (laid out as the from format lays them out, written in the out format). */
 static void mpsd__layer_extra(mpsd__sink *s, const minipsd_layer *l, unsigned from, unsigned out)
 {
@@ -209,7 +221,7 @@ static void mpsd__layer_extra(mpsd__sink *s, const minipsd_layer *l, unsigned fr
     }
     pascal[0] = (uint8_t)ascii;
     mpsd__mask_data(s, l->mask);
-    mpsd__u32(s, 0);                          /* blending ranges      */
+    mpsd__blending_ranges(s, l);
     mpsd__put(s, pascal, ascii + 1);
     mpsd__zeros(s, mpsd__pad(ascii + 1, 4) - (ascii + 1));
 
@@ -391,8 +403,9 @@ static uint64_t mpsd__tail_size(const minipsd_doc *d, unsigned out)
     return c.count;
 }
 
-/* Pointers with sizes, and well-formed blocks: what the sizes below rely on.  Going into the other
-   format (out), every kept block must be able to change format, and a PSB's must fit a PSD. */
+/* Pointers with sizes, blending ranges their length can hold, and well-formed blocks: what the
+   sizes below rely on.  Going into the other format (out), every kept block must be able to
+   change format, and a PSB's must fit a PSD. */
 static int mpsd__kept_ok(const minipsd_doc *d, unsigned out)
 {
     size_t i, pos, next;
@@ -405,8 +418,10 @@ static int mpsd__kept_ok(const minipsd_doc *d, unsigned out)
         if (r->name.size > 255) return MINIPSD_ERR_SIZE;
     }
     for (i = 0; i < d->layer_count; ++i) {
-        const minipsd_bytes extra = d->layers[i].extra;
-        if (extra.size && !extra.data) return MINIPSD_ERR_ARG;
+        const minipsd_layer *l     = &d->layers[i];
+        const minipsd_bytes  extra = l->extra;
+        if ((extra.size && !extra.data) || (l->blending_range_count && !l->blending_ranges)) return MINIPSD_ERR_ARG;
+        if (l->blending_range_count > MPSD__MAX_SECTION / MPSD__RANGE_SIZE) return MINIPSD_ERR_SIZE;
         for (pos = 0; pos < extra.size; pos = next) {
             if (mpsd__block(extra, pos, mpsd__doc_psb(d), &block, &next) != MINIPSD_OK) return MINIPSD_ERR_ARG;
             if (out == mpsd__doc_psb(d)) continue;

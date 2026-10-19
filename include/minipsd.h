@@ -213,6 +213,29 @@ typedef struct minipsd_block {
     minipsd_bytes data;   /*!< The block's bytes.                   */
 } minipsd_block;
 
+/**
+ * \brief One "Blend If" range: where a slider's black and white points sit, 0 to 255 at any depth.
+ *
+ * Each point has two halves, split in Photoshop by Alt-dragging for a soft transition; unsplit,
+ * both are equal.  Left alone, a range is black {0, 0}, white {255, 255}.
+ */
+typedef struct minipsd_blend_range {
+    uint8_t black[2]; /*!< The black point: its low and high half.  */
+    uint8_t white[2]; /*!< The white point: its low and high half.  */
+} minipsd_blend_range;
+
+/**
+ * \brief A layer's blending ranges ("Blend If") for one channel, as the file stores them.
+ *
+ * A layer has one for the composite grey, then one per channel, in the file's order (Photoshop
+ * writes five: grey, then four).  Where the layer's own pixels fall outside source, or those
+ * beneath it outside destination, the layer does not show.
+ */
+typedef struct minipsd_blending_range {
+    minipsd_blend_range source;      /*!< "This Layer".       */
+    minipsd_blend_range destination; /*!< "Underlying Layer". */
+} minipsd_blending_range;
+
 /** \brief What a layer record is: a layer, or one end of a group (the type of its 'lsct' block). */
 enum {
     MINIPSD_KIND_LAYER        = 0, /*!< A layer with pixels, or an empty one.                     */
@@ -287,6 +310,11 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
                                     mode (blend; zero: pass through).  Written as an 'lsct' block,
                                     or a kept one of the same kind as it is.                       */
     const minipsd_mask *mask;   /*!< The layer mask; NULL: none.                                   */
+    const minipsd_blending_range *blending_ranges; /*!< blending_range_count ranges, written as given:
+                                    the composite grey's, then each channel's.  NULL with a count
+                                    of 0: none (what a writer other than Photoshop writes).  The
+                                    composed composite ignores them.                               */
+    uint32_t       blending_range_count; /*!< How many; 0: none.                                  */
 } minipsd_layer;
 
 /**
@@ -587,6 +615,9 @@ typedef struct minipsd_layer_view {
     uint8_t       format;                   /*!< MINIPSD_PSD or MINIPSD_PSB, the file's: how extra's
                                                  blocks and the channels' row counts are laid out.
                                                  0 in a view built by hand is MINIPSD_PSD.             */
+    minipsd_bytes blending_ranges;          /*!< The blending ranges as stored, eight bytes each; size
+                                                 0: none.  minipsd_layer_blending_range reads one.     */
+    uint32_t      blending_range_count;     /*!< How many: blending_ranges.size / 8.                   */
 } minipsd_layer_view;
 
 /**
@@ -706,6 +737,17 @@ MINIPSDDEF int minipsd_layer_name(const minipsd_layer_view *layer, char *utf8, s
  *         MINIPSD_ERR_FORMAT for a malformed block; MINIPSD_ERR_ARG for a NULL argument.
  */
 MINIPSDDEF int minipsd_layer_next_block(const minipsd_layer_view *layer, size_t *pos, minipsd_block *block);
+
+/**
+ * \brief One of a layer's blending ranges ("Blend If").
+ *
+ * \param layer A record from minipsd_reader_next_layer.
+ * \param i     Which: 0 is the composite grey's, then each channel's; below
+ *              layer->blending_range_count.
+ * \param range Receives the range.
+ * \return MINIPSD_OK; or MINIPSD_ERR_ARG for a NULL argument or i past the layer's ranges.
+ */
+MINIPSDDEF int minipsd_layer_blending_range(const minipsd_layer_view *layer, uint32_t i, minipsd_blending_range *range);
 
 /**
  * \brief Where one channel's samples go: the first sample, and the steps to the next one.
@@ -851,7 +893,8 @@ MINIPSDDEF int minipsd_decode_mask(minipsd_reader *r, const minipsd_layer_view *
  * description of it) at the project's address.
  */
 enum {
-    MINIPSD_LOST_BLENDING_RANGES = 2, /*!< A layer's blending ranges ("Blend If") not left alone.  */
+    MINIPSD_LOST_BLENDING_RANGES = 2, /*!< No longer set: blending ranges are kept
+                                           (minipsd_layer.blending_ranges).                     */
     MINIPSD_LOST_CHANNELS        = 4  /*!< Channels beyond R, G, B, transparency and the masks':
                                            alpha and spot channels, of a layer or of the composite. */
 };

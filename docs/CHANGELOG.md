@@ -34,9 +34,14 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
 - `minipsd_read`: a whole 8- or 16-bit RGB file into a `minipsd_doc` that `minipsd_write` takes as it
   is, every byte copied into one block so the file can be freed at once; `minipsd_doc_free`;
   `minipsd_read_size` and `minipsd_read_into` for the caller's own memory. `lost`
-  (`MINIPSD_LOST_*`) says what the document could not carry: blending ranges, extra channels.
+  (`MINIPSD_LOST_*`) says what the document could not carry: extra channels.
 - Layer groups: `kind` on `minipsd_layer` and the layer view (`MINIPSD_KIND_*`), written as
   `lsct` blocks with the group's mode, nesting checked by `minipsd_doc_check`.
+- Blending ranges ("Blend If"): `minipsd_blend_range` and `minipsd_blending_range`, as the
+  file stores them; `blending_ranges` and `blending_range_count` on `minipsd_layer`, written as
+  given (none: a length of 0, as before); the same in the layer view, read with
+  `minipsd_layer_blending_range`. `minipsd_read` keeps them, so a Photoshop file's ranges are
+  written back as they were; `MINIPSD_LOST_BLENDING_RANGES` is no longer set.
 - Layer masks: `minipsd_mask` on `minipsd_layer` (rectangle, colour, flags, pixels or the stored
   channel, and a file's real mask and mask parameters kept), the mask in the layer view, and
   `minipsd_decode_mask`.

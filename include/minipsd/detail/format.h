@@ -112,12 +112,18 @@ static uint64_t mpsd__resource_size(size_t name, size_t data)
      opacity, clipping, flags, filler       4      4
      extra data length                      4      4     MPSD__LEN in a PSB too
      extra data: the mask data, the blending ranges, the name (a Pascal string padded to four
-     bytes), then blocks */
+     bytes), then blocks
+
+   Blending ranges, after their length (MPSD__LEN; 0: none)      size
+     per range, the composite grey's first, then each channel's:
+       source: black low, black high, white low, white high       4
+       destination: the same                                      4 */
 
 #define MPSD__RECT_SIZE   16
 #define MPSD__RECORD_HEAD 18      /* rectangle, channel count: the channel table starts here */
 #define MPSD__RECORD_TAIL 16      /* after the channel table: '8BIM' .. the extra data's length */
 #define MPSD__FLAG_HIDDEN 0x02u
+#define MPSD__RANGE_SIZE  8       /* a blending range: source and destination */
 
 /* The height of a rectangle laid out as above. */
 static int64_t mpsd__rect_height(const uint8_t *rect)

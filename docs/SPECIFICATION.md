@@ -112,6 +112,7 @@ The declarations, with every parameter and return code, are in
 | `minipsd_reader_next_layer(r, &layer)` | the layer records, bottom first, with views of their channel data: `MINIPSD_MORE` per layer, then `MINIPSD_OK` |
 | `minipsd_layer_name(layer, utf8, cap, &needed)` | a layer's name as UTF-8 (`luni`, else the legacy name as Latin-1) |
 | `minipsd_layer_next_block(layer, &pos, &block)` | a layer's additional-information blocks, each a raw view |
+| `minipsd_layer_blending_range(layer, i, &range)` | one of a layer's blending ranges ("Blend If"): the composite grey's, then each channel's |
 | `minipsd_target_rgba(&target, rgba, row_stride)` | a target for interleaved RGBA, the common case |
 | `minipsd_target_rgba16(&target, rgba, row_stride)` | the same for 16-bit samples, `uint16_t` |
 | `minipsd_decode_layer(r, layer, target, opts)` | a layer's pixels, or a band of its rows, as stored (opacity and visibility not applied), into the caller's planes; 8- or 16-bit RGB, raw or PackBits |
@@ -254,7 +255,12 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
   - a layer mask (`mask`): its rectangle, colour outside it and flags in the mask data, then
     what was kept after them (parameters, the real mask's rectangle) or two bytes of padding; its
     channel (id -2) encoded from `pixels` or copied from `stored`, and a kept real mask (id -3)
-    as it is.
+    as it is;
+  - the blending ranges ("Blend If", `blending_ranges`) as given, eight bytes each: for the
+    source ("This Layer") and the destination ("Underlying Layer"), a black point then a white
+    point, each two bytes (its halves, equal unless split). None (`blending_range_count` 0)
+    writes a length of 0, as GIMP does; a file's are written back as they were (Photoshop
+    writes five: the composite grey, then four channels). The composed composite ignores them.
 - **Composite image:**
   - the caller's `composite` when set (the full canvas, straight alpha), whatever the layers
     hold: flattening layers is rendering, the caller's domain;
@@ -326,6 +332,9 @@ them; nothing is copied or allocated. Results on real files from other programs:
   - what the record is (`kind`, from its `lsct` block): a layer, a group's top record, a divider;
   - its mask: rectangle, colour, flags, the rest of the mask data, the mask channel and the real
     mask channel as views; `minipsd_decode_mask` decodes the mask's pixels;
+  - its blending ranges as a view and a count, read one at a time with
+    `minipsd_layer_blending_range`; a length that is not whole ranges (eight bytes) is
+    `MINIPSD_ERR_FORMAT`;
   - every additional-information block as a raw view (key and bytes), the known ones included.
 - **Pixels come as stored:** a layer's opacity, visibility, blend mode and mask are not applied;
   they are in its view, and so is the group structure.
@@ -337,7 +346,7 @@ them; nothing is copied or allocated. Results on real files from other programs:
   layers came from included. Global blocks are padded to four bytes past the length they state.
 - **Not read:** the colour mode data (palettes).
 - **As a document** (`minipsd_read`): 8- and 16-bit RGB files, at their depth; each layer's
-  rectangle, name, opacity, visibility, blend key, clipping, flags, kind, mask, decoded pixels
+  rectangle, name, opacity, visibility, blend key, clipping, flags, kind, mask, blending ranges, decoded pixels
   (or, with `opts->stored`, its channels as stored, ZIP ones too) and blocks, the composite as
   stored (`composite_matted`), the dpi (72 when none is stored), the ICC profile, every resource
   and the layer tail without the `Lr16` its layers came from, all copied into one block. A file without layers gets one,
