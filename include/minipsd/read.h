@@ -56,7 +56,8 @@ static minipsd_bytes mpsd__copy(mpsd__arena *a, minipsd_bytes src)
 static minipsd_bytes mpsd__copy_tail(mpsd__arena *a, const minipsd_reader *r, minipsd_bytes tail)
 {
     uint64_t      at, end;
-    minipsd_bytes before, after, out;
+    minipsd_bytes before, key, after, out;
+    uint8_t      *length;
     if (!tail.data || r->li_start <= (uint64_t)(tail.data - r->data)) return mpsd__copy(a, tail);
     at  = (uint64_t)(tail.data - r->data);
     end = r->li_start - MPSD__LAYER_COUNT + mpsd__pad((size_t)(r->li_end - (r->li_start - MPSD__LAYER_COUNT)), 4);   /* data: count, records, ... */
@@ -65,29 +66,16 @@ static minipsd_bytes mpsd__copy_tail(mpsd__arena *a, const minipsd_reader *r, mi
     before.size = (size_t)(r->li_start - MPSD__LAYER_COUNT - MPSD__BLOCK_LEN - mpsd__len_size(r->psb) - at);
     after.data  = r->data + (size_t)end;
     after.size  = (size_t)(at + tail.size - end);
-    out   = mpsd__copy(a, before);                              /* the two copies lie end to end */
-    after = mpsd__copy(a, after);
-    if (!out.data) out.data = after.data;
-    out.size += after.size;
+    key.data = before.data + before.size;                       /* '8BIM' and the key, kept: where the layers go */
+    key.size = MPSD__BLOCK_LEN;
+    out    = mpsd__copy(a, before);                             /* the copies lie end to end */
+    key    = mpsd__copy(a, key);
+    length = (uint8_t *)mpsd__take(a, mpsd__len_size(r->psb), 0);   /* a length of 0: its layers are the document's */
+    if (length) memset(length, 0, mpsd__len_size(r->psb));
+    after  = mpsd__copy(a, after);
+    if (!out.data) out.data = key.data;
+    out.size += MPSD__BLOCK_LEN + mpsd__len_size(r->psb) + after.size;
     return out;
-}
-
-/* What a layer record holds that the document cannot carry yet.  at is where the record starts;
-   the reader has checked it whole. */
-static uint32_t mpsd__record_loss(const minipsd_reader *r, uint64_t at, const minipsd_layer_view *v)
-{
-    static const uint8_t no_range[8] = { 0, 0, 255, 255, 0, 0, 255, 255 };   /* "Blend If" left alone */
-    const uint8_t *d        = r->data;
-    const uint32_t channels = mpsd__get16(d + (size_t)at + MPSD__RECT_SIZE);
-    uint64_t       extra    = at + mpsd__record_size(channels, r->psb), ranges;
-    uint32_t       loss = 0, length;
-    if (v->other_channels) loss |= MINIPSD_LOST_CHANNELS;          /* TODO(S6.8): alpha and spot channels */
-    length = mpsd__get32(d + (size_t)extra);                        /* the mask data, kept */
-    extra += MPSD__LEN + length;
-    length = mpsd__get32(d + (size_t)extra);
-    for (ranges = extra + MPSD__LEN; ranges + 8 <= extra + MPSD__LEN + length; ranges += 8)   /* a pair of ranges: 8 */
-        if (memcmp(d + (size_t)ranges, no_range, 8) != 0) loss |= MINIPSD_LOST_BLENDING_RANGES;   /* TODO(S6.7) */
-    return loss;
 }
 
 /* Every image resource, copied, in file order: counted on one pass, placed on a second, the reader
@@ -132,7 +120,9 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     minipsd_doc        *d;
     minipsd_layer      *layers;
     uint8_t            *pixels, *flat = NULL;
-    minipsd_bytes       tail;
+    minipsd_bytes       tail, composite = { NULL, 0 };
+    int                 keep_composite, tail_none = 0;
+    uint8_t             align = 0;
     const uint64_t      max = limits ? limits->max_decoded_bytes : 0;
     uint64_t            decoded, canvas;
     uint32_t            loss = 0;
@@ -152,8 +142,12 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     as_stored = all;
     as_stored.keep_matte = 1;
     canvas  = (uint64_t)info.width * info.height * MPSD__RGBA << wide;
-    decoded = canvas;                                           /* the composite */
-    count   = info.layer_count ? info.layer_count : 1;          /* a flat file: its image as one layer */
+    /* Stored: the composite copied as it is, never decoded, when it holds R, G, B and at most
+       transparency; anything more is decoded, the rest reported lost. */
+    keep_composite = opts && opts->stored && (info.channels == 3 || (info.channels == MPSD__RGBA && info.composite_has_alpha));
+    decoded = keep_composite ? 0 : canvas;                      /* the composite */
+    /* A flat file: its image as one layer; stored, as it is, no layer, the composite copied. */
+    count   = info.layer_count ? info.layer_count : keep_composite ? 0 : 1;
     d       = (minipsd_doc *)mpsd__take(a, sizeof *d, 1);
     layers  = (minipsd_layer *)mpsd__take(a, (uint64_t)count * sizeof *layers, 1);
     if (d) {
@@ -164,24 +158,26 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     if (rc != MINIPSD_OK) return rc;
 
     for (i = 0; i < info.layer_count; ++i) {
-        const uint64_t at = r->record_next;
+        const uint64_t at = r->record_next;                     /* the record, its rectangle first */
         uint64_t       w, h;
         char          *name;
-        minipsd_bytes  extra, copies[MPSD__RGBA], *stored = NULL;
+        minipsd_bytes  extra, pascal, copies[MPSD__RGBA], *stored = NULL;
         minipsd_mask  *mask = NULL;
+        minipsd_blending_range *ranges;
         uint8_t       *mask_pixels = NULL;
+        uint32_t       j;
         int            k, keep;
         rc = minipsd_reader_next_layer(r, &v);
         if (rc != MINIPSD_MORE) return rc == MINIPSD_OK ? MINIPSD_ERR_FORMAT : rc;
-        loss |= mpsd__record_loss(r, at, &v);
+        if (v.other_channels) loss |= MINIPSD_LOST_CHANNELS;    /* TODO(S6.8): alpha and spot channels */
         w = (uint64_t)((int64_t)v.right - v.left);
         h = (uint64_t)((int64_t)v.bottom - v.top);
         if (w > side || h > side) return MINIPSD_ERR_UNSUPPORTED;   /* the writer's limit */
         (void)minipsd_layer_name(&v, NULL, 0, &n);
         name   = (char *)mpsd__take(a, n, 0);
-        /* Stored: every channel copied as it is, never decoded; one without transparency is
-           written opaque. */
-        keep = opts && opts->stored && w && h;
+        /* Stored: every channel copied as it is, never decoded, an empty layer's markers too; one
+           without transparency is written without one, as the file has it. */
+        keep = opts && opts->stored;
         for (k = 0; k < MINIPSD_CH_A; ++k) keep = keep && v.channel[k].size;   /* R, G, B */
         if (keep) {
             stored = (minipsd_bytes *)mpsd__take(a, MPSD__RGBA * sizeof *stored, 1);
@@ -189,6 +185,8 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         }
         pixels = w && h && !keep ? (uint8_t *)mpsd__take(a, w * h * MPSD__RGBA << wide, (int)wide) : NULL;
         extra  = mpsd__copy(a, v.extra);                        /* every block, 'luni' too */
+        pascal = mpsd__copy(a, v.name_pascal);
+        ranges = (minipsd_blending_range *)mpsd__take(a, (uint64_t)v.blending_range_count * sizeof *ranges, 1);
         if (pixels) decoded += w * h * MPSD__RGBA << wide;
         if (v.has_mask) {                                       /* the mask: decoded, or stored with the layer */
             const uint64_t mw = (uint64_t)((int64_t)v.mask.right - v.mask.left), mh = (uint64_t)((int64_t)v.mask.bottom - v.mask.top);
@@ -222,12 +220,22 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         layers[i].hidden  = v.hidden;
         layers[i].top     = v.top;    layers[i].left  = v.left;
         layers[i].bottom  = v.bottom; layers[i].right = v.right;
+        if (stored && (v.bottom == v.top || v.right == v.left)) {   /* an empty one as stored, inverted too */
+            layers[i].top    = (int32_t)mpsd__get32(r->data + (size_t)at);
+            layers[i].left   = (int32_t)mpsd__get32(r->data + (size_t)at + 4);
+            layers[i].bottom = (int32_t)mpsd__get32(r->data + (size_t)at + 8);
+            layers[i].right  = (int32_t)mpsd__get32(r->data + (size_t)at + 12);
+        }
         memcpy(layers[i].blend, v.blend, 4);
         layers[i].clipping = v.clipping;
         layers[i].flags    = (uint8_t)(v.flags & ~MPSD__FLAG_HIDDEN);
         layers[i].extra    = extra;
+        layers[i].name_pascal = pascal;
         layers[i].kind     = v.kind;
         layers[i].mask     = mask;
+        for (j = 0; j < v.blending_range_count; ++j) (void)minipsd_layer_blending_range(&v, j, &ranges[j]);
+        layers[i].blending_ranges      = v.blending_range_count ? ranges : NULL;
+        layers[i].blending_range_count = v.blending_range_count;
         if (mask_pixels) {
             minipsd_plane plane;
             plane.data       = mask_pixels;
@@ -242,10 +250,27 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         }
     }
 
-    /* The composite as stored, matted, so it is written back exactly; a flat file's image also
-       becomes its one layer, un-matted. */
-    pixels = (uint8_t *)mpsd__take(a, canvas, (int)wide);
-    if (!info.layer_count) {
+    /* The layer info's padding, as the file has it: the strictest its length fits (Photoshop's 4,
+       others' 2, or none). */
+    if (info.layer_count) {
+        const uint64_t length = r->li_end - (r->li_start - MPSD__LAYER_COUNT);
+        align = (uint8_t)(length % 4 == 0 ? 4 : length % 2 ? 1 : 2);
+    }
+
+    /* The composite as stored: its bytes, or its pixels matted, so it is written back exactly; a
+       flat file's image also becomes its one layer, un-matted. */
+    if (keep_composite) {
+        if (r->image_start > size) return MINIPSD_ERR_SHORT;
+        composite.data = r->data + (size_t)r->image_start;
+        composite.size = size - (size_t)r->image_start;
+        if (!mpsd__stored_ok(composite, info.width, info.channels * info.height, wide, r->psb))   /* as decoding says it */
+            return composite.size >= MPSD__MARKER_SIZE && mpsd__get16(composite.data) > MPSD__COMP_ZIP_PREDICTED ? MINIPSD_ERR_FORMAT : MINIPSD_ERR_SHORT;
+        composite = mpsd__copy(a, composite);
+    }
+    pixels = keep_composite ? NULL : (uint8_t *)mpsd__take(a, canvas, (int)wide);
+    if (!count) {
+        if (!info.layer_tail.data) tail_none = 1;               /* no layer and mask section at all */
+    } else if (!info.layer_count) {
         flat     = (uint8_t *)mpsd__take(a, canvas, (int)wide);
         decoded += canvas;
         if (max && decoded > max) return MINIPSD_ERR_LIMIT;
@@ -253,6 +278,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     if (info.channels > 3u + (info.composite_has_alpha ? 1u : 0u))
         loss |= MINIPSD_LOST_CHANNELS;                          /* TODO(S6.8): alpha and spot channels */
     tail = mpsd__copy_tail(a, r, info.layer_tail);
+    if ((info.layer_tail.data && !info.layer_tail.size) || tail_none) tail.data = (const uint8_t *)a->base;   /* nothing at all, as the file */
     if (info.icc.size) {
         uint8_t *icc = (uint8_t *)mpsd__take(a, info.icc.size, 0);
         if (icc) memcpy(icc, info.icc.data, info.icc.size);
@@ -261,9 +287,11 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     if (a->used > (uint64_t)(size_t)-1 - MPSD__ALIGN) return MINIPSD_ERR_SIZE;
     if (!d) return MINIPSD_OK;
 
-    mpsd__target(&t, pixels, (size_t)info.width * MPSD__RGBA << wide, wide);
-    rc = minipsd_decode_composite(r, &t, &as_stored);
-    if (rc != MINIPSD_OK) return rc;
+    if (pixels) {
+        mpsd__target(&t, pixels, (size_t)info.width * MPSD__RGBA << wide, wide);
+        rc = minipsd_decode_composite(r, &t, &as_stored);
+        if (rc != MINIPSD_OK) return rc;
+    }
     if (flat) {
         mpsd__target(&t, flat, (size_t)info.width * MPSD__RGBA << wide, wide);
         rc = minipsd_decode_composite(r, &t, &all);
@@ -283,6 +311,9 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
                               ? MINIPSD_RAW : MINIPSD_RLE;
     d->composite        = pixels;
     d->composite_matted = 1;
+    d->composite_stored = composite;
+    d->composite_channels = keep_composite ? (uint16_t)info.channels : 0;
+    d->layer_info_align   = align;
     d->layer_tail       = tail;
     d->depth            = info.depth;
     d->format           = info.format;

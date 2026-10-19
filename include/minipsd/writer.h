@@ -73,10 +73,14 @@ static uint64_t mpsd__row_size(const minipsd_doc *d, const uint8_t *row, size_t 
 static const int mpsd__channel_id[MPSD__CHANNELS] = { -1, 0, 1, 2, -2, -3 };
 static const int mpsd__channel_of[MPSD__RGBA]     = {  3, 0, 1, 2 };   /* RGBA offset for each colour channel */
 
+/* The channels written are [mpsd__first_channel, mpsd__channel_count) of that order: a stored
+   layer without transparency, as its file had it, starts at R. */
 static int mpsd__channel_count(const minipsd_layer *l)
 {
     return MPSD__RGBA + (l->mask ? 1 + (l->mask->real.size != 0) : 0);
 }
+
+static int mpsd__first_channel(const minipsd_layer *l) { return l->stored && !l->stored[MINIPSD_CH_A].size; }
 
 /* Where channel k of a layer comes from: bytes to copy as they are, or samples to encode, step
    bytes apart, width by height, of the document's depth.  A stored channel's height is its
@@ -112,7 +116,7 @@ static mpsd__source mpsd__channel_source(const minipsd_doc *d, const minipsd_lay
         const mpsd__rect r = mpsd__layer_rect(d, l);
         src.height = r.height;
         if (l->stored && l->stored[mpsd__channel_of[k]].size) { src.stored = &l->stored[mpsd__channel_of[k]]; return src; }
-        if (l->stored) {                                      /* no transparency stored: opaque */
+        if (l->stored) {                                      /* no transparency stored: never written (mpsd__first_channel) */
             src.samples = r.height ? full : NULL;
             src.step    = 0;
         } else {
@@ -142,6 +146,47 @@ static int mpsd__retable(const mpsd__source *src, unsigned from, unsigned out)
         && mpsd__get16(src->stored->data) == MPSD__COMP_RLE;
 }
 
+/* What a stored source takes in the out format: its bytes, its count table re-written when the
+   formats differ. */
+static uint64_t mpsd__stored_size(const mpsd__source *src, unsigned from, unsigned out)
+{
+    if (!mpsd__retable(src, from, out)) return src->stored->size;
+    return src->stored->size - (uint64_t)src->height * mpsd__count_size(from) + (uint64_t)src->height * mpsd__count_size(out);
+}
+
+/* Is the composite copied as the file stored it?  Only when the caller gives none of their own. */
+static int mpsd__copies_composite(const minipsd_doc *d) { return !d->composite && d->composite_stored.size; }
+
+/* The composite's channels in the file: the stored one's, or R, G, B and transparency. */
+static unsigned mpsd__composite_channels(const minipsd_doc *d)
+{
+    return mpsd__copies_composite(d) ? d->composite_channels : MPSD__RGBA;
+}
+
+/* No source: the pieces outside a layer channel and the composite. */
+static mpsd__source mpsd__no_source(void)
+{
+    mpsd__source src;
+    src.stored  = NULL;
+    src.samples = NULL;
+    src.step    = 0;
+    src.width   = src.height = 0;
+    return src;
+}
+
+/* The stored composite as a source: one marker, then its channels' rows one after another, a
+   single count table over all of them. */
+static mpsd__source mpsd__composite_source(const minipsd_doc *d)
+{
+    mpsd__source src;
+    src.stored  = &d->composite_stored;
+    src.samples = NULL;
+    src.step    = 0;
+    src.width   = d->width;
+    src.height  = (uint32_t)d->composite_channels * d->height;
+    return src;
+}
+
 /* --- names: a legacy ASCII Pascal string and the UTF-16 one --- */
 
 static void mpsd__unit_out(void *ctx, unsigned u) { mpsd__u16((mpsd__sink *)ctx, u); }
@@ -164,19 +209,73 @@ static int mpsd__kept_kind(minipsd_bytes extra, unsigned kind, unsigned psb)
     return 0;
 }
 
-/* Blocks kept from a file, laid out as the from format lays them out, written in the out format,
-   but where the layer's own fields win: 'luni' (name) and an 'lsct' of another kind than the
-   layer's.  minipsd_doc_check has walked them, and checked they can change format. */
-static void mpsd__kept_blocks(mpsd__sink *s, minipsd_bytes extra, unsigned kind, unsigned from, unsigned out)
+/* The writer's own blocks: the name in 'luni' (unless the kept names say it), then the group
+   marker unless a kept one says it. */
+static void mpsd__own_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned from, int named)
+{
+    const char *name = l->name;
+    if (!named) {
+        const size_t units = mpsd__utf16(name, NULL, NULL);
+        const size_t luni  = MPSD__LEN + units * 2;   /* the count of UTF-16 units, the units */
+        mpsd__put(s, "8BIMluni", 8);
+        mpsd__u32(s, (uint32_t)mpsd__pad(luni, 4));
+        mpsd__u32(s, (uint32_t)units);
+        mpsd__utf16(name, mpsd__unit_out, s);
+        mpsd__zeros(s, mpsd__pad(luni, 4) - luni);
+    }
+    if (l->kind && !mpsd__kept_kind(l->extra, l->kind, from)) {   /* the group marker, unless kept */
+        const char *mode = l->blend[0] || l->blend[1] || l->blend[2] || l->blend[3] ? l->blend : "pass";
+        mpsd__put(s, "8BIMlsct", 8);
+        mpsd__u32(s, l->kind == MINIPSD_KIND_GROUP_END ? MPSD__LSCT_TYPE : MPSD__LSCT_FULL);
+        mpsd__u32(s, l->kind);
+        if (l->kind != MINIPSD_KIND_GROUP_END) { mpsd__put(s, "8BIM", 4); mpsd__put(s, mode, 4); }
+    }
+}
+
+/* Is there a kept 'luni'?  The first one's data in *data.  The writer's own blocks then take its
+   place, so the blocks keep their order. */
+static int mpsd__kept_luni(minipsd_bytes extra, unsigned psb, minipsd_bytes *data)
 {
     minipsd_block block;
     size_t        pos = 0, next;
+    for (; pos < extra.size && mpsd__block(extra, pos, psb, &block, &next) == MINIPSD_OK; pos = next)
+        if (mpsd__tag((const uint8_t *)block.key, "luni")) { *data = block.data; return 1; }
+    return 0;
+}
+
+/* Do the names kept from a file (a 'luni' in extra, else name_pascal read as Latin-1) say the
+   layer's name, as minipsd_read made it?  Then they are written as they are. */
+static int mpsd__kept_names(const minipsd_layer *l, unsigned psb)
+{
+    minipsd_bytes luni;
+    if (mpsd__kept_luni(l->extra, psb, &luni)) {
+        const size_t units = luni.size >= MPSD__LEN ? mpsd__get32(luni.data) : 0;
+        return luni.size >= MPSD__LEN && units <= (luni.size - MPSD__LEN) / 2
+            && mpsd__same_name(l->name, luni.data + MPSD__LEN, units * 2, 0);
+    }
+    return l->name_pascal.size && mpsd__same_name(l->name, l->name_pascal.data, l->name_pascal.size, 1);
+}
+
+/* Blocks kept from a file, laid out as the from format lays them out, written in the out format,
+   but where the layer's own fields win: the first 'luni' becomes the writer's own blocks (itself
+   when it says the layer's name, and the group marker unless kept), a later one goes, and so does
+   an 'lsct' of another kind than the layer's.  minipsd_doc_check has walked them, and checked
+   they can change format. */
+static void mpsd__kept_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned from, unsigned out, int named)
+{
+    const minipsd_bytes extra = l->extra;
+    minipsd_block block;
+    size_t        pos = 0, next;
+    int           first = 1;
     while (pos < extra.size && mpsd__block(extra, pos, from, &block, &next) == MINIPSD_OK) {
         const int type = mpsd__lsct_type(&block);
-        if (!mpsd__tag((const uint8_t *)block.key, "luni") && (type < 0 || type == (int)kind)) {
+        const int luni = mpsd__tag((const uint8_t *)block.key, "luni");
+        if ((luni && first && named) || (!luni && (type < 0 || type == (int)l->kind))) {
             if (from == out) mpsd__put(s, extra.data + pos, next - pos);
             else mpsd__put_block(s, extra.data + pos, (size_t)(block.data.data - (extra.data + pos)), block.data.size, block.data.size, out);
         }
+        if (luni && first) mpsd__own_blocks(s, l, from, named);   /* after the kept name, or in its place */
+        first = first && !luni;
         pos = next;
     }
 }
@@ -195,40 +294,48 @@ static void mpsd__mask_data(mpsd__sink *s, const minipsd_mask *m)
     else              mpsd__zeros(s, MPSD__MASK_PAD);
 }
 
-/* The extra-data block of a layer record: the mask, no blending ranges, the names, the group
-   marker, kept blocks (laid out as the from format lays them out, written in the out format). */
+/* The blending ranges, as given: their length, then each range as detail/format.h lays it out. */
+static void mpsd__blending_ranges(mpsd__sink *s, const minipsd_layer *l)
+{
+    uint32_t i;
+    mpsd__u32(s, l->blending_range_count * MPSD__RANGE_SIZE);   /* minipsd_doc_check bounds the count */
+    for (i = 0; i < l->blending_range_count; ++i) {
+        const minipsd_blending_range *r = &l->blending_ranges[i];
+        mpsd__put(s, r->source.black, 2);      mpsd__put(s, r->source.white, 2);
+        mpsd__put(s, r->destination.black, 2); mpsd__put(s, r->destination.white, 2);
+    }
+}
+
+/* The extra-data block of a layer record: the mask, the blending ranges, the legacy name, then
+   the blocks: the kept ones in their order (laid out as the from format lays them out, written in
+   the out format), the writer's own ('luni', the group marker) where the kept 'luni' was, or
+   first. */
 static void mpsd__layer_extra(mpsd__sink *s, const minipsd_layer *l, unsigned from, unsigned out)
 {
     const char          *name = l->name;
     const unsigned char *p = (const unsigned char *)(name ? name : "");
-    size_t ascii = 0, units, luni;
+    const int            named = mpsd__kept_names(l, from);
+    minipsd_bytes        luni;
+    size_t ascii = 0;
     uint8_t pascal[256];
-    while (*p && ascii < 255) {               /* one '?' per non-ASCII character */
-        const uint32_t cp = mpsd__utf8(&p);
-        pascal[1 + ascii++] = (uint8_t)(cp < 0x80 ? cp : '?');
+    if (named) {                              /* the kept legacy name, as it is */
+        ascii = l->name_pascal.size;
+        if (ascii) memcpy(pascal + 1, l->name_pascal.data, ascii);
+    } else {
+        while (*p && ascii < 255) {           /* one '?' per non-ASCII character */
+            const uint32_t cp = mpsd__utf8(&p);
+            pascal[1 + ascii++] = (uint8_t)(cp < 0x80 ? cp : '?');
+        }
     }
     pascal[0] = (uint8_t)ascii;
     mpsd__mask_data(s, l->mask);
-    mpsd__u32(s, 0);                          /* blending ranges      */
+    mpsd__blending_ranges(s, l);
     mpsd__put(s, pascal, ascii + 1);
     mpsd__zeros(s, mpsd__pad(ascii + 1, 4) - (ascii + 1));
-
-    units = mpsd__utf16(name, NULL, NULL);
-    luni  = MPSD__LEN + units * 2;            /* the count of UTF-16 units, the units */
-    mpsd__put(s, "8BIMluni", 8);
-    mpsd__u32(s, (uint32_t)mpsd__pad(luni, 4));
-    mpsd__u32(s, (uint32_t)units);
-    mpsd__utf16(name, mpsd__unit_out, s);
-    mpsd__zeros(s, mpsd__pad(luni, 4) - luni);
-    if (l->kind && !mpsd__kept_kind(l->extra, l->kind, from)) {   /* the group marker, unless kept */
-        const char *mode = l->blend[0] || l->blend[1] || l->blend[2] || l->blend[3] ? l->blend : "pass";
-        mpsd__put(s, "8BIMlsct", 8);
-        mpsd__u32(s, l->kind == MINIPSD_KIND_GROUP_END ? MPSD__LSCT_TYPE : MPSD__LSCT_FULL);
-        mpsd__u32(s, l->kind);
-        if (l->kind != MINIPSD_KIND_GROUP_END) { mpsd__put(s, "8BIM", 4); mpsd__put(s, mode, 4); }
-    }
-    mpsd__kept_blocks(s, l->extra, l->kind, from, out);
+    if (!mpsd__kept_luni(l->extra, from, &luni)) mpsd__own_blocks(s, l, from, named);   /* first, or where the kept one was */
+    mpsd__kept_blocks(s, l, from, out, named);
 }
+
 
 /* --- the layer section --- */
 
@@ -246,9 +353,7 @@ static uint64_t mpsd__layer_channel_size(const minipsd_doc *d, const minipsd_lay
     const unsigned     from = mpsd__doc_psb(d);
     uint64_t size = MPSD__MARKER_SIZE;
     uint32_t y;
-    if (mpsd__retable(&src, from, out))
-        return src.stored->size - (uint64_t)src.height * mpsd__count_size(from) + (uint64_t)src.height * mpsd__count_size(out);
-    if (src.stored) return src.stored->size;
+    if (src.stored) return mpsd__stored_size(&src, from, out);
     if (!src.samples) return size;
     MPSD__ENCODED(l);
     if (d->compression == MINIPSD_RAW) return size + ((uint64_t)src.width * src.height << mpsd__doc_wide(d));
@@ -273,8 +378,8 @@ static void mpsd__layer_record(mpsd__sink *s, const minipsd_doc *d, const minips
     int k;
     mpsd__u32(s, (uint32_t)r.top);    mpsd__u32(s, (uint32_t)r.left);
     mpsd__u32(s, (uint32_t)r.bottom); mpsd__u32(s, (uint32_t)r.right);
-    mpsd__u16(s, (unsigned)n);
-    for (k = 0; k < n; ++k) {
+    mpsd__u16(s, (unsigned)(n - mpsd__first_channel(l)));
+    for (k = mpsd__first_channel(l); k < n; ++k) {
         mpsd__u16(s, (unsigned)(uint16_t)(int16_t)mpsd__channel_id[k]);
         mpsd__putlen(s, sizes[k], out);
     }
@@ -299,17 +404,6 @@ static uint64_t mpsd__max_layers_section(unsigned psb) { return psb ? MPSD__FAR 
 /* A kept resource is written unless the document's own field says the same: dpi, icc. */
 static int mpsd__kept_resource(const minipsd_resource *r) { return r->id != MPSD__RES_RESOLUTION && r->id != MPSD__RES_ICC; }
 
-/* The image resources' length: the resolution, the ICC profile if any, the kept resources. */
-static uint64_t mpsd__resources_size(const minipsd_doc *d)
-{
-    uint64_t size = mpsd__resource_size(0, MPSD__RESOLUTION_SIZE) + (d->icc ? mpsd__resource_size(0, d->icc_size) : 0);
-    size_t   i;
-    for (i = 0; i < d->resource_count; ++i)
-        if (mpsd__kept_resource(&d->resources[i]))
-            size += mpsd__resource_size(d->resources[i].name.size, d->resources[i].data.size);
-    return size;
-}
-
 /* The dpi as stored: 16.16 fixed point. */
 static uint32_t mpsd__dpi_fixed(const minipsd_doc *d) { return (uint32_t)(d->dpi * MPSD__FIXED_ONE + 0.5); }
 
@@ -324,6 +418,66 @@ static const uint8_t *mpsd__kept_resolution(const minipsd_doc *d)
             return r->data.size == MPSD__RESOLUTION_SIZE && r->data.data && mpsd__get32(r->data.data) == mpsd__dpi_fixed(d) ? r->data.data : NULL;
     }
     return NULL;
+}
+
+/* The first kept resource with this id; NULL when there is none. */
+static const minipsd_resource *mpsd__find_resource(const minipsd_doc *d, unsigned id)
+{
+    size_t i;
+    for (i = 0; i < d->resource_count; ++i)
+        if (d->resources[i].id == id) return &d->resources[i];
+    return NULL;
+}
+
+/* One resource, laid out as detail/format.h shows: a Pascal name padded to even, the data too. */
+static void mpsd__put_resource(mpsd__sink *s, unsigned id, minipsd_bytes name, const void *data, size_t size)
+{
+    mpsd__put(s, "8BIM", 4); mpsd__u16(s, id);
+    mpsd__u8(s, (unsigned)name.size);
+    mpsd__put(s, name.data, name.size);
+    mpsd__zeros(s, mpsd__pad(1 + name.size, 2) - (1 + name.size));
+    mpsd__u32(s, (uint32_t)size);
+    mpsd__put(s, data, size);
+    mpsd__zeros(s, size & 1);
+}
+
+/* The resolution: a kept one that says the document's dpi, or the writer's own, in inches. */
+static void mpsd__resolution(mpsd__sink *s, const minipsd_doc *d, minipsd_bytes name)
+{
+    const uint32_t res  = mpsd__dpi_fixed(d);
+    const uint8_t *kept = mpsd__kept_resolution(d);
+    uint8_t        own[MPSD__RESOLUTION_SIZE] = { 0 };
+    uint8_t       *p;
+    for (p = own; p < own + MPSD__RESOLUTION_SIZE; p += 8) {   /* horizontal, vertical: pixels per inch, shown in inches */
+        p[0] = (uint8_t)(res >> 24); p[1] = (uint8_t)(res >> 16); p[2] = (uint8_t)(res >> 8); p[3] = (uint8_t)res;
+        p[5] = p[7] = 1;
+    }
+    mpsd__put_resource(s, MPSD__RES_RESOLUTION, name, kept ? kept : own, MPSD__RESOLUTION_SIZE);
+}
+
+/* The image resources: the writer's own (the resolution, the ICC profile if any) where the first
+   kept one of the same id was, so a file's order comes back, or first when there is none; then
+   the kept ones.  A later kept resolution or profile goes: the document's field says it. */
+static void mpsd__resources(mpsd__sink *s, const minipsd_doc *d)
+{
+    const minipsd_resource *res = mpsd__find_resource(d, MPSD__RES_RESOLUTION), *icc = mpsd__find_resource(d, MPSD__RES_ICC);
+    const minipsd_bytes     none = { NULL, 0 };
+    size_t                  i;
+    if (!res) mpsd__resolution(s, d, none);
+    if (!icc && d->icc) mpsd__put_resource(s, MPSD__RES_ICC, none, d->icc, d->icc_size);
+    for (i = 0; i < d->resource_count; ++i) {
+        const minipsd_resource *r = &d->resources[i];
+        if (r == res)                mpsd__resolution(s, d, r->name);
+        else if (r == icc && d->icc) mpsd__put_resource(s, MPSD__RES_ICC, r->name, d->icc, d->icc_size);
+        else if (mpsd__kept_resource(r)) mpsd__put_resource(s, r->id, r->name, r->data.data, r->data.size);
+    }
+}
+
+static uint64_t mpsd__resources_size(const minipsd_doc *d)
+{
+    mpsd__sink c = { NULL, NULL, 0, 0 };
+    mpsd__resources(&c, d);
+    return c.count;
 }
 
 /* A stored channel that fits a width x height rectangle of one-byte or (wide) two-byte samples:
@@ -350,23 +504,53 @@ static int mpsd__stored_ok(minipsd_bytes c, uint32_t width, uint32_t height, uns
     }
 }
 
-/* What follows the layer info in its section: the kept tail, or an empty global layer mask.  A tail
-   going into the other format is the global layer mask as it is, then blocks, each padded to four
-   bytes past its length, with their lengths re-written (a tail too short for the mask's length is
-   only bytes, copied as they are): MINIPSD_ERR_UNSUPPORTED when it is not
-   blocks to its end or holds one that cannot change format, MINIPSD_ERR_SIZE when a PSB's block
-   is too long for a PSD.  The last block may end without its padding. */
-static int mpsd__tail_out(mpsd__sink *s, const minipsd_doc *d, unsigned out)
+/* Where an 'Lr16' (or 'Lr32') block starts in the kept tail, and where it ends (padded); both the tail's size
+   when there is none.  Such a block says where the layers go, as Photoshop keeps its 16-bit files'
+   layers: the writer writes them there and leaves the layer info empty.  What it held goes: the
+   document's layers win. */
+static size_t mpsd__layers_block(const minipsd_doc *d, size_t *end)
+{
+    const minipsd_bytes t   = d->layer_tail;
+    const unsigned      psb = mpsd__doc_psb(d);
+    size_t              at;
+    *end = t.size;
+    if (t.size < MPSD__LEN || mpsd__get32(t.data) > t.size - MPSD__LEN) return t.size;
+    for (at = MPSD__LEN + mpsd__get32(t.data); at < t.size;) {
+        const uint8_t *p    = t.data + at;
+        const size_t   left = t.size - at;
+        size_t         head, span;
+        uint64_t       size;
+        if (left < MPSD__BLOCK_HEAD || !(mpsd__tag(p, "8BIM") || mpsd__tag(p, "8B64"))) return t.size;
+        head = mpsd__block_head(p, psb);
+        if (left < head) return t.size;
+        size = mpsd__getlen(p + MPSD__BLOCK_LEN, head > MPSD__BLOCK_HEAD);
+        if (size > left - head) return t.size;
+        span = mpsd__pad((size_t)size, 4) < left - head ? mpsd__pad((size_t)size, 4) : left - head;
+        if (mpsd__tag(p + MPSD__BLOCK_KEY, "Lr16") || mpsd__tag(p + MPSD__BLOCK_KEY, "Lr32")) { *end = at + head + span; return at; }
+        at += head + span;
+    }
+    return t.size;
+}
+
+/* What follows the layer info in its section, [lo, hi) of the kept tail (lo and hi at block
+   bounds), or an empty global layer mask.  A tail going into the other format is the global layer
+   mask as it is, then blocks, each padded to four bytes past its length, with their lengths
+   re-written (a tail too short for the mask's length is only bytes, copied as they are):
+   MINIPSD_ERR_UNSUPPORTED when it is not blocks to its end or holds one that cannot change format,
+   MINIPSD_ERR_SIZE when a PSB's block is too long for a PSD.  The last block may end without its
+   padding. */
+static int mpsd__tail_range(mpsd__sink *s, const minipsd_doc *d, size_t lo, size_t hi, unsigned out)
 {
     const minipsd_bytes t    = d->layer_tail;
     const unsigned      from = mpsd__doc_psb(d);
     size_t              at;
-    if (!t.size) { mpsd__u32(s, 0); return MINIPSD_OK; }
-    if (from == out || t.size < MPSD__LEN) { mpsd__put(s, t.data, t.size); return MINIPSD_OK; }   /* too short to hold a length */
+    if (!t.size) { if (!t.data) mpsd__u32(s, 0); return MINIPSD_OK; }   /* data with no size: nothing at all */
+    if (from == out || t.size < MPSD__LEN) { mpsd__put(s, t.data + lo, hi - lo); return MINIPSD_OK; }   /* too short to hold a length */
     if (mpsd__get32(t.data) > t.size - MPSD__LEN) return MINIPSD_ERR_UNSUPPORTED;
     at = MPSD__LEN + mpsd__get32(t.data);
-    mpsd__put(s, t.data, at);
-    while (at < t.size) {
+    if (lo) at = lo;
+    else    mpsd__put(s, t.data, at);
+    while (at < hi) {
         const uint8_t *p    = t.data + at;
         const size_t   left = t.size - at;
         size_t         head, span;
@@ -384,15 +568,34 @@ static int mpsd__tail_out(mpsd__sink *s, const minipsd_doc *d, unsigned out)
     return MINIPSD_OK;
 }
 
-static uint64_t mpsd__tail_size(const minipsd_doc *d, unsigned out)
+/* The kept tail whole, but for the layers' block. */
+static int mpsd__tail_out(mpsd__sink *s, const minipsd_doc *d, unsigned out)
 {
-    mpsd__sink c = { NULL, NULL, 0, 0 };
-    (void)mpsd__tail_out(&c, d, out);
-    return c.count;
+    size_t    end;
+    const size_t at = mpsd__layers_block(d, &end);
+    const int rc = mpsd__tail_range(s, d, 0, at, out);
+    return rc != MINIPSD_OK || at == end ? rc : mpsd__tail_range(s, d, end, d->layer_tail.size, out);
 }
 
-/* Pointers with sizes, and well-formed blocks: what the sizes below rely on.  Going into the other
-   format (out), every kept block must be able to change format, and a PSB's must fit a PSD. */
+/* Is there no layer and mask section at all?  No layers, and a tail of nothing, as a flat file has. */
+static int mpsd__no_section(const minipsd_doc *d) { return !d->layer_count && !d->layer_tail.size && d->layer_tail.data; }
+
+/* The layer and mask section's length: the layer info's length, the layer info (info bytes, here
+   or in the layers' block), the tail; the block's header and padding with it. */
+static uint64_t mpsd__section_size(const minipsd_doc *d, uint64_t info, unsigned out)
+{
+    mpsd__sink c = { NULL, NULL, 0, 0 };
+    size_t     end;
+    if (mpsd__no_section(d)) return 0;
+    (void)mpsd__tail_out(&c, d, out);
+    if (mpsd__layers_block(d, &end) < d->layer_tail.size)
+        c.count += MPSD__BLOCK_LEN + mpsd__len_size(out) + (mpsd__pad((size_t)info, 4) - info);   /* '8BIM', 'Lr16', length; padding */
+    return mpsd__len_size(out) + info + c.count;
+}
+
+/* Pointers with sizes, blending ranges their length can hold, and well-formed blocks: what the
+   sizes below rely on.  Going into the other format (out), every kept block must be able to
+   change format, and a PSB's must fit a PSD. */
 static int mpsd__kept_ok(const minipsd_doc *d, unsigned out)
 {
     size_t i, pos, next;
@@ -405,8 +608,12 @@ static int mpsd__kept_ok(const minipsd_doc *d, unsigned out)
         if (r->name.size > 255) return MINIPSD_ERR_SIZE;
     }
     for (i = 0; i < d->layer_count; ++i) {
-        const minipsd_bytes extra = d->layers[i].extra;
-        if (extra.size && !extra.data) return MINIPSD_ERR_ARG;
+        const minipsd_layer *l     = &d->layers[i];
+        const minipsd_bytes  extra = l->extra;
+        if ((extra.size && !extra.data) || (l->blending_range_count && !l->blending_ranges)
+            || (l->name_pascal.size && !l->name_pascal.data)) return MINIPSD_ERR_ARG;
+        if (l->name_pascal.size > 255) return MINIPSD_ERR_SIZE;
+        if (l->blending_range_count > MPSD__MAX_SECTION / MPSD__RANGE_SIZE) return MINIPSD_ERR_SIZE;
         for (pos = 0; pos < extra.size; pos = next) {
             if (mpsd__block(extra, pos, mpsd__doc_psb(d), &block, &next) != MINIPSD_OK) return MINIPSD_ERR_ARG;
             if (out == mpsd__doc_psb(d)) continue;
@@ -422,18 +629,35 @@ static int mpsd__kept_ok(const minipsd_doc *d, unsigned out)
 
 /* A stored channel going into the other format: an RLE one's rows must be known, its table must
    hold them, and they must fit a PSD's two-byte counts when it goes there. */
+static int mpsd__table_ok(const mpsd__source *src, unsigned from, unsigned out)
+{
+    uint32_t y;
+    if (!mpsd__retable(src, from, out)) return MINIPSD_OK;
+    if (!mpsd__stored_ok(*src->stored, 0, src->height, 0, from))
+        return MINIPSD_ERR_ARG;                                   /* a real mask's table: mpsd__mask_ok knew no rows */
+    for (y = 0; !out && y < src->height; ++y)                     /* a PSD's counts: two bytes */
+        if (mpsd__count(src->stored->data + MPSD__MARKER_SIZE, y, 1) > 0xFFFFu) return MINIPSD_ERR_SIZE;
+    return MINIPSD_OK;
+}
+
 static int mpsd__retable_ok(const minipsd_doc *d, const minipsd_layer *l, int k, unsigned out)
 {
     const mpsd__source src = mpsd__channel_source(d, l, k);
-    uint32_t           y;
-    if (!mpsd__retable(&src, mpsd__doc_psb(d), out)) return MINIPSD_OK;
-    if (k == MPSD__CH_REAL && l->mask->rest.size < MPSD__REAL_RECT + MPSD__RECT_SIZE)
+    if (k == MPSD__CH_REAL && mpsd__retable(&src, mpsd__doc_psb(d), out) && l->mask->rest.size < MPSD__REAL_RECT + MPSD__RECT_SIZE)
         return MINIPSD_ERR_UNSUPPORTED;                           /* no real rectangle to count rows by */
-    if (!mpsd__stored_ok(*src.stored, 0, src.height, 0, mpsd__doc_psb(d)))
-        return MINIPSD_ERR_ARG;                                   /* a real mask's table: mpsd__mask_ok knew no rows */
-    for (y = 0; !out && y < src.height; ++y)                      /* a PSD's counts: two bytes */
-        if (mpsd__count(src.stored->data + MPSD__MARKER_SIZE, y, 1) > 0xFFFFu) return MINIPSD_ERR_SIZE;
-    return MINIPSD_OK;
+    return mpsd__table_ok(&src, mpsd__doc_psb(d), out);
+}
+
+/* A stored composite: R, G, B and at most transparency, fitting the canvas, its table the out
+   format's (or one that can become it). */
+static int mpsd__composite_ok(const minipsd_doc *d, unsigned out)
+{
+    const mpsd__source src = mpsd__composite_source(d);
+    if (!mpsd__copies_composite(d)) return MINIPSD_OK;
+    if ((d->composite_channels != 3 && d->composite_channels != MPSD__RGBA)
+        || !mpsd__stored_ok(d->composite_stored, d->width, src.height, mpsd__doc_wide(d), mpsd__doc_psb(d)))
+        return MINIPSD_ERR_ARG;
+    return mpsd__table_ok(&src, mpsd__doc_psb(d), out);
 }
 
 /* Groups nest: walking up from the bottom, a divider opens one, a top record closes the innermost. */
@@ -476,8 +700,9 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *d, const minipsd_write_opts 
     out = mpsd__out_psb(d, opts);
     /* The dpi is stored as 16.16 fixed point: it must round to 1 .. 2^32 - 1.  NaN fails both. */
     res = d->dpi * MPSD__FIXED_ONE + 0.5;
-    if (!d->layers || d->layer_count < 1 || d->layer_count > MPSD__MAX_LAYERS || !(res >= 1.0 && res < 4294967296.0)
-        || (d->depth != 0 && d->depth != 8 && d->depth != 16) || d->format > MINIPSD_PSB)
+    if ((d->layer_count && !d->layers) || (!d->layer_count && !d->composite && !d->composite_stored.size) || d->layer_count > MPSD__MAX_LAYERS || !(res >= 1.0 && res < 4294967296.0)
+        || (d->depth != 0 && d->depth != 8 && d->depth != 16) || d->format > MINIPSD_PSB
+        || (d->layer_info_align > 2 && d->layer_info_align != 4))
         return MINIPSD_ERR_ARG;
     rc = mpsd__kept_ok(d, out);
     if (rc != MINIPSD_OK) return rc;
@@ -485,18 +710,20 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *d, const minipsd_write_opts 
     if (d->width < 1 || d->height < 1 || d->width > mpsd__max_side(out) || d->height > mpsd__max_side(out))
         return MINIPSD_ERR_SIZE;
     if (mpsd__resources_size(d) > MPSD__MAX_SECTION) return MINIPSD_ERR_SIZE;
+    rc = mpsd__composite_ok(d, out);
+    if (rc != MINIPSD_OK) return rc;
     for (i = 0; i < d->layer_count; ++i) {    /* a side within the format's: so is any RLE row count */
         const minipsd_layer *l = &d->layers[i];
         const int64_t w = (int64_t)l->right - l->left, h = (int64_t)l->bottom - l->top;
         int k;
-        if (w < 0 || h < 0 || (!l->rgba && !l->stored && w && h)) return MINIPSD_ERR_ARG;
+        if (((w < 0 || h < 0) && l->rgba && !l->stored) || (!l->rgba && !l->stored && w > 0 && h > 0)) return MINIPSD_ERR_ARG;
         if (w > mpsd__max_side(out) || h > mpsd__max_side(out)) return MINIPSD_ERR_SIZE;
         rc = l->mask ? mpsd__mask_ok(d, l->mask, out) : MINIPSD_OK;
         for (k = MPSD__CH_MASK; rc == MINIPSD_OK && k < mpsd__channel_count(l); ++k) rc = mpsd__retable_ok(d, l, k, out);
         if (rc != MINIPSD_OK) return rc;
         if (mpsd__layer_extra_size(l, mpsd__doc_psb(d), out) > MPSD__MAX_SECTION) return MINIPSD_ERR_SIZE;
         if (!l->stored) continue;
-        if (!l->rgba && !d->composite) return MINIPSD_ERR_ARG;   /* nothing to compose it from */
+        if (!l->rgba && !d->composite && !d->composite_stored.size) return MINIPSD_ERR_ARG;   /* nothing to compose it from */
         for (k = 0; k < MPSD__RGBA; ++k) {          /* transparency may be missing */
             const mpsd__rect r = mpsd__layer_rect(d, l);
             if ((k != MINIPSD_CH_A || l->stored[k].size)
@@ -518,29 +745,29 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *d, const minipsd_write_opts 
 static int mpsd__measure_layers(const minipsd_doc *d, unsigned psb, uint64_t *sizes, uint64_t *content, uint64_t *info)
 {
     size_t i, k;
-    *content = MPSD__LAYER_COUNT;
+    *content = d->layer_count ? MPSD__LAYER_COUNT : 0;   /* no layers: no count either */
     for (i = 0; i < d->layer_count; ++i) {
-        const int n = mpsd__channel_count(&d->layers[i]);
-        *content += mpsd__record_size((uint32_t)n, psb) + mpsd__layer_extra_size(&d->layers[i], mpsd__doc_psb(d), psb);
-        for (k = 0; k < (size_t)n; ++k)
+        const int n = mpsd__channel_count(&d->layers[i]), first = mpsd__first_channel(&d->layers[i]);
+        *content += mpsd__record_size((uint32_t)(n - first), psb) + mpsd__layer_extra_size(&d->layers[i], mpsd__doc_psb(d), psb);
+        for (k = (size_t)first; k < (size_t)n; ++k)
             *content += sizes[i * MPSD__CHANNELS + k] = mpsd__layer_channel_size(d, &d->layers[i], (int)k, psb);
     }
-    *info = (*content + 1) / 2 * 2;
-    return mpsd__len_size(psb) + *info + mpsd__tail_size(d, psb) > mpsd__max_layers_section(psb) ? MINIPSD_ERR_SIZE : MINIPSD_OK;
+    {
+        const uint64_t align = d->layer_info_align ? d->layer_info_align : 2;   /* even by default */
+        *info = (*content + align - 1) / align * align;
+    }
+    return mpsd__section_size(d, *info, psb) > mpsd__max_layers_section(psb) ? MINIPSD_ERR_SIZE : MINIPSD_OK;
 }
 
 /* Everything up to the first layer record: the file header, the colour mode data, the image
    resources (resolution, the ICC profile if any, the kept ones), the layer section's lengths and
-   the layer count. */
+   the layer count; with a layers' block, the tail before it and its header between the two. */
 static void mpsd__head(mpsd__sink *s, const minipsd_doc *d, uint64_t info, unsigned out)
 {
-    const uint32_t res  = mpsd__dpi_fixed(d);
-    const uint8_t *kept = mpsd__kept_resolution(d);
-    size_t         i;
     mpsd__put(s, "8BPS", 4);
     mpsd__u16(s, out ? MINIPSD_PSB : MINIPSD_PSD);   /* the version */
     mpsd__zeros(s, 6);                        /* reserved            */
-    mpsd__u16(s, MPSD__RGBA);                 /* R, G, B, alpha      */
+    mpsd__u16(s, mpsd__composite_channels(d));   /* R, G, B, alpha      */
     mpsd__u32(s, d->height);
     mpsd__u32(s, d->width);
     mpsd__u16(s, mpsd__doc_wide(d) ? 16 : 8); /* bits per channel    */
@@ -549,45 +776,36 @@ static void mpsd__head(mpsd__sink *s, const minipsd_doc *d, uint64_t info, unsig
     mpsd__u32(s, 0);                          /* colour mode data    */
 
     mpsd__u32(s, (uint32_t)mpsd__resources_size(d));
-    mpsd__put(s, "8BIM", 4); mpsd__u16(s, MPSD__RES_RESOLUTION);
-    mpsd__u16(s, 0);                          /* no name, padded to even */
-    mpsd__u32(s, MPSD__RESOLUTION_SIZE);
-    if (kept) {
-        mpsd__put(s, kept, MPSD__RESOLUTION_SIZE);
-    } else {
-        mpsd__u32(s, res); mpsd__u16(s, 1); mpsd__u16(s, 1);  /* pixels per inch, shown in inches */
-        mpsd__u32(s, res); mpsd__u16(s, 1); mpsd__u16(s, 1);
-    }
-    if (d->icc) {
-        mpsd__put(s, "8BIM", 4); mpsd__u16(s, MPSD__RES_ICC); mpsd__u16(s, 0);
-        mpsd__u32(s, (uint32_t)d->icc_size);
-        mpsd__put(s, d->icc, d->icc_size);
-        mpsd__zeros(s, d->icc_size & 1);
-    }
-    for (i = 0; i < d->resource_count; ++i) {
-        const minipsd_resource *r = &d->resources[i];
-        if (!mpsd__kept_resource(r)) continue;
-        mpsd__put(s, "8BIM", 4); mpsd__u16(s, r->id);
-        mpsd__u8(s, (unsigned)r->name.size);
-        mpsd__put(s, r->name.data, r->name.size);
-        mpsd__zeros(s, mpsd__pad(1 + r->name.size, 2) - (1 + r->name.size));
-        mpsd__u32(s, (uint32_t)r->data.size);
-        mpsd__put(s, r->data.data, r->data.size);
-        mpsd__zeros(s, r->data.size & 1);
-    }
+    mpsd__resources(s, d);
 
-    mpsd__putlen(s, mpsd__len_size(out) + info + mpsd__tail_size(d, out), out);   /* layer and mask information */
-    mpsd__putlen(s, info, out);
-    mpsd__u16(s, (unsigned)(uint16_t)-(int16_t)d->layer_count);   /* negative: composite has alpha */
+    size_t         end;
+    const size_t   at = mpsd__layers_block(d, &end);
+    mpsd__putlen(s, mpsd__section_size(d, info, out), out);   /* layer and mask information */
+    if (mpsd__no_section(d)) return;
+    mpsd__putlen(s, at < d->layer_tail.size ? 0 : info, out);
+    if (at < d->layer_tail.size) {
+        (void)mpsd__tail_range(s, d, 0, at, out);
+        mpsd__put(s, d->layer_tail.data + at, MPSD__BLOCK_LEN);   /* '8BIM', 'Lr16' */
+        mpsd__putlen(s, info, out);
+    }
+    if (d->layer_count)
+        mpsd__u16(s, (unsigned)(uint16_t)(mpsd__composite_channels(d) == MPSD__RGBA ? -(int16_t)d->layer_count : (int16_t)d->layer_count));   /* negative: composite has alpha */
 }
 
 /* After the last layer channel: the layer info's padding, the kept tail or an empty global layer
    mask, and the composite's compression. */
 static void mpsd__tail(mpsd__sink *s, const minipsd_doc *d, uint64_t content, uint64_t info, unsigned out)
 {
+    size_t       end;
+    const size_t at = mpsd__layers_block(d, &end);
     mpsd__zeros(s, (size_t)(info - content));
-    (void)mpsd__tail_out(s, d, out);          /* minipsd_doc_check has accepted it */
-    mpsd__u16(s, mpsd__marker(d));
+    if (at < d->layer_tail.size) {            /* the block's padding, then the tail after it */
+        mpsd__zeros(s, mpsd__pad((size_t)info, 4) - (size_t)info);
+        (void)mpsd__tail_range(s, d, end, d->layer_tail.size, out);
+    } else {
+        (void)mpsd__tail_range(s, d, 0, d->layer_tail.size, out);   /* minipsd_doc_check has accepted it */
+    }
+    if (!mpsd__copies_composite(d)) mpsd__u16(s, mpsd__marker(d));   /* a stored composite brings its own */
 }
 
 /* --- the pull writer: everything in the caller's workspace --- */
@@ -625,6 +843,7 @@ struct minipsd_writer {
     uint64_t           offset;            /* bytes of the current piece already handed out */
     uint32_t           composite_y;       /* the row composite_at holds; MPSD__NO_ROW for none */
     unsigned           out;               /* the format written: 1 for a PSB   */
+    int                copying;           /* the composite, copied as stored  */
     const uint8_t     *composite_at;      /* that row: composite_row, or a matted supplied row */
 };
 
@@ -682,10 +901,12 @@ MINIPSDDEF int minipsd_writer_init(minipsd_writer **out, const minipsd_doc *d, c
     total = MPSD__HEADER_SIZE
           + MPSD__LEN                                                /* colour mode data: none */
           + MPSD__LEN + mpsd__resources_size(d)
-          + mpsd__len_size(w->out) + mpsd__len_size(w->out)          /* the section's length, the layer info's */
-          + w->info + mpsd__tail_size(d, w->out)
+          + mpsd__len_size(w->out) + mpsd__section_size(d, w->info, w->out)   /* the section's length, the section */
           + MPSD__MARKER_SIZE;                                       /* the composite's */
-    if (d->compression == MINIPSD_RAW) {
+    if (mpsd__copies_composite(d)) {
+        const mpsd__source src = mpsd__composite_source(d);
+        total += mpsd__stored_size(&src, mpsd__doc_psb(d), w->out) - MPSD__MARKER_SIZE;
+    } else if (d->compression == MINIPSD_RAW) {
         total += (uint64_t)d->width * d->height * MPSD__RGBA << wide;
     } else {                                  /* each row's count, then the row */
         mpsd__composite_init(&comp, d, w->composite_row);
@@ -705,6 +926,7 @@ MINIPSDDEF int minipsd_writer_init(minipsd_writer **out, const minipsd_doc *d, c
     w->row         = 0;
     w->offset      = 0;
     w->composite_y = MPSD__NO_ROW;
+    w->copying     = 0;
     *out = w;
     return MINIPSD_OK;
 }
@@ -754,8 +976,9 @@ static const uint8_t *mpsd__writer_composite(minipsd_writer *w, uint32_t y)
 static void mpsd__writer_piece(minipsd_writer *w, mpsd__sink *s)
 {
     const minipsd_doc   *d = w->doc;
-    const minipsd_layer *l   = &d->layers[w->layer];   /* always valid: 0 outside the layer section */
-    const mpsd__source   src = w->piece < MPSD__TAIL ? mpsd__channel_source(d, l, w->channel) : mpsd__channel_source(d, l, 0);
+    const int            channel = w->piece > MPSD__RECORD && w->piece < MPSD__TAIL;   /* a layer channel's piece */
+    const minipsd_layer *l   = d->layer_count ? &d->layers[w->layer] : NULL;   /* 0 outside the layer section */
+    const mpsd__source   src = w->copying ? mpsd__composite_source(d) : channel ? mpsd__channel_source(d, l, w->channel) : mpsd__no_source();
     const uint8_t       *row = src.samples ? src.samples + (size_t)w->row * src.width * src.step : NULL;
     switch (w->piece) {
     case MPSD__HEAD:            mpsd__head(s, d, w->info, w->out); break;
@@ -779,13 +1002,19 @@ static void mpsd__writer_piece(minipsd_writer *w, mpsd__sink *s)
     }
 }
 
-/* The first piece of the current layer channel: copied whole when stored (in parts when its count
-   table changes width), else encoded. */
+/* The first piece of a source: copied whole when stored (in parts when its count table changes
+   width), else encoded. */
+static int mpsd__source_piece(const mpsd__source *src, const minipsd_writer *w)
+{
+    if (mpsd__retable(src, mpsd__doc_psb(w->doc), w->out)) return MPSD__STORED_HEAD;
+    return src->stored ? MPSD__STORED : MPSD__COMPRESSION;
+}
+
+/* The first piece of the current layer channel. */
 static int mpsd__channel_piece(const minipsd_writer *w)
 {
     const mpsd__source src = mpsd__channel_source(w->doc, &w->doc->layers[w->layer], w->channel);
-    if (mpsd__retable(&src, mpsd__doc_psb(w->doc), w->out)) return MPSD__STORED_HEAD;
-    return src.stored ? MPSD__STORED : MPSD__COMPRESSION;
+    return mpsd__source_piece(&src, w);
 }
 
 /* Moves the cursor to the piece after the current one, in file order. */
@@ -793,16 +1022,18 @@ static void mpsd__writer_next(minipsd_writer *w)
 {
     const minipsd_doc *d    = w->doc;
     const int          rle  = d->compression != MINIPSD_RAW;
-    const uint32_t     rows = w->piece < MPSD__TAIL ? mpsd__channel_source(d, &d->layers[w->layer], w->channel).height : 0;
+    const uint32_t     rows = w->copying ? mpsd__composite_source(d).height
+                            : w->piece > MPSD__RECORD && w->piece < MPSD__TAIL ? mpsd__channel_source(d, &d->layers[w->layer], w->channel).height : 0;
     w->offset = 0;
     switch (w->piece) {
     case MPSD__HEAD:
-        w->piece = MPSD__RECORD;
+        w->piece = d->layer_count ? MPSD__RECORD : MPSD__TAIL;
         return;
     case MPSD__RECORD:
         if (++w->layer < d->layer_count) return;
-        w->layer = 0;
-        w->piece = mpsd__channel_piece(w);
+        w->layer   = 0;
+        w->channel = mpsd__first_channel(&d->layers[0]);
+        w->piece   = mpsd__channel_piece(w);
         return;
     case MPSD__COMPRESSION:                   /* rows follow, unless the layer is empty */
         if (rows) { w->piece = rle ? MPSD__COUNT : MPSD__ROW; return; }
@@ -828,6 +1059,12 @@ static void mpsd__writer_next(minipsd_writer *w)
         w->piece = MPSD__STORED_ROWS;
         return;
     case MPSD__TAIL:
+        if (mpsd__copies_composite(d)) {
+            const mpsd__source src = mpsd__composite_source(d);
+            w->copying = 1;
+            w->piece   = mpsd__source_piece(&src, w);
+            return;
+        }
         w->piece = rle ? MPSD__COMPOSITE_COUNT : MPSD__COMPOSITE_ROW;
         return;
     default:                                  /* the composite: channel by channel, row by row */
@@ -838,10 +1075,15 @@ static void mpsd__writer_next(minipsd_writer *w)
         w->piece   = w->piece == MPSD__COMPOSITE_COUNT ? MPSD__COMPOSITE_ROW : MPSD__DONE;
         return;
     }
+    if (w->copying) { w->piece = MPSD__DONE; return; }   /* the stored composite is complete */
     /* A layer channel is complete: the next channel, the next layer, or the tail. */
     if (++w->channel < mpsd__channel_count(&d->layers[w->layer])) { w->piece = mpsd__channel_piece(w); return; }
     w->channel = 0;
-    if (++w->layer < d->layer_count) { w->piece = mpsd__channel_piece(w); return; }
+    if (++w->layer < d->layer_count) {
+        w->channel = mpsd__first_channel(&d->layers[w->layer]);
+        w->piece   = mpsd__channel_piece(w);
+        return;
+    }
     w->layer = 0;
     w->piece = MPSD__TAIL;
 }

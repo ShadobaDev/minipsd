@@ -20,6 +20,24 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* The layer's "Blend If" ranges that are not left alone, as black and white points (0 is the
+   composite grey, then each channel). */
+static void show_blend_if(const minipsd_layer_view *layer)
+{
+    minipsd_blending_range br;
+    uint32_t               i;
+    for (i = 0; minipsd_layer_blending_range(layer, i, &br) == MINIPSD_OK; ++i) {
+        const minipsd_blend_range *both[2] = { &br.source, &br.destination };
+        int k;
+        for (k = 0; k < 2; ++k) {
+            const minipsd_blend_range *b = both[k];
+            if (b->black[0] || b->black[1] || b->white[0] != 255 || b->white[1] != 255)
+                printf("      blend if %u, %s: black %u/%u, white %u/%u\n", (unsigned)i, k ? "underlying" : "this layer",
+                       (unsigned)b->black[0], (unsigned)b->black[1], (unsigned)b->white[0], (unsigned)b->white[1]);
+        }
+    }
+}
+
 /* The whole file in a new buffer; NULL when it cannot be read. */
 static uint8_t *read_all(const char *path, size_t *size)
 {
@@ -129,6 +147,7 @@ int main(int argc, char **argv)
                 printf("=%u", (unsigned)block.data.data[3]);
         }
         printf("%s%s\n", layer.has_mask ? ", mask" : "", layer.other_channels ? ", and channels not read" : "");
+        show_blend_if(&layer);
         if (rgb && show_pixels(r, &layer, (uint32_t)(layer.right - layer.left), (uint32_t)(layer.bottom - layer.top), info.depth) != MINIPSD_OK)
             failed = 1;
         else if (!rgb)
@@ -154,8 +173,7 @@ int main(int argc, char **argv)
         }
         if (rc != MINIPSD_OK) { printf("as a document: %s\n", minipsd_error_string(rc)); failed = 1; }
         else if (!lost)       printf("as a document: everything kept\n");
-        else printf("as a document, lost:%s%s\n", lost & MINIPSD_LOST_BLENDING_RANGES ? " blending-ranges" : "",
-                    lost & MINIPSD_LOST_CHANNELS ? " channels" : "");
+        else printf("as a document, lost:%s\n", lost & MINIPSD_LOST_CHANNELS ? " channels" : "");
         minipsd_doc_free(doc);
     }
     free(data);

@@ -93,6 +93,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     minipsd_resource   res;
     minipsd_layer_view layer;
     minipsd_block      block;
+    minipsd_blending_range range;
+    uint32_t           i;
     minipsd_limits     limits = {1u << 16, 0, FUZZ_MAX_DECODED};
     char               name[8];
     int                rc;
@@ -106,6 +108,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     while ((rc = minipsd_reader_next_layer(r, &layer)) == MINIPSD_MORE) {
         (void)minipsd_layer_name(&layer, name, sizeof name, &need);   /* often too small: truncation too */
         for (pos = 0; minipsd_layer_next_block(&layer, &pos, &block) == MINIPSD_MORE;) {}
+        for (i = 0; i < layer.blending_range_count; ++i)   /* the count is what the bytes hold */
+            if (minipsd_layer_blending_range(&layer, i, &range) != MINIPSD_OK) abort();
         if (layer.right < layer.left || layer.bottom < layer.top) abort();   /* never inverted */
         decode(r, &layer, (uint64_t)((int64_t)layer.right - layer.left), (uint64_t)((int64_t)layer.bottom - layer.top),
                info.depth, size);

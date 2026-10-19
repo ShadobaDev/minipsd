@@ -34,9 +34,14 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
 - `minipsd_read`: a whole 8- or 16-bit RGB file into a `minipsd_doc` that `minipsd_write` takes as it
   is, every byte copied into one block so the file can be freed at once; `minipsd_doc_free`;
   `minipsd_read_size` and `minipsd_read_into` for the caller's own memory. `lost`
-  (`MINIPSD_LOST_*`) says what the document could not carry: blending ranges, extra channels.
+  (`MINIPSD_LOST_*`) says what the document could not carry: extra channels.
 - Layer groups: `kind` on `minipsd_layer` and the layer view (`MINIPSD_KIND_*`), written as
   `lsct` blocks with the group's mode, nesting checked by `minipsd_doc_check`.
+- Blending ranges ("Blend If"): `minipsd_blend_range` and `minipsd_blending_range`, as the
+  file stores them; `blending_ranges` and `blending_range_count` on `minipsd_layer`, written as
+  given (none: a length of 0, as before); the same in the layer view, read with
+  `minipsd_layer_blending_range`. `minipsd_read` keeps them, so a Photoshop file's ranges are
+  written back as they were; `MINIPSD_LOST_BLENDING_RANGES` is no longer set.
 - Layer masks: `minipsd_mask` on `minipsd_layer` (rectangle, colour, flags, pixels or the stored
   channel, and a file's real mask and mask parameters kept), the mask in the layer view, and
   `minipsd_decode_mask`.
@@ -66,6 +71,38 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
 - Return codes `MINIPSD_ERR_FORMAT`, `MINIPSD_ERR_UNSUPPORTED`, `MINIPSD_ERR_SHORT`,
   `MINIPSD_ERR_LIMIT`, and `minipsd_limits` for untrusted files: the largest side (canvas, and
   layers when set), the most layers, the most bytes one decode call writes.
+
+### Changed
+- A document read from a file is written back closer to that file, byte for byte: the
+  resolution and ICC profile resources where the file had them, a layer's `luni` where its
+  blocks had it (kept resources and blocks were already in their order).
+- `minipsd_read` with `opts->stored` keeps the composite as the file stores it, in
+  `composite_stored` and `composite_channels` at the end of `minipsd_doc` (`composite` is then
+  `NULL`), and the writer copies it: no decoding, no encoding, three channels written as
+  three. A supplied `composite` still wins.
+- A stored layer without a transparency channel is written without one, as its file has it,
+  instead of with an opaque one.
+- `minipsd_read` with `opts->stored` keeps an empty layer's channels too (their compression
+  markers), and `layer_info_align` at the end of `minipsd_doc` keeps how the file pads its layer
+  info (Photoshop to 4 bytes, others to 2 or not at all); the writer pads as it says, even by
+  default. A layer's all-zero rectangle means the full canvas only with `rgba`: stored channels
+  take the rectangle as it is.
+- A layer's names kept from a file: `name_pascal` at the end of `minipsd_layer` holds its legacy
+  name as stored, and while `name` still says what the file's names say, the legacy name and the
+  kept `luni` are written as they are (another program's code page, a counted NUL); a renamed
+  layer gets the writer's own.
+- With `opts->stored`, `minipsd_read` keeps an empty layer's rectangle as stored, inverted too
+  (Photoshop's fill layers), and a file whose layer and mask section ends with its layer info
+  (GIMP's) as such: `layer_tail` with data and no size, which the writer writes as nothing at
+  all. An inverted rectangle is refused only for a layer with `rgba`.
+- Photoshop's 16-bit files keep their layers in `Lr16`: `minipsd_read` leaves the block in
+  `layer_tail`, empty, and the writer writes the layers there (the layer info empty), also into
+  the other format. With `opts->stored`, a file without layers stays without: `layer_count` 0,
+  which `minipsd_doc_check` takes with a composite; it is written flat, without a layer and mask
+  section when the file had none.
+- 250 of the 254 files of psd-tools' set and our own that `minipsd_read` takes come back
+  identical through `minipsd_read` (with `opts->stored`) and `minipsd_write`;
+  `tests/psd_tools/roundtrip.py` checks every one.
 
 ## [0.2.0] — 2026-10-15
 

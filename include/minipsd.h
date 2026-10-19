@@ -126,7 +126,8 @@
 enum {
     MINIPSD_OK          =  0, /*!< Success.                                                   */
     MINIPSD_MORE        =  1, /*!< Not an error: the work is not finished, call again.         */
-    MINIPSD_ERR_ARG     = -1, /*!< A NULL document, no layers, or a dpi outside (0, 65536).    */
+    MINIPSD_ERR_ARG     = -1, /*!< A NULL document, no layers nor composite, or a dpi outside
+                                   (0, 65536).                                                  */
     MINIPSD_ERR_SIZE    = -2, /*!< A side is 0 or above the format's (MINIPSD_MAX_SIDE, or
                                    MINIPSD_MAX_SIDE_PSB), or the document is too large for
                                    PSD's 32-bit section lengths (about 4 GiB).                */
@@ -213,6 +214,29 @@ typedef struct minipsd_block {
     minipsd_bytes data;   /*!< The block's bytes.                   */
 } minipsd_block;
 
+/**
+ * \brief One "Blend If" range: where a slider's black and white points sit, 0 to 255 at any depth.
+ *
+ * Each point has two halves, split in Photoshop by Alt-dragging for a soft transition; unsplit,
+ * both are equal.  Left alone, a range is black {0, 0}, white {255, 255}.
+ */
+typedef struct minipsd_blend_range {
+    uint8_t black[2]; /*!< The black point: its low and high half.  */
+    uint8_t white[2]; /*!< The white point: its low and high half.  */
+} minipsd_blend_range;
+
+/**
+ * \brief A layer's blending ranges ("Blend If") for one channel, as the file stores them.
+ *
+ * A layer has one for the composite grey, then one per channel, in the file's order (Photoshop
+ * writes five: grey, then four).  Where the layer's own pixels fall outside source, or those
+ * beneath it outside destination, the layer does not show.
+ */
+typedef struct minipsd_blending_range {
+    minipsd_blend_range source;      /*!< "This Layer".       */
+    minipsd_blend_range destination; /*!< "Underlying Layer". */
+} minipsd_blending_range;
+
 /** \brief What a layer record is: a layer, or one end of a group (the type of its 'lsct' block). */
 enum {
     MINIPSD_KIND_LAYER        = 0, /*!< A layer with pixels, or an empty one.                     */
@@ -260,9 +284,10 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
     uint8_t        opacity;     /*!< 255 is opaque, 0 is fully transparent.                            */
     uint8_t        hidden;      /*!< Non-zero: the layer starts hidden (and stays out of the composite). */
     int32_t        top, left, bottom, right; /*!< The layer's rectangle on the canvas, as in
-                                    minipsd_layer_view; all four zero: the full canvas.  It may reach
-                                    past the canvas, or lie wholly outside it.  An empty layer's has
-                                    no area.                                                       */
+                                    minipsd_layer_view; all four zero, with rgba and no stored: the
+                                    full canvas.  It may reach past the canvas, or lie wholly
+                                    outside it.  An empty layer's has no area, or is inverted as
+                                    a file stored it (Photoshop's fill layers: 0, 0, -1, 0).      */
     char           blend[4];    /*!< The blend mode's four-character key, such as "mul "; all zero:
                                     "norm".  Written as given; the composed composite draws every
                                     mode as normal.                                                */
@@ -279,7 +304,7 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
                                     the compression marker, then the rows), copied as they are
                                     instead of encoding rgba: a layer never decoded is never encoded
                                     again.  Each is checked against the rectangle; transparency of
-                                     size 0 is none, written opaque.  rgba may then be NULL, as long
+                                    size 0 is none, and written as none.  rgba may then be NULL, as long
                                     as the document supplies its composite.                       */
     uint8_t        kind;        /*!< MINIPSD_KIND_*: a layer, or a group's top record or divider.
                                     Groups nest bottom first: a divider, the group's layers, then
@@ -287,6 +312,17 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
                                     mode (blend; zero: pass through).  Written as an 'lsct' block,
                                     or a kept one of the same kind as it is.                       */
     const minipsd_mask *mask;   /*!< The layer mask; NULL: none.                                   */
+    const minipsd_blending_range *blending_ranges; /*!< blending_range_count ranges, written as given:
+                                    the composite grey's, then each channel's.  NULL with a count
+                                    of 0: none (what a writer other than Photoshop writes).  The
+                                    composed composite ignores them.                               */
+    uint32_t       blending_range_count; /*!< How many; 0: none.                                  */
+    minipsd_bytes  name_pascal; /*!< The legacy name kept from a file, raw bytes (at most 255, in the
+                                    code page of the program that wrote it), as
+                                    minipsd_layer_view.name_pascal.  While name still says what the
+                                    file's names say, they are written as they are, this one and
+                                    a kept 'luni'; once it changes, the writer's own.  Size 0 and
+                                    no kept 'luni': the writer's own.                            */
 } minipsd_layer;
 
 /**
@@ -300,13 +336,15 @@ typedef struct minipsd_doc {
                                               for a PSB.                                      */
     double               dpi;            /*!< Above 0, below 65536; recorded, not resampled. */
     const minipsd_layer *layers;         /*!< Bottom first.                                  */
-    size_t               layer_count;    /*!< >= 1.                                          */
+    size_t               layer_count;    /*!< >= 1; 0 with a composite (supplied or stored):
+                                              a flat file, its image the composite.           */
     const uint8_t       *icc;            /*!< Optional ICC profile; NULL means none (sRGB).  */
     size_t               icc_size;       /*!< Size of icc in bytes; 0 when icc is NULL.      */
     int                  compression;    /*!< MINIPSD_RLE or MINIPSD_RAW.                    */
     const uint8_t       *composite;      /*!< The composite (merged) image: width * height * 4
                                               samples, rows top down, straight alpha, written
-                                              whatever the layers hold.  NULL: composed from the
+                                              whatever the layers hold.  NULL: composite_stored
+                                              is copied; without it too, composed from the
                                               layers, a best effort (see "What it writes").  */
     int                  composite_matted; /*!< Non-zero: composite is already matted against
                                               white, as the file stores it (what
@@ -314,14 +352,19 @@ typedef struct minipsd_doc {
                                               and is written as it is.  Ignored without
                                               composite.                                     */
     const minipsd_resource *resources;   /*!< Image resources kept from a file (thumbnail, guides,
-                                              ...), written in order after the resolution and the
-                                              ICC profile, except 1005 and 1039: dpi and icc
-                                              win.                                           */
+                                              ...), written in order; the writer's resolution
+                                              and ICC profile take the place of the first 1005
+                                              and 1039 (dpi and icc win), or come first.      */
     size_t               resource_count; /*!< How many resources.                            */
     minipsd_bytes        layer_tail;     /*!< The rest of the layer and mask section kept from a
                                               file (minipsd_info.layer_tail): the global layer
-                                              mask and the global blocks, written as they are.
-                                              Empty: no global mask, no blocks.               */
+                                              mask and the global blocks, written as they are;
+                                              an 'Lr16' (or 'Lr32') block among them says
+                                              where the layers go, the layer info left empty,
+                                              as Photoshop's 16-bit files have them.
+                                              Empty: no global mask, no blocks (an empty global
+                                              mask is written), but with data set and size 0:
+                                              nothing at all, as some files end the section.  */
     uint16_t             depth;          /*!< Bits per channel: 0 or 8, or 16, where every sample
                                               (rgba, mask pixels, composite) is a uint16_t in
                                               host order, 0 .. 65535.                         */
@@ -332,6 +375,20 @@ typedef struct minipsd_doc {
                                               out; minipsd_read sets it to the file's.  It is
                                               written as this format unless
                                               minipsd_write_opts.format says otherwise.       */
+    minipsd_bytes        composite_stored; /*!< The composite as a file stores it, copied as it is
+                                              when composite is NULL, never decoded: its
+                                              compression marker, then (RLE) every row's byte
+                                              count, channel by channel, then the rows, laid
+                                              out as format lays it out.  minipsd_read sets it
+                                              with minipsd_read_opts.stored.  Size 0: none.   */
+    uint16_t             composite_channels; /*!< The channels composite_stored holds: 3 (red,
+                                              green, blue), or 4, the fourth transparency (the
+                                              layer count is then written negative).  Ignored
+                                              without composite_stored.                       */
+    uint8_t              layer_info_align; /*!< The layer info's length is padded to a multiple
+                                              of this: 0 or 2, even (the default); 4, as
+                                              Photoshop pads it; 1, not padded.  minipsd_read
+                                              sets the file's.                                 */
 } minipsd_doc;
 
 /**
@@ -343,8 +400,9 @@ typedef struct minipsd_write_opts {
     uint16_t format; /*!< The file written: MINIPSD_PSD or MINIPSD_PSB; 0 is the document's own
                           format.  When it differs from the document's, what the document keeps
                           is translated: RLE row counts and long blocks' lengths widen or narrow.
-                          Blocks whose data itself depends on the format ('Lr16', 'Lr32',
-                          'Layr') and long keys not yet verified ('Alph', 'FELS', 'FEid', 'FXid',
+                          Blocks whose data itself depends on the format ('Layr', and an
+                          'Lr16' or 'Lr32' past the first, which holds the layers) and long
+                          keys not yet verified ('Alph', 'FELS', 'FEid', 'FXid',
                           'Mt16', 'Mtrn', 'PxSD', 'lnk3') are refused (MINIPSD_ERR_UNSUPPORTED);
                           a PSB that does not fit a PSD is MINIPSD_ERR_SIZE.                  */
 } minipsd_write_opts;
@@ -361,9 +419,9 @@ typedef struct minipsd_write_opts {
  * \return MINIPSD_OK or an error code.
  *
  * \retval MINIPSD_ERR_ARG  doc is NULL, a format is neither 0, MINIPSD_PSD nor MINIPSD_PSB (the
- *                          document's or opts'), there are no layers (or more than 32767), dpi is outside
+ *                          document's or opts'), there are no layers and no composite (or more than 32767 layers), dpi is outside
  *                          (0, 65536), depth is not 0, 8 or 16, a size is set without its data (icc, a resource, a name,
- *                          extra, layer_tail), a layer's rectangle is inverted, an empty layer's
+ *                          extra, layer_tail), a layer with rgba has an inverted rectangle, an empty layer's
  *                          has an area, extra is not a run of well-formed blocks, a stored
  *                          channel does not match its rectangle, a layer has only stored
  *                          channels while the composite is to be composed, groups do not nest
@@ -587,6 +645,9 @@ typedef struct minipsd_layer_view {
     uint8_t       format;                   /*!< MINIPSD_PSD or MINIPSD_PSB, the file's: how extra's
                                                  blocks and the channels' row counts are laid out.
                                                  0 in a view built by hand is MINIPSD_PSD.             */
+    minipsd_bytes blending_ranges;          /*!< The blending ranges as stored, eight bytes each; size
+                                                 0: none.  minipsd_layer_blending_range reads one.     */
+    uint32_t      blending_range_count;     /*!< How many: blending_ranges.size / 8.                   */
 } minipsd_layer_view;
 
 /**
@@ -706,6 +767,17 @@ MINIPSDDEF int minipsd_layer_name(const minipsd_layer_view *layer, char *utf8, s
  *         MINIPSD_ERR_FORMAT for a malformed block; MINIPSD_ERR_ARG for a NULL argument.
  */
 MINIPSDDEF int minipsd_layer_next_block(const minipsd_layer_view *layer, size_t *pos, minipsd_block *block);
+
+/**
+ * \brief One of a layer's blending ranges ("Blend If").
+ *
+ * \param layer A record from minipsd_reader_next_layer.
+ * \param i     Which: 0 is the composite grey's, then each channel's; below
+ *              layer->blending_range_count.
+ * \param range Receives the range.
+ * \return MINIPSD_OK; or MINIPSD_ERR_ARG for a NULL argument or i past the layer's ranges.
+ */
+MINIPSDDEF int minipsd_layer_blending_range(const minipsd_layer_view *layer, uint32_t i, minipsd_blending_range *range);
 
 /**
  * \brief Where one channel's samples go: the first sample, and the steps to the next one.
@@ -851,7 +923,8 @@ MINIPSDDEF int minipsd_decode_mask(minipsd_reader *r, const minipsd_layer_view *
  * description of it) at the project's address.
  */
 enum {
-    MINIPSD_LOST_BLENDING_RANGES = 2, /*!< A layer's blending ranges ("Blend If") not left alone.  */
+    MINIPSD_LOST_BLENDING_RANGES = 2, /*!< No longer set: blending ranges are kept
+                                           (minipsd_layer.blending_ranges).                     */
     MINIPSD_LOST_CHANNELS        = 4  /*!< Channels beyond R, G, B, transparency and the masks':
                                            alpha and spot channels, of a layer or of the composite. */
 };
@@ -865,7 +938,9 @@ typedef struct minipsd_read_opts {
     int stored; /*!< Non-zero: each layer keeps its channels as stored (minipsd_layer.stored), not
                      decoded, so writing it back copies them: a fraction of the memory, and no
                      encoding, and ZIP-compressed channels pass.  A layer without a transparency
-                     channel gets an opaque one when written.                                    */
+                     channel is written without one.  The composite too
+                     (minipsd_doc.composite_stored, composite NULL), when it holds red, green,
+                     blue and at most transparency.                                              */
 } minipsd_read_opts;
 
 /**
@@ -892,8 +967,9 @@ MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_li
  * blocks as they are; the composite as the file stores it, with composite_matted set, so writing
  * the document gives the same image back.  The document has the file's depth, 8 or 16 bits.  A
  * file without layers gets one, "Background", holding its image.  A file without a resolution
- * gets 72 dpi.  Layers a 16-bit file keeps in its 'Lr16' block become the document's layers, and
- * the block leaves layer_tail.
+ * gets 72 dpi.  Layers a 16-bit file keeps in its 'Lr16' block become the document's layers; the
+ * block stays in layer_tail, empty, where the file had it, and the writer puts the layers back
+ * there.  With opts->stored, a file without layers stays without: no layer, the composite copied.
  *
  * \param data       The whole file.
  * \param size       How many bytes data holds.

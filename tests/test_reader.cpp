@@ -96,6 +96,7 @@ struct Rec {
     unsigned opacity = 255, flags = 0;
     std::string pascal;                 // raw bytes of the legacy name
     Bytes mask;                         // layer mask data
+    Bytes ranges;                       // blending ranges, eight bytes each
     Bytes blocks;                       // additional information (build it with block())
     bool hasRawExtra = false;           // the extra data is exactly rawExtra
     Bytes rawExtra;
@@ -116,7 +117,8 @@ Bytes record(const Rec &r, bool psb = false)
     if (r.hasRawExtra) {
         extra.raw(r.rawExtra);
     } else {
-        extra.u32(static_cast<std::uint32_t>(r.mask.size())).raw(r.mask).u32(0);
+        extra.u32(static_cast<std::uint32_t>(r.mask.size())).raw(r.mask);
+        extra.u32(static_cast<std::uint32_t>(r.ranges.size())).raw(r.ranges);
         extra.u8(static_cast<unsigned>(r.pascal.size())).str(r.pascal);
         extra.zeros((4 - (1 + r.pascal.size()) % 4) % 4);
         extra.raw(r.blocks);
@@ -749,10 +751,12 @@ TEST(MinipsdReaderTest, ChannelsAreFoundByIdWhateverTheirOrderAndOthersAreCounte
     EXPECT_EQ(vb.channel[MINIPSD_CH_A].data, nullptr) << "a layer without transparency";
 }
 
-TEST(MinipsdReaderTest, ALayerMaskAndBlendingRangesAreSkipped)
+TEST(MinipsdReaderTest, BlendingRangesAreReadAfterTheMask)
 {
     Rec r = simpleRec();
     r.mask = Bytes(20, 0x5A);
+    r.ranges = {0, 0, 255, 255, 59, 60, 210, 220,      // grey: this layer left alone; underlying split
+                10, 10, 200, 200, 0, 0, 255, 255};     // the first channel
     r.pascal = "Masked";
     r.blendKey = "mul ";
     r.opacity = 77;
@@ -770,6 +774,36 @@ TEST(MinipsdReaderTest, ALayerMaskAndBlendingRangesAreSkipped)
     EXPECT_EQ(v.flags, 0x0B) << "as stored";
     EXPECT_EQ(v.clipping, 0);
     EXPECT_EQ(v.name_unicode.data, nullptr) << "no 'luni' in this record";
+
+    ASSERT_EQ(v.blending_range_count, 2u);
+    EXPECT_EQ(v.blending_ranges.size, 16u);
+    minipsd_blending_range br{};
+    ASSERT_EQ(minipsd_layer_blending_range(&v, 0, &br), MINIPSD_OK);
+    EXPECT_EQ(Bytes(br.source.black, br.source.black + 2), (Bytes{0, 0}));
+    EXPECT_EQ(Bytes(br.source.white, br.source.white + 2), (Bytes{255, 255}));
+    EXPECT_EQ(Bytes(br.destination.black, br.destination.black + 2), (Bytes{59, 60}));
+    EXPECT_EQ(Bytes(br.destination.white, br.destination.white + 2), (Bytes{210, 220}));
+    ASSERT_EQ(minipsd_layer_blending_range(&v, 1, &br), MINIPSD_OK);
+    EXPECT_EQ(Bytes(br.source.black, br.source.black + 2), (Bytes{10, 10}));
+    EXPECT_EQ(Bytes(br.destination.white, br.destination.white + 2), (Bytes{255, 255}));
+    EXPECT_EQ(minipsd_layer_blending_range(&v, 2, &br), MINIPSD_ERR_ARG) << "past the ranges";
+    EXPECT_EQ(minipsd_layer_blending_range(nullptr, 0, &br), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_layer_blending_range(&v, 0, nullptr), MINIPSD_ERR_ARG);
+    minipsd_layer_view hand = v;
+    hand.blending_ranges.size = 8;   // a view built by hand whose count says more than its bytes
+    EXPECT_EQ(minipsd_layer_blending_range(&hand, 1, &br), MINIPSD_ERR_ARG);
+    hand.blending_ranges.data = nullptr;   // or that has no bytes at all
+    EXPECT_EQ(minipsd_layer_blending_range(&hand, 0, &br), MINIPSD_ERR_ARG);
+
+    Spec none;
+    none.layers = {simpleRec()};
+    none.count = -1;
+    Open on(build(none).bytes);
+    ASSERT_EQ(on.rc, MINIPSD_OK);
+    const minipsd_layer_view vn = nextLayer(on.r);
+    EXPECT_EQ(vn.blending_range_count, 0u) << "length 0: none, as GIMP writes";
+    EXPECT_EQ(vn.blending_ranges.data, nullptr);
+    EXPECT_EQ(minipsd_layer_blending_range(&vn, 0, &br), MINIPSD_ERR_ARG);
 }
 
 TEST(MinipsdReaderTest, ALegacyNameIsLatin1UntilThereIsAUnicodeOne)
@@ -901,6 +935,8 @@ TEST(MinipsdReaderTest, MalformedRecordsAreRefused)
     r.rawExtra = Out().u16(0).b;                          EXPECT_EQ(firstLayerOf(r), MINIPSD_ERR_FORMAT) << "extra data of two bytes";
     r.rawExtra = Out().u32(0).b;                          EXPECT_EQ(firstLayerOf(r), MINIPSD_ERR_FORMAT) << "no blending ranges";
     r.rawExtra = Out().u32(0).u32(50).b;                  EXPECT_EQ(firstLayerOf(r), MINIPSD_ERR_FORMAT) << "blending ranges past the extra data";
+    r.rawExtra = Out().u32(0).u32(12).zeros(12).u8(0).zeros(3).b;
+    EXPECT_EQ(firstLayerOf(r), MINIPSD_ERR_FORMAT) << "blending ranges that are not whole ranges";
     r.rawExtra = Out().u32(0).u32(0).b;                   EXPECT_EQ(firstLayerOf(r), MINIPSD_ERR_FORMAT) << "no name";
     r.rawExtra = Out().u32(0).u32(0).u8(9).zeros(3).b;    EXPECT_EQ(firstLayerOf(r), MINIPSD_ERR_FORMAT) << "a name past the extra data";
     r.rawExtra = Out().u32(0).u32(0).u8(0).zeros(3).zeros(5).b;
@@ -1697,6 +1733,134 @@ TEST(MinipsdReadTest, ItRefusesWhatTheReaderRefusesAndWhatItCannotHold)
     const auto tailEnd = static_cast<std::size_t>(o.info.layer_tail.data - o.blob.data()) + o.info.layer_tail.size;
     readDoc(Bytes(file.begin(), file.begin() + std::ptrdiff_t(tailEnd - 1)), &lost, MINIPSD_ERR_SHORT);
     EXPECT_EQ(minipsd_read(file.data(), file.size(), nullptr, nullptr, nullptr, &lost), MINIPSD_ERR_ARG);
+
+    // Stored: the composite is not decoded, and is refused as decoding would refuse it.
+    const minipsd_read_opts keep{1};
+    readDoc(Bytes(file.begin(), file.end() - 1), &lost, MINIPSD_ERR_SHORT, nullptr, &keep);
+    Bytes badMarker = file;
+    badMarker[tailEnd + 1] = 9;
+    readDoc(badMarker, &lost, MINIPSD_ERR_FORMAT, nullptr, &keep);
+    lim.max_decoded_bytes = 1;   // nothing decoded: neither the layer nor the composite
+    readDoc(file, &lost, MINIPSD_OK, &lim, &keep);
+    readDoc(Bytes(file.begin(), file.begin() + std::ptrdiff_t(tailEnd + 1)), &lost, MINIPSD_ERR_SHORT, nullptr, &keep);   // one byte of its marker
+    readDoc(Bytes(file.begin(), file.begin() + std::ptrdiff_t(tailEnd - 1)), &lost, MINIPSD_ERR_SHORT, nullptr, &keep);   // cut before it
+}
+
+TEST(MinipsdReadTest, AStoredLayerWithoutTransparencyIsWrittenWithoutOne)
+{
+    Rec r;
+    r.right = 2; r.bottom = 1;
+    r.channels = {chan(0, 4, 10), chan(1, 4, 20), chan(2, 4, 30)};
+    // As the file has it; a mask still follows.
+    for (const bool masked : {false, true}) {
+        SCOPED_TRACE(masked);
+        Rec m = r;
+        if (masked) {
+            m.mask = Out().u32(0).u32(0).u32(1).u32(2).u8(0).u8(0).zeros(2).b;
+            m.channels.push_back(chan(-2, 4, 99));
+        }
+        Spec s;
+        s.layers = {m};
+        s.count = -1;
+        s.image = rawImage(4, 2, 2, 0x80);
+        const minipsd_read_opts keep{1};
+        const Doc d = readDoc(build(s).bytes, nullptr, MINIPSD_OK, nullptr, &keep);
+        ASSERT_TRUE(d);
+        const Bytes file = write(*d);
+        EXPECT_EQ(pull(*d, 7), file);
+        Open o(file);
+        ASSERT_EQ(o.rc, MINIPSD_OK);
+        const minipsd_layer_view v = nextLayer(o.r);
+        EXPECT_EQ(v.channel[MINIPSD_CH_A].size, 0u);
+        EXPECT_EQ(v.channel[MINIPSD_CH_B].size, 4u);
+        EXPECT_EQ(v.mask.stored.size, masked ? 4u : 0u);
+        EXPECT_EQ(v.other_channels, 0);
+    }
+}
+
+// Photoshop's empty fill layer, its rectangle inverted, in a file that ends the layer and mask
+// section with the layer info, as GIMP's do: as stored, both come back as they were.
+TEST(MinipsdReadTest, AStoredFileKeepsAnInvertedRectangleAndNoLayerTail)
+{
+    Rec fill;
+    fill.bottom = -1;
+    fill.channels = {chan(-1, 2, 0), chan(0, 2, 0), chan(1, 2, 0), chan(2, 2, 0)};
+    fill.pascal = "Fill";
+    Out info;
+    info.u16(0xFFFF).raw(record(fill)).raw(channelData(fill));   // one layer, the composite with alpha
+    if (info.b.size() & 1) info.u8(0);
+    Spec s;
+    s.hasRawSection   = true;
+    s.rawLayerSection = Out().u32(static_cast<std::uint32_t>(4 + info.b.size())).u32(static_cast<std::uint32_t>(info.b.size())).raw(info.b).b;
+    s.image = rawImage(4, 2, 2, 0x80);
+    const Bytes file = build(s).bytes;
+    const minipsd_read_opts keep{1};
+    const Doc d = readDoc(file, nullptr, MINIPSD_OK, nullptr, &keep);
+    ASSERT_TRUE(d);
+    const minipsd_layer &l = d->layers[0];
+    EXPECT_EQ(std::tie(l.top, l.left, l.bottom, l.right), std::make_tuple(0, 0, -1, 0)) << "as stored";
+    EXPECT_EQ(d->layer_tail.size, 0u);
+    EXPECT_NE(d->layer_tail.data, nullptr) << "nothing at all, not an empty global mask";
+    EXPECT_EQ(write(*d), file) << "the same bytes";
+    d->layer_tail.data = nullptr;
+    EXPECT_EQ(write(*d).size(), file.size() + 4) << "cleared: an empty global layer mask";
+
+    const Doc decoded = readDoc(file, nullptr);
+    ASSERT_TRUE(decoded);
+    EXPECT_EQ(decoded->layers[0].bottom, 0) << "decoded: the reader's empty rectangle";
+}
+
+// What stored does not copy: a composite with a fourth channel that is not transparency, or a
+// fifth, is decoded (and the rest lost); a layer without all of R, G, B is not copied (and
+// refused, as decoding refuses it); an empty
+// layer's rectangle with no width is kept as stored; a layer info of odd length is not padded.
+TEST(MinipsdReadTest, StoredCopiesOnlyWhatItCanWriteBack)
+{
+    const minipsd_read_opts keep{1};
+    for (const unsigned channels : {4u, 5u}) {
+        SCOPED_TRACE(channels);
+        Spec s;
+        s.channels = channels;
+        s.layers   = {simpleRec()};
+        s.count    = channels == 4 ? 1 : -1;                    // four: the fourth is not transparency
+        s.image    = rawImage(channels, 2, 2, 0x80);
+        std::uint32_t lost = 0;
+        const Doc d = readDoc(build(s).bytes, &lost, MINIPSD_OK, nullptr, &keep);
+        ASSERT_TRUE(d);
+        EXPECT_NE(d->composite, nullptr) << "decoded";
+        EXPECT_EQ(d->composite_stored.size, 0u);
+        EXPECT_EQ(lost, static_cast<std::uint32_t>(MINIPSD_LOST_CHANNELS));
+    }
+
+    Rec noBlue = simpleRec();
+    noBlue.channels.pop_back();                                 // transparency, red, green
+    Rec wide = simpleRec();
+    wide.top = 0; wide.left = 0; wide.bottom = 2; wide.right = 0;   // no width
+    wide.channels = {chan(-1, 2, 0), chan(0, 2, 0), chan(1, 2, 0), chan(2, 2, 0)};
+    Spec s;
+    s.layers = {noBlue};
+    s.count  = -1;
+    s.image  = rawImage(4, 2, 2, 0x80);
+    readDoc(build(s).bytes, nullptr, MINIPSD_ERR_FORMAT, nullptr, &keep);   // no blue: not copied, and refused decoding
+    s.layers = {wide};
+    const Doc e = readDoc(build(s).bytes, nullptr, MINIPSD_OK, nullptr, &keep);
+    ASSERT_TRUE(e);
+    EXPECT_EQ(std::tie(e->layers[0].top, e->layers[0].left, e->layers[0].bottom, e->layers[0].right),
+              std::make_tuple(0, 0, 2, 0)) << "as stored";
+
+    // A layer info whose length is odd: not padded, as the file has it.
+    Rec odd = simpleRec();
+    odd.pascal = "Od";                                          // 1 + 2 bytes, padded to 4 in the record
+    Out info;
+    info.u16(0xFFFF).raw(record(odd)).raw(channelData(odd)).u8(7);   // a byte past the channels: odd
+    Spec o;
+    o.hasRawSection   = true;
+    o.rawLayerSection = Out().u32(static_cast<std::uint32_t>(4 + info.b.size() + 4)).u32(static_cast<std::uint32_t>(info.b.size())).raw(info.b).u32(0).b;
+    o.image = rawImage(4, 2, 2, 0x80);
+    ASSERT_EQ(info.b.size() % 2, 1u);
+    const Doc od = readDoc(build(o).bytes, nullptr, MINIPSD_OK, nullptr, &keep);
+    ASSERT_TRUE(od);
+    EXPECT_EQ(od->layer_info_align, 1);
 }
 
 TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
@@ -1716,6 +1880,27 @@ TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
     EXPECT_EQ(Bytes(d->layers[0].rgba, d->layers[0].rgba + 16), (Bytes{0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255,
                                                                      0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255}));
     EXPECT_EQ(minipsd_doc_check(d.get(), nullptr), MINIPSD_OK) << "the writer takes it as it is";
+
+    // Stored: flat as the file is, no layer, its image the composite, copied; the same bytes back,
+    // with a layer and mask section or without one.
+    const minipsd_read_opts keep{1};
+    for (const bool section : {true, false}) {
+        SCOPED_TRACE(section);
+        Spec f = s;
+        f.resources     = Spec().resources;                     // as Photoshop's: a resolution
+        f.hasRawSection = true;                                 // an empty layer info, an empty global mask; or nothing
+        f.rawLayerSection = section ? Out().u32(8).u32(0).u32(0).b : Out().u32(0).b;
+        const Bytes file = build(f).bytes;
+        const Doc k = readDoc(file, &lost, MINIPSD_OK, nullptr, &keep);
+        ASSERT_TRUE(k);
+        EXPECT_EQ(k->layer_count, 0u);
+        EXPECT_EQ(k->composite, nullptr);
+        EXPECT_EQ(k->composite_channels, 3);
+        EXPECT_EQ(write(*k), file);
+        EXPECT_EQ(pull(*k, 7), file);
+        k->composite_stored = {};
+        EXPECT_EQ(minipsd_doc_check(k.get(), nullptr), MINIPSD_ERR_ARG) << "no layer, no composite";
+    }
 }
 
 // A flat 16-bit file: its one layer decoded at 16 bits, opaque as 65535.
@@ -1764,8 +1949,10 @@ TEST(MinipsdReaderTest, LayersInAGlobalBlock)
         Bytes       kept;   // the document's layer tail
     };
     const Case cases[] = {
-        {"behind another block", cat({mask, patt, block("8BIM", "Lr16", n, layers), pad, patt}), MINIPSD_OK, 1, cat({mask, patt, patt})},
-        {"'8B64', 'Lr32', last, its padding missing", cat({mask, block("8B64", "Lr32", n, layers)}), MINIPSD_OK, 1, mask},
+        {"behind another block", cat({mask, patt, block("8BIM", "Lr16", n, layers), pad, patt}), MINIPSD_OK, 1,
+         cat({mask, patt, block("8BIM", "Lr16", 0, {}), patt})},
+        {"'8B64', 'Lr32', last, its padding missing", cat({mask, block("8B64", "Lr32", n, layers)}), MINIPSD_OK, 1,
+         cat({mask, block("8B64", "Lr32", 0, {})})},
         {"empty", cat({mask, block("8BIM", "Lr16", 0, {})}), MINIPSD_OK, 0, {}},
         {"one byte long", cat({mask, block("8BIM", "Lr16", 1, {0, 0, 0, 0})}), MINIPSD_ERR_FORMAT, 0, {}},
         {"not a block", cat({mask, Bytes(12, 'x')}), MINIPSD_OK, 0, {}},
@@ -1989,14 +2176,8 @@ TEST(MinipsdReadTest, LostSaysWhatTheDocumentCannotCarry)
         {"a vector mask: a block, kept", 0, [](Spec &, Rec &r) { r.blocks = block("vmsk", Bytes(8, 0)); }},
         {"a resource other than resolution and ICC, kept", 0,
          [](Spec &s, Rec &) { s.resources = resource(1036, Bytes(8, 1)); }},
-        {"blending ranges", MINIPSD_LOST_BLENDING_RANGES, [](Spec &, Rec &r) {
-             Out x;   // no mask; one range pair that is not "0 0 255 255"; the name "L"
-             x.u32(0).u32(8).u8(10).u8(0).u8(255).u8(255).u8(0).u8(0).u8(255).u8(255).u8(1).str("L").zeros(2);
-             r.hasRawExtra = true; r.rawExtra = x.b; }},
-        {"blending ranges left alone", 0, [](Spec &, Rec &r) {
-             Out x;
-             x.u32(0).u32(8).u8(0).u8(0).u8(255).u8(255).u8(0).u8(0).u8(255).u8(255).u8(1).str("L").zeros(2);
-             r.hasRawExtra = true; r.rawExtra = x.b; }},
+        {"blending ranges, kept", 0, [](Spec &, Rec &r) { r.ranges = {10, 0, 255, 255, 0, 0, 200, 255}; }},
+        {"blending ranges left alone, kept", 0, [](Spec &, Rec &r) { r.ranges = {0, 0, 255, 255, 0, 0, 255, 255}; }},
     };
     for (const Case &c : cases) {
         SCOPED_TRACE(c.what);
@@ -2009,7 +2190,14 @@ TEST(MinipsdReadTest, LostSaysWhatTheDocumentCannotCarry)
         std::uint32_t lost = 99;
         const Doc d = readDoc(build(s).bytes, &lost);
         EXPECT_EQ(lost, c.lost);
-        if (d) { EXPECT_EQ(write(*d).empty(), false) << "the document is still written"; }
+        ASSERT_TRUE(d);
+        const Bytes back = write(*d);
+        ASSERT_FALSE(back.empty()) << "the document is still written";
+        Open o(back);
+        ASSERT_EQ(o.rc, MINIPSD_OK);
+        const minipsd_layer_view v = nextLayer(o.r);
+        EXPECT_EQ(Bytes(v.blending_ranges.data, v.blending_ranges.data + v.blending_ranges.size), r.ranges)
+            << "the ranges written back as they were read";
     }
 }
 
@@ -2102,6 +2290,8 @@ void expectKeptAlike(const Bytes &before, const Bytes &after)
         EXPECT_EQ(va.flags, vb.flags);
         EXPECT_EQ(va.kind, vb.kind);
         EXPECT_EQ(blocks(va), blocks(vb));
+        EXPECT_EQ(Bytes(va.blending_ranges.data, va.blending_ranges.data + va.blending_ranges.size),
+                  Bytes(vb.blending_ranges.data, vb.blending_ranges.data + vb.blending_ranges.size)) << "blending ranges";
         ASSERT_EQ(va.has_mask, vb.has_mask);
         if (!va.has_mask) continue;
         const minipsd_mask &ma = va.mask, &mb = vb.mask;
@@ -2165,7 +2355,22 @@ void expectConvertsBack(const minipsd_doc &d)
     const Doc c = readDoc(converted, nullptr, MINIPSD_OK, nullptr, &keep);
     ASSERT_TRUE(c);
     EXPECT_EQ(c->format, other.format);
+    c->layer_info_align = d.layer_info_align;   // a length the other format padded may fit either rule
     EXPECT_EQ(write(*c, MINIPSD_OK, &back), as) << "into the other format and back: the same bytes";
+}
+
+// A document read with stored: its composite copied as the file ends with it, not decoded, when
+// it is R, G, B and at most transparency; otherwise decoded, as stored (matted).
+void expectStoredComposite(const minipsd_doc &s, const Bytes &file, std::size_t size, const Bytes &stored)
+{
+    if (s.composite_stored.size) {
+        EXPECT_EQ(s.composite, nullptr) << "copied, not decoded";
+        EXPECT_TRUE(s.composite_channels == 3 || s.composite_channels == 4);
+        EXPECT_EQ(Bytes(s.composite_stored.data, s.composite_stored.data + s.composite_stored.size),
+                  Bytes(file.end() - static_cast<std::ptrdiff_t>(s.composite_stored.size), file.end()));
+    } else {
+        EXPECT_EQ(Bytes(s.composite, s.composite + size), stored);
+    }
 }
 
 Bytes readFile(const std::filesystem::path &path)
@@ -2200,6 +2405,13 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
             ++layers;
             nameOf(v);
             otherChannels = otherChannels || v.other_channels;
+            if (path.filename() == "minipsd-hamster-blend-if.psd" && layers == 2) {   // Photopea, "Blend If" set
+                minipsd_blending_range br{};
+                EXPECT_EQ(v.blending_range_count, 5u) << "grey, then four channels";
+                ASSERT_EQ(minipsd_layer_blending_range(&v, 0, &br), MINIPSD_OK);
+                EXPECT_EQ(Bytes(br.destination.black, br.destination.black + 2), (Bytes{59, 59}));
+                EXPECT_EQ(Bytes(br.destination.white, br.destination.white + 2), (Bytes{210, 210}));
+            }
             bool zipLayer = false;
             for (const minipsd_bytes &c : v.channel) zipLayer = zipLayer || zipped(c);
             zip = zip || zipLayer || zipped(v.mask.stored);
@@ -2231,7 +2443,7 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
                 ASSERT_TRUE(s);
                 expectConvertsBack(*s);
                 EXPECT_EQ(s->depth, depth);
-                EXPECT_EQ(Bytes(s->composite, s->composite + composite.size()), stored);
+                expectStoredComposite(*s, file, composite.size(), stored);
                 const Bytes again = write(*s);
                 expectKeptAlike(file, again);
                 const Doc f = readDoc(again, &lostAgain, MINIPSD_OK, nullptr, &keep);
@@ -2283,8 +2495,10 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
             const Doc s = readDoc(file, &lost, MINIPSD_OK, nullptr, &keep);
             ASSERT_TRUE(s);
             expectConvertsBack(*s);
+            expectStoredComposite(*s, file, composite.size(), stored);
             const Doc f = readDoc(write(*s), &lostAgain);
             ASSERT_TRUE(f);
+            EXPECT_EQ(Bytes(f->composite, f->composite + composite.size()), stored) << "written back, the same composite";
             ASSERT_EQ(f->layer_count, d->layer_count);
             for (std::size_t i = 0; i < d->layer_count; ++i) {
                 const minipsd_layer &a = d->layers[i], &b = f->layers[i];

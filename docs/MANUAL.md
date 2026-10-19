@@ -225,6 +225,18 @@ large document format, up to 300 000 px a side; nothing else in it changes:
 doc.format = MINIPSD_PSB;   /* 0 or MINIPSD_PSD: a PSD, refused above 30 000 px (MINIPSD_ERR_SIZE) */
 ```
 
+"Blend If" (a layer's blending ranges) hides the layer where its own pixels, or those beneath it,
+fall outside a range. The first range is the composite grey's, then one per channel; a point
+split in Photoshop (Alt-drag) has two different halves:
+
+```c
+/* show the layer only where what lies beneath is darker than 200, fading out from 180 */
+minipsd_blending_range blend_if[1] = { { .source      = { .black = { 0, 0 },     .white = { 255, 255 } },
+                                         .destination = { .black = { 0, 0 },     .white = { 180, 200 } } } };
+logo.blending_ranges      = blend_if;
+logo.blending_range_count = 1;
+```
+
 Many programs that read PSD do not read PSB, so choose it when the size needs it. A document read
 from a file is in that file's format, and so is everything it keeps. To write it in the other
 one, ask at the write call; the kept bytes are translated on the way out, nothing is copied first:
@@ -503,7 +515,7 @@ memory of yours with `minipsd_read_size` and `minipsd_read_into`. Nothing in it 
 file, so the file's bytes can go as soon as the call returns.
 
 **What comes back.** Every layer with its rectangle, name, opacity, visibility, blend mode,
-clipping and flags, its pixels, its mask and its place in the groups; the blocks a layer carries
+clipping and flags, its pixels, its mask, its "Blend If" ranges and its place in the groups; the blocks a layer carries
 (text, effects, vector masks, smart objects) and the file's resources and global blocks, byte for byte, so a program
 that understands them finds them as they were. The document's own fields win over kept data that says the same
 thing: rename a layer with `name`, change the resolution with `dpi`, replace the profile with
@@ -519,12 +531,15 @@ writer compose the layers as a best effort. Stale too, and yours to drop: the th
 **Change one layer, copy the rest.** With `opts.stored` set, layers are not decoded: each keeps
 its channels as the file stores them, and the writer copies them back. Decode the one layer you
 change through the reader, from the same bytes, give it pixels, and only that layer is encoded
-again: a fraction of the memory and the time for a large file.
+again: a fraction of the memory and the time for a large file. The composite too is kept as the
+file stores it (`composite_stored`, `composite` stays `NULL`) and copied: a long strip's merged
+image is never decoded. After a change it is stale, as above: set `composite` to a new render,
+which wins over it, or clear `composite_stored` to have the layers composed.
 
 ```mermaid
 flowchart TD
     read["minipsd_read(data, ..., &opts, &doc, &lost)<br>opts.stored = 1"]
-    read -. "every layer's channels, copied as stored" .-> doc["doc"]
+    read -. "every layer's channels and the composite, copied as stored" .-> doc["doc"]
     doc --> pick["the layer to change:<br>minipsd_reader_init, minipsd_reader_next_layer,<br>minipsd_decode_layer, from the same data"]
     pick --> set["layer.rgba = new pixels<br>layer.stored = NULL"]
     set --> write["minipsd_write(doc, NULL, callback, user)"]
@@ -536,7 +551,7 @@ flowchart TD
 [examples/resave.c](../examples/resave.c) is the whole program: it inverts the colours of one
 layer, copies every other one, and frees the file's bytes before writing. The one layer of a file
 without layers comes decoded even with `stored`: there is nothing to copy for it. A layer without
-a transparency channel is copied, and gets an opaque one when written. `stored` is also how
+a transparency channel is copied, and written without one, as the file has it. `stored` is also how
 Photoshop's 16-bit files go through: their ZIP channels are copied byte for byte.
 
 **What is lost, and a request.** `lost` is 0 when the document carries everything. Otherwise its
@@ -544,7 +559,6 @@ bits say what writing the document back would drop:
 
 | Bit | What |
 |---|---|
-| `MINIPSD_LOST_BLENDING_RANGES` | "Blend If" ranges that are not left at their default |
 | `MINIPSD_LOST_CHANNELS` | alpha and spot channels, of a layer or of the composite |
 
 Each is planned work. If a file of yours sets one, please

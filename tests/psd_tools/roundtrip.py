@@ -42,6 +42,14 @@ class Mask(ctypes.Structure):
                 ("stored", Bytes), ("real", Bytes), ("rest", Bytes)]
 
 
+class BlendRange(ctypes.Structure):
+    _fields_ = [("black", ctypes.c_uint8 * 2), ("white", ctypes.c_uint8 * 2)]
+
+
+class BlendingRange(ctypes.Structure):
+    _fields_ = [("source", BlendRange), ("destination", BlendRange)]
+
+
 class Layer(ctypes.Structure):
     _fields_ = [("name", ctypes.c_char_p), ("rgba", ctypes.c_void_p),
                 ("opacity", ctypes.c_uint8), ("hidden", ctypes.c_uint8),
@@ -49,7 +57,9 @@ class Layer(ctypes.Structure):
                 ("bottom", ctypes.c_int32), ("right", ctypes.c_int32),
                 ("blend", ctypes.c_char * 4), ("clipping", ctypes.c_uint8), ("flags", ctypes.c_uint8),
                 ("extra", Bytes), ("stored", ctypes.c_void_p),
-                ("kind", ctypes.c_uint8), ("mask", ctypes.POINTER(Mask))]
+                ("kind", ctypes.c_uint8), ("mask", ctypes.POINTER(Mask)),
+                ("blending_ranges", ctypes.POINTER(BlendingRange)), ("blending_range_count", ctypes.c_uint32),
+                ("name_pascal", Bytes)]
 
 
 class Doc(ctypes.Structure):
@@ -58,7 +68,8 @@ class Doc(ctypes.Structure):
                 ("icc", ctypes.c_void_p), ("icc_size", ctypes.c_size_t), ("compression", ctypes.c_int),
                 ("composite", ctypes.c_void_p), ("composite_matted", ctypes.c_int),
                 ("resources", ctypes.c_void_p), ("resource_count", ctypes.c_size_t), ("layer_tail", Bytes),
-                ("depth", ctypes.c_uint16), ("format", ctypes.c_uint16)]
+                ("depth", ctypes.c_uint16), ("format", ctypes.c_uint16),
+                ("composite_stored", Bytes), ("composite_channels", ctypes.c_uint16)]
 
 
 class ReadOpts(ctypes.Structure):
@@ -312,6 +323,18 @@ def check(name, psd, w, h, dpi, layers):
 KIND_LAYER, KIND_GROUP, KIND_GROUP_CLOSED, KIND_GROUP_END = 0, 1, 2, 3
 
 
+# "Blend If" of "Masked": composite grey, then R, G, B, each (source, destination) as
+# ((black low, high), (white low, high)); split points on red.
+BLEND_IF = [(((0, 0), (255, 255)), ((59, 59), (210, 210))), (((10, 30), (200, 240)), ((0, 0), (255, 255))),
+            (((0, 0), (255, 255)), ((0, 0), (255, 255))), (((0, 0), (255, 255)), ((5, 5), (250, 250)))]
+
+
+def psd_tools_range(r):
+    """A range as psd-tools reads it: two big-endian 16-bit numbers, black then white."""
+    (b0, b1), (w0, w1) = r
+    return (b0 << 8 | b1, w0 << 8 | w1)
+
+
 def groups_and_mask(lib, path):
     """Base; group "Outer" (open, pass through) holding "Masked" and group "Inner" (closed, multiply)
     holding "Deep".  Bottom first, as the file stores them; returns what to expect."""
@@ -326,6 +349,7 @@ def groups_and_mask(lib, path):
     mask_px = bytes((x * 255 // 31) for y in range(20) for x in range(32))   # a ramp, left to right
     mask_buf = ctypes.create_string_buffer(mask_px)
     mask = Mask(top=10, left=8, bottom=30, right=40, color=0, flags=0, pixels=ctypes.cast(mask_buf, ctypes.c_void_p))
+    ranges = (BlendingRange * len(BLEND_IF))(*[BlendingRange(BlendRange(*s), BlendRange(*d)) for s, d in BLEND_IF])
     records = (Layer * 7)()
     spec = [  # name, rgba, kind, blend, mask
         ("Base", pixels(w, h, (240, 240, 240, 255)), KIND_LAYER, b"\0\0\0\0", None),
@@ -338,6 +362,7 @@ def groups_and_mask(lib, path):
     ]
     for i, (name, rgba, kind, blend, m) in enumerate(spec):
         records[i] = Layer(name=name.encode(), rgba=rgba, opacity=255, blend=blend, kind=kind, mask=m)
+    records[2].blending_ranges, records[2].blending_range_count = ranges, len(BLEND_IF)
     doc = Doc(w, h, 72.0, records, len(spec), None, 0, MINIPSD_RLE)
     out = bytearray()
 
@@ -374,6 +399,9 @@ def check_groups_and_mask(psd, mask_px):
         expect("mask colour", masked.mask.background_color, 0)
         expect("mask disabled", masked.mask.disabled, False)
         expect("mask pixels", masked.mask.topil().tobytes(), mask_px)
+    br = masked._record.blending_ranges
+    expect("Masked's blending ranges", [list(map(tuple, br.composite_ranges))] + [list(map(tuple, c)) for c in br.channel_ranges],
+           [[psd_tools_range(s), psd_tools_range(d)] for s, d in BLEND_IF])
     return errors
 
 
@@ -543,15 +571,44 @@ def check_kept(name, before, after, stored=False):
 
         for i, (b, a, db, da) in enumerate(zip(rb, ra, cb, ca)):
             got = {c.id.value: data(a, c, d, va) for c, d in zip(a.channel_info, da)}
-            same(f"layer {i} channel data", {c.id.value: data(b, c, d, vb) for c, d in zip(b.channel_info, db)},
-                 {k: v for k, v in got.items() if k != -1 or -1 in [c.id.value for c in b.channel_info]})
+            same(f"layer {i} channel data", {c.id.value: data(b, c, d, vb) for c, d in zip(b.channel_info, db)}, got)
     for i, (b, a) in enumerate(zip(rb, ra)):
         same(f"layer {i} blocks", blocks(b.tagged_blocks), blocks(a.tagged_blocks))
         same(f"layer {i} mask data", b.mask_data.tobytes() if b.mask_data else None, a.mask_data.tobytes() if a.mask_data else None)
+        same(f"layer {i} blending ranges", b.blending_ranges.tobytes(), a.blending_ranges.tobytes())
         ids = [c.id.value for c in b.channel_info]
-        added = [] if -1 in ids else [-1]   # a layer without transparency gets an opaque one
-        same(f"layer {i} channels", added + ids if added else ids, [c.id.value for c in a.channel_info])
+        added = [] if -1 in ids or stored else [-1]   # decoded, a layer without transparency gets an opaque one
+        same(f"layer {i} channels", added + ids, [c.id.value for c in a.channel_info])
         same(f"layer {i} blend, clipping, flags", (b.blend_mode, b.clipping, b.flags), (a.blend_mode, a.clipping, a.flags))
+    return errors
+
+
+# --- every file, byte for byte -----------------------------------------------------------------------
+
+# Files minipsd_read takes that do not come back identical yet, and why.
+NOT_IDENTICAL = {
+    "colormodes/4x4_8bit_rgba.psd": "S6.8: a fourth composite channel that is not transparency",
+    "effects/stroke-without-vector-mask.psd": "S6.8: a fifth composite channel",
+    "third-party-psds/cactus_top.psd": "S6.8: channels beyond RGBA, transparency written last",
+}
+
+
+def check_identical(lib, files, out):
+    """Every file minipsd_read takes (with stored) comes back the same bytes through minipsd_write."""
+    errors, same = [], 0
+    for source in sorted(files.rglob("*.ps[db]")):
+        name = source.relative_to(files).as_posix()
+        path = out / ("identical-" + name.replace("/", "__"))
+        rc, _ = resave(lib, source, path, stored=True)
+        if rc != MINIPSD_OK:
+            continue                                         # refused: not a document minipsd takes
+        identical = path.read_bytes() == source.read_bytes()
+        if identical and name in NOT_IDENTICAL:
+            errors.append(f"{name}: identical now; remove it from NOT_IDENTICAL")
+        elif not identical and name not in NOT_IDENTICAL:
+            errors.append(f"{name}: read and written back, not the same bytes")
+        same += identical
+    print(f"identical: {same} files, {len(NOT_IDENTICAL)} listed as not yet")
     return errors
 
 
@@ -703,6 +760,8 @@ def main():
                 found.append(f"{name}: '{lb.name}' mask pixels differ")
         errors += found
         print(f"{'converted' if convert else 'resaved'} {name} (lost {lost}): {'FAILED' if found else 'ok'}")
+    if files:
+        errors += check_identical(lib, files, out)
     for path in sorted(files.rglob("*.psb")) if files else []:
         found = check_psb(lib, path)
         errors += found

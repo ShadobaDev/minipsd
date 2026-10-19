@@ -31,9 +31,10 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
 {
     uint8_t         px[3 * 2 * 4];
     minipsd_layer   layers[2];
+    minipsd_blending_range blend_if = { { { 0, 0 }, { 255, 255 } }, { { 59, 59 }, { 210, 210 } } };
     minipsd_doc     doc;
     minipsd_writer *w;
-    uint8_t         workspace[256], again[1024];
+    uint8_t         workspace[320], again[1024];
     smoke_buf       b;
     size_t          i, need, n, pulled = 0;
     int             rc;
@@ -42,12 +43,19 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
     memset(layers, 0, sizeof layers);   /* the structs grow at the end: zero is every default */
     layers[0].name = "Template"; layers[0].rgba = px;   layers[0].opacity = 255; layers[0].hidden = 0;
     layers[1].name = "Layer";    layers[1].rgba = NULL; layers[1].opacity = 255; layers[1].hidden = 0;
+    layers[1].blending_ranges = &blend_if; layers[1].blending_range_count = 1;
     memset(&doc, 0, sizeof doc);
     doc.width = 3; doc.height = 2; doc.dpi = 300.0; doc.layers = layers; doc.layer_count = 2;
 
     /* Every function, so a static build has none unused. */
     if (!minipsd_error_string(MINIPSD_OK)[0] || minipsd_doc_check(&doc, NULL) != MINIPSD_OK)
         return -100;
+    layers[1].blending_range_count = 0xFFFFFFFFu;   /* more than a record holds */
+    rc = minipsd_doc_check(&doc, NULL);
+    layers[1].blending_ranges = NULL;               /* a count without ranges */
+    if (rc != MINIPSD_ERR_SIZE || minipsd_doc_check(&doc, NULL) != MINIPSD_ERR_ARG)
+        return -112;
+    layers[1].blending_ranges = &blend_if; layers[1].blending_range_count = 1;
 
     b.data = out; b.size = 0; b.capacity = capacity;
     rc = minipsd_write(&doc, NULL, smoke_out, &b);
@@ -75,6 +83,7 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
         minipsd_resource   res;
         minipsd_layer_view lv;
         minipsd_block      blk;
+        minipsd_blending_range br;
         minipsd_target     t;
         uint8_t            got[sizeof px];
         uint8_t            rws[256];
@@ -99,6 +108,7 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
             return -108;
         while (minipsd_layer_next_block(&lv, &pos, &blk) == MINIPSD_MORE) ++blocks;
         if (blocks != 1 || minipsd_reader_next_layer(rd, &lv) != MINIPSD_MORE
+            || minipsd_layer_blending_range(&lv, 0, &br) != MINIPSD_OK || br.destination.white[0] != 210
             || minipsd_reader_next_layer(rd, &lv) != MINIPSD_OK)
             return -106;
     }
@@ -119,6 +129,19 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
         minipsd_doc_free(rdoc);
         if (rc != MINIPSD_OK || c.size != b.size || memcmp(back, b.data, b.size) != 0)
             return -110;
+
+        /* As stored: nothing decoded, every byte copied, the same file again. */
+        {
+            minipsd_read_opts keep;
+            keep.stored = 1;
+            if (minipsd_read(b.data, b.size, NULL, &keep, &rdoc, &lost) != MINIPSD_OK || lost != 0)
+                return -113;
+            c.size = 0;
+            rc = minipsd_write(rdoc, NULL, smoke_out, &c);
+            minipsd_doc_free(rdoc);
+            if (rc != MINIPSD_OK || c.size != b.size || memcmp(back, b.data, b.size) != 0)
+                return -114;
+        }
     }
 
     /* 16 bits: the same layer at 257 times each sample, written and decoded back. */

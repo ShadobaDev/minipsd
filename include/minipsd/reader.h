@@ -350,8 +350,8 @@ static int mpsd__luni(minipsd_bytes data, minipsd_bytes *name)
     return MINIPSD_OK;
 }
 
-/* The extra data of a record, [at, end): masks and blending ranges skipped, the legacy name, then
-   the blocks, which are walked here to check them and to find 'luni'. */
+/* The extra data of a record, [at, end): the mask data, the blending ranges (whole ones only),
+   the legacy name, then the blocks, which are walked here to check them and to find 'luni'. */
 static int mpsd__extra(const minipsd_reader *r, uint64_t at, uint64_t end, minipsd_layer_view *v)
 {
     const uint8_t *d = r->data;
@@ -376,6 +376,12 @@ static int mpsd__extra(const minipsd_reader *r, uint64_t at, uint64_t end, minip
             mask->rest.data = m + MPSD__MASK_HEAD;
             mask->rest.size = skip - MPSD__MASK_HEAD;
             v->has_mask     = 1;
+        }
+        if (k == 1) {
+            if (skip % MPSD__RANGE_SIZE) return MINIPSD_ERR_FORMAT;
+            if (skip) v->blending_ranges.data = d + (size_t)at;
+            v->blending_ranges.size = skip;
+            v->blending_range_count = skip / MPSD__RANGE_SIZE;
         }
         at += skip;
     }
@@ -463,6 +469,9 @@ static int mpsd__record(minipsd_reader *r, uint64_t at, mpsd__rec *rec)
     if (rc != MINIPSD_OK) return rc;
     v->name_pascal.data = v->name_unicode.data = v->extra.data = NULL;
     v->name_pascal.size = v->name_unicode.size = v->extra.size = 0;
+    v->blending_ranges.data = NULL;
+    v->blending_ranges.size = 0;
+    v->blending_range_count = 0;
     rc = mpsd__extra(r, pos + MPSD__RECORD_TAIL, extra_end, v);
     rec->next = extra_end;
     if (!v->has_mask) {                                        /* mask channels with no mask data */
@@ -551,6 +560,20 @@ MINIPSDDEF int minipsd_layer_name(const minipsd_layer_view *layer, char *utf8, s
     }
     mpsd__name_utf8(layer, (uint8_t *)utf8);
     utf8[n - 1] = '\0';
+    return MINIPSD_OK;
+}
+
+MINIPSDDEF int minipsd_layer_blending_range(const minipsd_layer_view *layer, uint32_t i, minipsd_blending_range *range)
+{
+    const uint8_t *b;
+    if (!layer || !range || i >= layer->blending_range_count || !layer->blending_ranges.data
+        || ((uint64_t)i + 1) * MPSD__RANGE_SIZE > layer->blending_ranges.size)   /* a view built by hand */
+        return MINIPSD_ERR_ARG;
+    b = layer->blending_ranges.data + (size_t)i * MPSD__RANGE_SIZE;
+    memcpy(range->source.black,      b,     2);
+    memcpy(range->source.white,      b + 2, 2);
+    memcpy(range->destination.black, b + 4, 2);
+    memcpy(range->destination.white, b + 6, 2);
     return MINIPSD_OK;
 }
 

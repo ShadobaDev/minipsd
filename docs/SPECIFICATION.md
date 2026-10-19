@@ -112,13 +112,14 @@ The declarations, with every parameter and return code, are in
 | `minipsd_reader_next_layer(r, &layer)` | the layer records, bottom first, with views of their channel data: `MINIPSD_MORE` per layer, then `MINIPSD_OK` |
 | `minipsd_layer_name(layer, utf8, cap, &needed)` | a layer's name as UTF-8 (`luni`, else the legacy name as Latin-1) |
 | `minipsd_layer_next_block(layer, &pos, &block)` | a layer's additional-information blocks, each a raw view |
+| `minipsd_layer_blending_range(layer, i, &range)` | one of a layer's blending ranges ("Blend If"): the composite grey's, then each channel's |
 | `minipsd_target_rgba(&target, rgba, row_stride)` | a target for interleaved RGBA, the common case |
 | `minipsd_target_rgba16(&target, rgba, row_stride)` | the same for 16-bit samples, `uint16_t` |
 | `minipsd_decode_layer(r, layer, target, opts)` | a layer's pixels, or a band of its rows, as stored (opacity and visibility not applied), into the caller's planes; 8- or 16-bit RGB, raw or PackBits |
 | `minipsd_decode_composite(r, target, opts)` | the composite (merged) image, or a band of its rows, un-matted to straight alpha unless `keep_matte` |
 | `minipsd_decode_mask(r, layer, plane, opts)` | a layer's mask, or a band of its rows, into one plane |
 | `minipsd_read_size(data, size, limits, opts, &block_size)` | the block `minipsd_read_into` needs for a whole file |
-| `minipsd_read_into(data, size, limits, opts, block, block_size, &doc, &lost)` | a whole file into a document in the caller's block, everything copied, so the file may go; `lost` says what it could not carry; `opts->stored` keeps each layer's channels as stored instead of decoding them |
+| `minipsd_read_into(data, size, limits, opts, block, block_size, &doc, &lost)` | a whole file into a document in the caller's block, everything copied, so the file may go; `lost` says what it could not carry; `opts->stored` keeps each layer's channels, and the composite, as stored instead of decoding them |
 | `minipsd_read(data, size, limits, opts, &doc, &lost)`, `minipsd_doc_free(doc)` | the same in one `MINIPSD_MALLOC` block, and its free; absent under `MINIPSD_NO_MALLOC` |
 | `minipsd_error_string(code)` | a short English text for a return code |
 
@@ -163,7 +164,7 @@ of 8- and 16-bit RGB files, layers and composite.
 |---|---|---|
 | `MINIPSD_OK` | 0 | success |
 | `MINIPSD_MORE` | 1 | not an error: `minipsd_writer_fill` has more bytes, an iterator produced an item, or a name needs more room; call again |
-| `MINIPSD_ERR_ARG` | -1 | NULL document or callback, no layers, ICC size without data, or a dpi that 16.16 fixed point cannot hold (see below) |
+| `MINIPSD_ERR_ARG` | -1 | NULL document or callback, no layers and no composite, ICC size without data, or a dpi that 16.16 fixed point cannot hold (see below) |
 | `MINIPSD_ERR_SIZE` | -2 | a side is 0 or above the format's (`MINIPSD_MAX_SIDE`, `MINIPSD_MAX_SIDE_PSB`), or a section is longer than its length field allows (see below) |
 | `MINIPSD_ERR_WRITE` | -3 | the callback returned 0 |
 | `MINIPSD_ERR_ALLOC` | -4 | `MINIPSD_MALLOC` returned NULL |
@@ -212,7 +213,12 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
 - PSD (version 1) or, with `format` `MINIPSD_PSB`, PSB (version 2), RGB, 4 channels (R, G, B,
   transparency), 8 bits per channel or, with `depth` 16, 16: every sample (`rgba`, mask
   `pixels`, `composite`) is then a `uint16_t` in host order, written big-endian. The layers go
-  in the layer info at both depths, never in `Lr16`.
+  in the layer info at both depths, or, when `layer_tail` holds an `Lr16` (or `Lr32`) block, in
+  that block, where it is, with the layer info empty, as Photoshop's 16-bit files have them; what
+  the block held goes, the document's layers win.
+- **No layers:** a document with a composite (supplied or stored) and `layer_count` 0 is written
+  flat: an empty layer info and the tail, or, with a tail of nothing at all, no layer and mask
+  section, as `minipsd_read` keeps a flat file with `opts->stored`.
 - **The format is what the document is.** A PSB is written with its wide fields (eight-byte
   section and channel lengths, four-byte RLE row counts), and everything kept from a file is
   written as it is, so it must be in that format's layout: `minipsd_read` sets `format` to the
@@ -223,7 +229,7 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
   long keys, its data copied; everything else (resources, mask data, raw and ZIP channels, short
   keys' blocks) is the same in both. Refused, before a byte is written:
   - `MINIPSD_ERR_UNSUPPORTED` for a block whose data is itself a layer info of the format
-    (`Lr16`, `Lr32`, `Layr`; `minipsd_read` never keeps them), for a long key no file has
+    (`Layr`, an `Lr16` or `Lr32` past the first, which the writer fills itself), for a long key no file has
     verified yet (`Alph`, `FELS`, `FEid`, `FXid`, `Mt16`, `Mtrn`, `PxSD`, `lnk3`), for a layer tail
     that is not blocks to its end, and for an RLE real mask whose rectangle the mask data does
     not hold. The verified long keys are those psd-tools' PSD and PSB twins hold: `FMsk`, `LMsk`,
@@ -237,16 +243,19 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
     its RLE row counts are 16 bits, 300 000 in a PSB;
   - or empty: no pixels, a rectangle without area (by default 0x0), channels that hold no data;
   - name twice: a legacy Pascal string (ASCII, every non-ASCII character replaced by `?`) and a
-    `luni` block in UTF-16 with surrogate pairs;
+    `luni` block in UTF-16 with surrogate pairs; or, while `name` still says what the names kept
+    from a file say (a kept `luni`, else `name_pascal` read as Latin-1), those as they are: the
+    legacy name in its writer's code page, and the kept `luni` or none;
   - opacity;
   - visibility: flag bit `0x02` set means hidden; the other flag bits as given (`flags`);
   - the blend key as given, `norm` by default (the keys: [Blend modes](#blend-modes)), and
     clipping as given;
-  - after the writer's own `luni`, the blocks kept from a file (`extra`), as they are, except a
-    kept `luni`: the name wins;
+  - the blocks kept from a file (`extra`), as they are and in their order, with the writer's own
+    `luni` (and group marker) where the first kept `luni` was, or first without one: the name
+    wins, and a second kept `luni` goes;
   - channel data encoded from `rgba`, or copied as it is from `stored` (any compression the
     file had, ZIP included), so a layer that was not changed is not encoded again; a stored
-    layer without transparency gets an opaque transparency channel;
+    layer without transparency is written without one (three colour channels);
   - groups (`kind`), bottom first: a divider (`lsct` type 3), the group's layers, then the
     group's top record (type 1 open, 2 closed) with its name, visibility and mode in its `lsct`
     block (`blend`, Pass Through by default; the record keeps `norm`). A kept `lsct` of the same
@@ -254,27 +263,41 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
   - a layer mask (`mask`): its rectangle, colour outside it and flags in the mask data, then
     what was kept after them (parameters, the real mask's rectangle) or two bytes of padding; its
     channel (id -2) encoded from `pixels` or copied from `stored`, and a kept real mask (id -3)
-    as it is.
+    as it is;
+  - the blending ranges ("Blend If", `blending_ranges`) as given, eight bytes each: for the
+    source ("This Layer") and the destination ("Underlying Layer"), a black point then a white
+    point, each two bytes (its halves, equal unless split). None (`blending_range_count` 0)
+    writes a length of 0, as GIMP does; a file's are written back as they were (Photoshop
+    writes five: the composite grey, then four channels). The composed composite ignores them.
 - **Composite image:**
   - the caller's `composite` when set (the full canvas, straight alpha), whatever the layers
     hold: flattening layers is rendering, the caller's domain;
+  - otherwise a file's composite kept as it stores it (`composite_stored`, with
+    `composite_channels`: 3, or 4 with transparency), copied byte for byte, never decoded nor
+    encoded; the header's channel count and the layer count's sign follow it;
   - otherwise composed as a **best effort, with no guarantee**: the visible layers combined with
     straight-alpha "over", each at its rectangle, clipped to the canvas. Blend modes, masks,
     clipping, groups and effects are not drawn;
-  - transparency is the first extra channel, signalled by writing the layer count as a
-    **negative** number, as the format specifies;
+  - transparency (of a supplied or composed composite, always) is the first extra channel,
+    signalled by writing the layer count as a **negative** number, as the format specifies;
   - **colour is matted against white:** `c*a + max*(1-a)`, `max` being 255 or 65535. Photoshop
     stores it this way and readers subtract the white back out. The writer mattes, a supplied composite too, unless
     `composite_matted` says it already is: then it is written byte for byte.
-- **Image resources:**
+- **Image resources:** the resources kept from a file (`resources`), in order, with their names;
+  the writer's own two take the place of the first kept one with the same id, or come first:
   - 1005 ResolutionInfo: dpi as 16.16 fixed point, unit inches; a kept 1005 that says the same
     dpi is written instead, with its own units and vertical resolution;
   - 1039 ICC profile, only when `icc` is set;
-  - then the resources kept from a file (`resources`), in order, with their names, except 1005
-    and 1039: `dpi` and `icc` win;
+  - a later kept 1005 or 1039 goes: `dpi` and `icc` win;
   - a resource of odd length is padded to even.
+- **The layer info's padding:** its length padded to even, or as `layer_info_align` says: to 4,
+  as Photoshop pads it, or not at all; `minipsd_read` finds the file's (the strictest rule its
+  length fits).
 - **After the layer info:** the kept `layer_tail` (global layer mask, global blocks) as it is,
-  or an empty global layer mask.
+  or an empty global layer mask; nothing at all for one with data and no size, as `minipsd_read`
+  keeps a file that ends the section with its layer info.
+- **An empty layer's rectangle** is written as given, inverted too, as a file stored it
+  (Photoshop's fill layers: 0, 0, -1, 0); `minipsd_read` keeps it so with `opts->stored`.
 - **Compression:** PackBits RLE (runs from 3 bytes, packets up to 128 bytes) or raw.
   Row byte counts are computed in a separate sizing pass, so output streams forward through the
   callback and never seeks back.
@@ -326,6 +349,9 @@ them; nothing is copied or allocated. Results on real files from other programs:
   - what the record is (`kind`, from its `lsct` block): a layer, a group's top record, a divider;
   - its mask: rectangle, colour, flags, the rest of the mask data, the mask channel and the real
     mask channel as views; `minipsd_decode_mask` decodes the mask's pixels;
+  - its blending ranges as a view and a count, read one at a time with
+    `minipsd_layer_blending_range`; a length that is not whole ranges (eight bytes) is
+    `MINIPSD_ERR_FORMAT`;
   - every additional-information block as a raw view (key and bytes), the known ones included.
 - **Pixels come as stored:** a layer's opacity, visibility, blend mode and mask are not applied;
   they are in its view, and so is the group structure.
@@ -337,11 +363,13 @@ them; nothing is copied or allocated. Results on real files from other programs:
   layers came from included. Global blocks are padded to four bytes past the length they state.
 - **Not read:** the colour mode data (palettes).
 - **As a document** (`minipsd_read`): 8- and 16-bit RGB files, at their depth; each layer's
-  rectangle, name, opacity, visibility, blend key, clipping, flags, kind, mask, decoded pixels
+  rectangle, name, opacity, visibility, blend key, clipping, flags, kind, mask, blending ranges, decoded pixels
   (or, with `opts->stored`, its channels as stored, ZIP ones too) and blocks, the composite as
-  stored (`composite_matted`), the dpi (72 when none is stored), the ICC profile, every resource
-  and the layer tail without the `Lr16` its layers came from, all copied into one block. A file without layers gets one,
-  "Background", holding its image. Anything else is reported in `lost` (`MINIPSD_LOST_*`), never
+  stored (`composite_matted`; with `opts->stored`, its bytes in `composite_stored` when it holds
+  R, G, B and at most transparency), the dpi (72 when none is stored), the ICC profile, every resource
+  and the layer tail, the `Lr16` its layers came from in it, empty, all copied into one block. A
+  file without layers gets one, "Background", holding its image; with `opts->stored` it stays
+  without, its image the composite, copied. Anything else is reported in `lost` (`MINIPSD_LOST_*`), never
   dropped silently.
 - **A prefix is enough** for what lies inside it: `MINIPSD_ERR_SHORT` with
   `minipsd_reader_needed` says how much more a call needs.
