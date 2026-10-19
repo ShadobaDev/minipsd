@@ -45,7 +45,7 @@ static int to_file(void *user, const void *data, size_t size)   /* or to memory,
     return fwrite(data, 1, size, (FILE *)user) == size;
 }
 
-int rc = minipsd_write(&doc, to_file, f);
+int rc = minipsd_write(&doc, NULL, to_file, f);
 if (rc != MINIPSD_OK) puts(minipsd_error_string(rc));
 ```
 

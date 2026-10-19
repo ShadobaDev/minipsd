@@ -27,7 +27,7 @@
  *         { .name = "Layer", .opacity = 255 },                    // empty, above it
  *     };
  *     minipsd_doc doc = { .width = width, .height = height, .dpi = 300.0, .layers = layers, .layer_count = 2 };
- *     int rc = minipsd_write(&doc, file_out, f);   // file_out: fwrite to f, see minipsd_write_fn
+ *     int rc = minipsd_write(&doc, NULL, file_out, f);   // file_out: fwrite to f, see minipsd_write_fn
  *     if (rc != MINIPSD_OK) puts(minipsd_error_string(rc));
  * \endcode
  *
@@ -135,8 +135,10 @@ enum {
     MINIPSD_ERR_OPEN    = -5, /*!< Not returned by minipsd; kept for the caller's own file
                                    code (examples/): a file not opened or closed.             */
     MINIPSD_ERR_FORMAT  = -6, /*!< Reader: the bytes are not a well-formed PSD.                */
-    MINIPSD_ERR_UNSUPPORTED = -7, /*!< Reader: a valid file outside what minipsd reads: pixels
-                                       other than 8- or 16-bit RGB, or ZIP-compressed.            */
+    MINIPSD_ERR_UNSUPPORTED = -7, /*!< Valid, but outside what minipsd handles yet: reading,
+                                       pixels other than 8- or 16-bit RGB, or ZIP-compressed;
+                                       writing in the other format, kept content that cannot
+                                       change format yet.                                         */
     MINIPSD_ERR_SHORT   = -8, /*!< Reader: the buffer ends inside data the call needs; the
                                    file may be fine.  minipsd_reader_needed says how much more.  */
     MINIPSD_ERR_LIMIT   = -9  /*!< Reader: a value is over a limit (minipsd_limits).           */
@@ -324,25 +326,42 @@ typedef struct minipsd_doc {
                                               (rgba, mask pixels, composite) is a uint16_t in
                                               host order, 0 .. 65535.                         */
     uint16_t             format;         /*!< MINIPSD_PSD (or 0) or MINIPSD_PSB: what the
-                                              document is, written as it is.  Everything kept
-                                              from a file (stored channels, masks' stored and
-                                              real, extra, layer_tail) is in this format's
-                                              layout; minipsd_read sets it to the file's.  Only
-                                              a document that keeps nothing may simply change
-                                              it.                                             */
+                                              document is.  Everything kept from a file
+                                              (stored channels, masks' stored and real, extra,
+                                              layer_tail) is laid out as this format lays it
+                                              out; minipsd_read sets it to the file's.  It is
+                                              written as this format unless
+                                              minipsd_write_opts.format says otherwise.       */
 } minipsd_doc;
 
 /**
- * \brief Checks that a document can be written as PSD, without writing anything.
+ * \brief How a document is written.  NULL options write it as it is.
+ *
+ * Fields are only ever added at the end, and zero keeps the previous behaviour.
+ */
+typedef struct minipsd_write_opts {
+    uint16_t format; /*!< The file written: MINIPSD_PSD or MINIPSD_PSB; 0 is the document's own
+                          format.  When it differs from the document's, what the document keeps
+                          is translated: RLE row counts and long blocks' lengths widen or narrow.
+                          Blocks whose data itself depends on the format ('Lr16', 'Lr32',
+                          'Layr') and long keys not yet verified ('Alph', 'FELS', 'FEid', 'FXid',
+                          'Mt16', 'Mtrn', 'PxSD', 'lnk3') are refused (MINIPSD_ERR_UNSUPPORTED);
+                          a PSB that does not fit a PSD is MINIPSD_ERR_SIZE.                  */
+} minipsd_write_opts;
+
+/**
+ * \brief Checks that a document can be written, without writing anything.
  *
  * The writer runs the same check first; call it alone to validate a document early.  One limit
- * is left to the writer: the layer section must fit 4 GiB once compressed, which only the sizing
- * pass can tell (MINIPSD_ERR_SIZE from minipsd_writer_init or minipsd_write).
+ * is left to the writer: a PSD's layer section must fit 4 GiB once compressed, which only the
+ * sizing pass can tell (MINIPSD_ERR_SIZE from minipsd_writer_init or minipsd_write).
  *
- * \param doc The document to check.
+ * \param doc  The document to check.
+ * \param opts How it is to be written; NULL: as it is.
  * \return MINIPSD_OK or an error code.
  *
- * \retval MINIPSD_ERR_ARG  doc is NULL, there are no layers (or more than 32767), dpi is outside
+ * \retval MINIPSD_ERR_ARG  doc is NULL, a format is neither 0, MINIPSD_PSD nor MINIPSD_PSB (the
+ *                          document's or opts'), there are no layers (or more than 32767), dpi is outside
  *                          (0, 65536), depth is not 0, 8 or 16, a size is set without its data (icc, a resource, a name,
  *                          extra, layer_tail), a layer's rectangle is inverted, an empty layer's
  *                          has an area, extra is not a run of well-formed blocks, a stored
@@ -354,9 +373,14 @@ typedef struct minipsd_doc {
  *                          (MINIPSD_MAX_SIDE, MINIPSD_MAX_SIDE_PSB; a layer's may be 0), a
  *                          resource name is longer than 255 bytes, or the resources or a layer's
  *                          extra data do not fit a 32-bit length, or a PSD's layers its 32-bit
- *                          section length.
+ *                          section length; written as a PSD from a PSB, a stored RLE row count
+ *                          above 65535 or a kept block above 4 GiB.
+ * \retval MINIPSD_ERR_UNSUPPORTED Written in the other format than the document's, a kept block
+ *                          that cannot change format yet (see minipsd_write_opts.format), a
+ *                          layer tail that is not blocks to its end, or an RLE real mask whose
+ *                          rectangle the mask data does not hold.
  */
-MINIPSDDEF int minipsd_doc_check(const minipsd_doc *doc);
+MINIPSDDEF int minipsd_doc_check(const minipsd_doc *doc, const minipsd_write_opts *opts);
 
 /* --- Writer -------------------------------------------------------------------------------- */
 
@@ -372,13 +396,14 @@ typedef int (*minipsd_write_fn)(void *user, const void *data, size_t size);
 
 #ifndef MINIPSD_NO_MALLOC
 /**
- * \brief Writes a document as PSD through a callback.
+ * \brief Writes a document as PSD (or PSB) through a callback.
  *
  * The callback receives the whole file front to back, in pieces of up to 4 KiB, and is never
  * asked to seek.  After it returns 0 it is not called again.  The same document always produces
  * the same bytes.  This is the pull writer driven to the end on a workspace from MINIPSD_MALLOC.
  *
  * \param doc  The document to write.
+ * \param opts How to write it; NULL: as it is, in its own format.
  * \param fn   Receives the bytes.
  * \param user Passed to fn unchanged.
  * \return MINIPSD_OK or an error code.
@@ -386,12 +411,13 @@ typedef int (*minipsd_write_fn)(void *user, const void *data, size_t size);
  * \retval MINIPSD_OK        The whole file went to fn.
  * \retval MINIPSD_ERR_ARG   doc or fn is NULL, or the document fails minipsd_doc_check with it.
  *                           Nothing was written.
- * \retval MINIPSD_ERR_SIZE  As minipsd_doc_check, or the layers do not fit a 32-bit section
+ * \retval MINIPSD_ERR_SIZE  As minipsd_doc_check, or a PSD's layers do not fit a 32-bit section
  *                           length.  Nothing was written.
+ * \retval MINIPSD_ERR_UNSUPPORTED As minipsd_doc_check.  Nothing was written.
  * \retval MINIPSD_ERR_ALLOC An allocation failed.  Nothing was written.
  * \retval MINIPSD_ERR_WRITE fn returned 0; the output is incomplete.
  */
-MINIPSDDEF int minipsd_write(const minipsd_doc *doc, minipsd_write_fn fn, void *user);
+MINIPSDDEF int minipsd_write(const minipsd_doc *doc, const minipsd_write_opts *opts, minipsd_write_fn fn, void *user);
 #endif
 
 /**
@@ -411,10 +437,11 @@ typedef struct minipsd_writer minipsd_writer;
  * one composite row, plus slack for aligning them: any pointer will do as the workspace.
  *
  * \param doc  The document to write.
+ * \param opts How it is to be written, as for minipsd_writer_init.
  * \param size Receives the size in bytes.
  * \return MINIPSD_OK or an error code: as minipsd_doc_check, or MINIPSD_ERR_ARG when size is NULL.
  */
-MINIPSDDEF int minipsd_writer_workspace_size(const minipsd_doc *doc, size_t *size);
+MINIPSDDEF int minipsd_writer_workspace_size(const minipsd_doc *doc, const minipsd_write_opts *opts, size_t *size);
 
 /**
  * \brief Prepares a pull writer: checks the document and runs the sizing pass.
@@ -424,16 +451,18 @@ MINIPSDDEF int minipsd_writer_workspace_size(const minipsd_doc *doc, size_t *siz
  *
  * \param w         Receives the writer, built at the start of workspace; NULL on failure.
  * \param doc       The document to write; borrowed for as long as the writer is used.
+ * \param opts      How to write it; NULL: as it is, in its own format.  Read here only.
  * \param workspace At least minipsd_writer_workspace_size bytes, any alignment; borrowed likewise.
  * \param size      The size of workspace in bytes.
  * \return MINIPSD_OK or an error code.
  *
  * \retval MINIPSD_ERR_ARG  As minipsd_doc_check, or w or workspace is NULL, or size is too small.
- * \retval MINIPSD_ERR_SIZE As minipsd_doc_check, or the compressed layers do not fit a 32-bit
+ * \retval MINIPSD_ERR_SIZE As minipsd_doc_check, or a PSD's compressed layers do not fit a 32-bit
  *                          section length.
+ * \retval MINIPSD_ERR_UNSUPPORTED As minipsd_doc_check.
  */
-MINIPSDDEF int minipsd_writer_init(minipsd_writer **w, const minipsd_doc *doc, minipsd_workspace *workspace,
-                                   size_t size);
+MINIPSDDEF int minipsd_writer_init(minipsd_writer **w, const minipsd_doc *doc, const minipsd_write_opts *opts,
+                                   minipsd_workspace *workspace, size_t size);
 
 /**
  * \brief The size of the whole file in bytes, known once minipsd_writer_init succeeded.

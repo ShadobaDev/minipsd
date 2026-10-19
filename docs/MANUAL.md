@@ -61,7 +61,7 @@ int main(void)
 
     f = fopen("hello.psd", "wb");
     if (!f) return 1;
-    rc = minipsd_write(&doc, to_file, f);
+    rc = minipsd_write(&doc, NULL, to_file, f);
     if (fclose(f) != 0 && rc == MINIPSD_OK) rc = MINIPSD_ERR_WRITE;
     if (rc != MINIPSD_OK) fprintf(stderr, "hello_write: %s\n", minipsd_error_string(rc));
     return rc != MINIPSD_OK;
@@ -146,7 +146,7 @@ nothing to do with the target. A callback that returns 0 stops the write with
 
 ```mermaid
 flowchart TD
-    doc["minipsd_doc instance"] --> write["minipsd_write(doc, callback, user)"]
+    doc["minipsd_doc instance"] --> write["minipsd_write(doc, NULL, callback, user)"]
     write -. "each piece of the file" .-> cb["callback(user, data, size)"]
     cb -. "returns 1" .-> write
     write -. "the whole file written" .-> ok["return MINIPSD_OK"]
@@ -226,8 +226,16 @@ doc.format = MINIPSD_PSB;   /* 0 or MINIPSD_PSD: a PSD, refused above 30 000 px 
 ```
 
 Many programs that read PSD do not read PSB, so choose it when the size needs it. A document read
-from a file is in that file's format, and so is everything it keeps; writing it in the other one
-is not supported yet.
+from a file is in that file's format, and so is everything it keeps. To write it in the other
+one, ask at the write call; the kept bytes are translated on the way out, nothing is copied first:
+
+```c
+const minipsd_write_opts as_psb = { .format = MINIPSD_PSB };
+rc = minipsd_write(doc, &as_psb, to_file, f);   /* a PSD read from disk, written as a PSB */
+```
+
+Going the other way, a PSB that a PSD cannot hold is `MINIPSD_ERR_SIZE`, and the few blocks whose
+translation is not verified yet are `MINIPSD_ERR_UNSUPPORTED`, both before a byte is written.
 
 The composite, the flattened image that viewers and thumbnails show, is yours to render when
 the layers use anything beyond plain "over" (libvips does most of it, see
@@ -266,7 +274,7 @@ static int to_fd(void *user, const void *data, size_t size)
     return 1;
 }
 
-rc = minipsd_write(&doc, to_fd, &fd);
+rc = minipsd_write(&doc, NULL, to_fd, &fd);
 ```
 
 `minipsd_write` allocates its workspace once, through `MINIPSD_MALLOC`. Without a heap, write the
@@ -286,9 +294,9 @@ static uint8_t *write_to_memory(const minipsd_doc *doc, size_t *size)
     void           *workspace;
     uint8_t        *file = NULL;
 
-    if (minipsd_writer_workspace_size(doc, &need) != MINIPSD_OK) return NULL;   /* refused */
+    if (minipsd_writer_workspace_size(doc, NULL, &need) != MINIPSD_OK) return NULL;   /* refused */
     workspace = malloc(need);                                    /* or the stack, a pool, ... */
-    if (workspace && minipsd_writer_init(&w, doc, workspace, need) == MINIPSD_OK) {
+    if (workspace && minipsd_writer_init(&w, doc, NULL, workspace, need) == MINIPSD_OK) {
         uint64_t total = minipsd_writer_total(w);
         if ((size_t)total == total) file = malloc((size_t)total);   /* fits a size_t */
         if (file && minipsd_writer_fill(w, file, (size_t)total, size) != MINIPSD_OK) {
@@ -486,7 +494,7 @@ uint32_t     lost;
 int rc = minipsd_read(data, size, NULL, NULL, &doc, &lost);   /* limits, options: defaults */
 free(data);                     /* allowed: the document holds copies of everything */
 /* ... change the document: doc->layers points into it, every layer is yours to edit ... */
-rc = minipsd_write(doc, to_file, f);
+rc = minipsd_write(doc, NULL, to_file, f);
 minipsd_doc_free(doc);
 ```
 
@@ -519,7 +527,7 @@ flowchart TD
     read -. "every layer's channels, copied as stored" .-> doc["doc"]
     doc --> pick["the layer to change:<br>minipsd_reader_init, minipsd_reader_next_layer,<br>minipsd_decode_layer, from the same data"]
     pick --> set["layer.rgba = new pixels<br>layer.stored = NULL"]
-    set --> write["minipsd_write(doc, callback, user)"]
+    set --> write["minipsd_write(doc, NULL, callback, user)"]
     write -. "that layer encoded, the others copied" .-> out["the file"]
     classDef minipsd stroke-dasharray: 5 5
     class out minipsd

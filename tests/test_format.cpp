@@ -54,3 +54,17 @@ TEST(MinipsdFormatTest, TheKeyDecidesALengthsWidthNotTheSignature)
     }
     EXPECT_EQ(mpsd__block({wide.data(), 14}, 0, 1, &block, &next), MINIPSD_ERR_FORMAT) << "a long key's header cut short";
 }
+
+TEST(MinipsdFormatTest, ABlockChangesFormatByItsLengthWhenItsKeyIsVerified)
+{
+    for (const char *key : {"luni", "lsct", "Patt", "FMsk", "LMsk", "Mt32", "pths", "lnk2", "lnkE", "cinf", "artd", "extd", "extn"})
+        EXPECT_TRUE(mpsd__convertible(reinterpret_cast<const std::uint8_t *>(key))) << key;
+    for (const char *key : {"Lr16", "Lr32", "Layr", "Alph", "FELS", "FEid", "FXid", "Mt16", "Mtrn", "PxSD", "lnk3"})
+        EXPECT_FALSE(mpsd__convertible(reinterpret_cast<const std::uint8_t *>(key))) << key;
+
+    const Bytes block = {'8', 'B', 'I', 'M', 'c', 'i', 'n', 'f', 0, 0, 0, 2, 7, 7, 0, 0};   // two bytes, two of padding
+    Bytes out;
+    mpsd__sink s = {collect, &out, 0, 0};
+    mpsd__put_block(&s, block.data(), 12, 2, 4, 1);
+    EXPECT_EQ(out, (Bytes{'8', 'B', 'I', 'M', 'c', 'i', 'n', 'f', 0, 0, 0, 0, 0, 0, 0, 2, 7, 7, 0, 0}));
+}

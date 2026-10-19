@@ -8,6 +8,9 @@ It also reads files from other programs with minipsd_read and writes them back w
 minipsd_write: every block, resource and global block psd-tools finds must come back the same.
 Photoshop's 16-bit files go through as stored: their ZIP channels are copied, byte for byte.
 
+Each of those also goes into the other format (PSD as PSB, PSB as PSD), its kept content
+translated, and must read back the same.
+
 And it reads every PSB of psd-tools' set through minipsd's reader: each layer and the composite
 decode to what psd-tools decompresses from the same file.
 
@@ -60,6 +63,10 @@ class Doc(ctypes.Structure):
 
 class ReadOpts(ctypes.Structure):
     _fields_ = [("stored", ctypes.c_int)]
+
+
+class WriteOpts(ctypes.Structure):
+    _fields_ = [("format", ctypes.c_uint16)]
 
 
 class Plane(ctypes.Structure):
@@ -234,7 +241,7 @@ def write(lib, path, w, h, dpi, compression, layers, fmt=0):
         out.extend(ctypes.string_at(data, size))
         return 1
 
-    rc = lib.minipsd_write(ctypes.byref(doc), WRITE_FN(collect), None)
+    rc = lib.minipsd_write(ctypes.byref(doc), None, WRITE_FN(collect), None)
     if rc == MINIPSD_OK:
         path.write_bytes(out)
     return rc
@@ -338,7 +345,7 @@ def groups_and_mask(lib, path):
         out.extend(ctypes.string_at(data, size))
         return 1
 
-    rc = lib.minipsd_write(ctypes.byref(doc), WRITE_FN(collect), None)
+    rc = lib.minipsd_write(ctypes.byref(doc), None, WRITE_FN(collect), None)
     if rc == MINIPSD_OK:
         path.write_bytes(out)
     return rc, mask_px
@@ -399,7 +406,7 @@ def deep(lib, path):
         out.extend(ctypes.string_at(data, size))
         return 1
 
-    rc = lib.minipsd_write(ctypes.byref(doc), WRITE_FN(collect), None)
+    rc = lib.minipsd_write(ctypes.byref(doc), None, WRITE_FN(collect), None)
     if rc == MINIPSD_OK:
         path.write_bytes(out)
     return rc, (w, h, lw, lh, base, top, mask_px)
@@ -460,7 +467,7 @@ KEPT_PSB = ["text.psb", "group.psb", "hidden-groups.psb", "layer_mask_data.psb",
 KEPT_PSB_16 = ["16bit5x5.psb"]
 
 
-def resave(lib, source, path, stored=False):
+def resave(lib, source, path, stored=False, fmt=0):
     data = source.read_bytes()
     doc = ctypes.POINTER(Doc)()
     lost = ctypes.c_uint32(0)
@@ -475,7 +482,7 @@ def resave(lib, source, path, stored=False):
         out.extend(ctypes.string_at(chunk, size))
         return 1
 
-    rc = lib.minipsd_write(doc, WRITE_FN(collect), None)
+    rc = lib.minipsd_write(doc, ctypes.byref(WriteOpts(fmt)) if fmt else None, WRITE_FN(collect), None)
     lib.minipsd_doc_free(doc)
     if rc == MINIPSD_OK:
         path.write_bytes(out)
@@ -516,9 +523,27 @@ def check_kept(name, before, after, stored=False):
         # R, G, B as decoded: minipsd writes four channels where the original may have three.
         same("composite", before._record.image_data.get_data(before._record.header)[:3],
              after._record.image_data.get_data(after._record.header)[:3])
+        vb, va, depth = before.version, after.version, before.depth
+
+        def data(rec, c, d, version):
+            if c.id.value >= -1 and (rec.right - rec.left) * (rec.bottom - rec.top) == 0:
+                return d.data   # no area: nothing stored, the marker is the document's compression
+            if vb == va:
+                return d.compression, d.data   # byte for byte
+            m = rec.mask_data
+            if c.id.value >= -1:
+                w, h = rec.right - rec.left, rec.bottom - rec.top
+            elif c.id.value == -2:
+                w, h = m.right - m.left, m.bottom - m.top
+            else:
+                w, h = m.real_right - m.real_left, m.real_bottom - m.real_top
+            if w <= 0 or h <= 0:
+                return d.compression, d.data   # no rows: no count table to differ
+            return d.compression, d.get_data(w, h, depth, version)
+
         for i, (b, a, db, da) in enumerate(zip(rb, ra, cb, ca)):
-            got = {c.id.value: (d.compression, d.data) for c, d in zip(a.channel_info, da)}
-            same(f"layer {i} channel data", {c.id.value: (d.compression, d.data) for c, d in zip(b.channel_info, db)},
+            got = {c.id.value: data(a, c, d, va) for c, d in zip(a.channel_info, da)}
+            same(f"layer {i} channel data", {c.id.value: data(b, c, d, vb) for c, d in zip(b.channel_info, db)},
                  {k: v for k, v in got.items() if k != -1 or -1 in [c.id.value for c in b.channel_info]})
     for i, (b, a) in enumerate(zip(rb, ra)):
         same(f"layer {i} blocks", blocks(b.tagged_blocks), blocks(a.tagged_blocks))
@@ -611,7 +636,7 @@ def check_psb(lib, path):
 
 def main():
     lib = ctypes.CDLL(sys.argv[1])
-    lib.minipsd_write.argtypes = [ctypes.POINTER(Doc), WRITE_FN, ctypes.c_void_p]
+    lib.minipsd_write.argtypes = [ctypes.POINTER(Doc), ctypes.c_void_p, WRITE_FN, ctypes.c_void_p]
     lib.minipsd_write.restype = ctypes.c_int
     lib.minipsd_read.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p,
                                  ctypes.POINTER(ctypes.POINTER(Doc)), ctypes.POINTER(ctypes.c_uint32)]
@@ -658,21 +683,26 @@ def main():
     if files is None:
         print("kept content: skipped, no psd-tools files (MINIPSD_PSD_TOOLS_FILES)")
     kept = [(n, False) for n in KEPT_FILES + KEPT_PSB] + [(n, True) for n in KEPT_16 + KEPT_PSB_16]
-    for name, stored in kept if files else []:
-        path = out / f"resaved-{pathlib.Path(name).name}"
-        rc, lost = resave(lib, files / name, path, stored)
+    # As it is, then in the other format: PSD as PSB, PSB as PSD, every channel stored, so that its
+    # RLE count table is what changes width.
+    for (name, stored), convert in [(k, False) for k in kept] + [((k[0], True), True) for k in kept] if files else []:
+        source = files / name
+        version = 1 if source.suffix == ".psd" else 2
+        target = 3 - version if convert else version
+        path = out / f"{'converted' if convert else 'resaved'}-{source.stem}{'.psd' if target == 1 else '.psb'}"
+        rc, lost = resave(lib, source, path, stored, target if convert else 0)
         if rc != MINIPSD_OK:
             errors.append(f"{name}: minipsd_read or minipsd_write returned {rc}")
             continue
-        before, after = PSDImage.open(files / name), PSDImage.open(path)
+        before, after = PSDImage.open(source), PSDImage.open(path)
         found = check_kept(name, before, after, stored)
-        if after.version != before.version:
-            found.append(f"{name}: written as version {after.version}")
+        if after.version != target:
+            found.append(f"{name}: written as version {after.version}, not {target}")
         for lb, la in zip(before.descendants(), after.descendants()):   # mask pixels, as psd-tools decodes them
             if lb.has_mask() and lb.mask.topil() is not None and lb.mask.topil().tobytes() != la.mask.topil().tobytes():
                 found.append(f"{name}: '{lb.name}' mask pixels differ")
         errors += found
-        print(f"resaved {name} (lost {lost}): {'FAILED' if found else 'ok'}")
+        print(f"{'converted' if convert else 'resaved'} {name} (lost {lost}): {'FAILED' if found else 'ok'}")
     for path in sorted(files.rglob("*.psb")) if files else []:
         found = check_psb(lib, path)
         errors += found

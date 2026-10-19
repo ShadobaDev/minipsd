@@ -45,10 +45,10 @@ TEST(MinipsdAllocTest, EachFailedAllocationIsReported)
 
     // One allocation: the pull writer's workspace.  Fail it.
     g_allocs_left = 0;
-    EXPECT_EQ(minipsd_write(&d, count, &size), MINIPSD_ERR_ALLOC);
+    EXPECT_EQ(minipsd_write(&d, nullptr, count, &size), MINIPSD_ERR_ALLOC);
     EXPECT_EQ(size, 0u) << "nothing is written when memory runs out";
     g_allocs_left = 1;
-    const int rc = minipsd_write(&d, count, &size);
+    const int rc = minipsd_write(&d, nullptr, count, &size);
     EXPECT_EQ(rc, MINIPSD_OK) << "one allocation is all a write needs: " << minipsd_error_string(rc);
 
     // minipsd_read: one allocation, the document's block.  Fail it.
@@ -62,7 +62,7 @@ TEST(MinipsdAllocTest, EachFailedAllocationIsReported)
     };
     std::pair<unsigned char *, std::size_t *> sink{file, &n};
     g_allocs_left = -1;
-    ASSERT_EQ(minipsd_write(&d, into, &sink), MINIPSD_OK);
+    ASSERT_EQ(minipsd_write(&d, nullptr, into, &sink), MINIPSD_OK);
     minipsd_doc *doc = reinterpret_cast<minipsd_doc *>(1);
     g_allocs_left = 0;
     EXPECT_EQ(minipsd_read(file, n, nullptr, nullptr, &doc, nullptr), MINIPSD_ERR_ALLOC);

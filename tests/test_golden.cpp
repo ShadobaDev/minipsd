@@ -137,7 +137,7 @@ TEST(MinipsdGoldenTest, OutputMatchesTheBytesOf010)
     for (const Case &t : cases) {
         SCOPED_TRACE(t.golden.name);
         Bytes out;
-        const int rc = minipsd_write(&t.doc, collect, &out);
+        const int rc = minipsd_write(&t.doc, nullptr, collect, &out);
         ASSERT_EQ(rc, MINIPSD_OK) << minipsd_error_string(rc);
         EXPECT_EQ(sha256(out), t.golden.sha256) << "the bytes of '" << t.golden.name << "' changed";
         // encode(decode(x)) == x, through minipsd_read; the file's buffer is freed before writing.

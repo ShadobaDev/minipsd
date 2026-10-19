@@ -513,7 +513,7 @@ TEST(MinipsdWriterTest, SixteenBitDocumentsAreWrittenAndReadBack)
 
     minipsd_doc d = docOf(w, h, layers, 2);
     d.depth = 12;
-    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG);
 }
 
 // A PSB from scratch: a layer with a rectangle and a mask, a group, a kept block of a long key,
@@ -576,9 +576,9 @@ TEST(MinipsdWriterTest, PsbDocumentsAreWrittenAndReadBack)
 
     // The same block is not one in a PSD's layout: the kept bytes say which format they are in.
     minipsd_doc d = docOf(6, 4, layers, 3);
-    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG);
     d.format = 3;
-    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG);
 }
 
 // PSB's sides go to 300 000: past a PSD's, for the canvas, a layer and a mask alike.
@@ -589,7 +589,7 @@ TEST(MinipsdWriterTest, APsbTakesSidesAPsdCannot)
     for (std::size_t i = 0; i < px.size(); ++i) px[i] = static_cast<std::uint8_t>(i % 4 == 3 ? 255 : i * 7);
     const minipsd_layer layer{.name = "Wide", .rgba = px.data(), .opacity = 255};
     minipsd_doc d = docOf(w, 1, &layer, 1);
-    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_SIZE) << "a PSD";
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_SIZE) << "a PSD";
     d.format = MINIPSD_PSB;
     const Bytes file = write(d);
     minipsd_doc *back = nullptr;
@@ -599,18 +599,138 @@ TEST(MinipsdWriterTest, APsbTakesSidesAPsdCannot)
     minipsd_doc_free(back);
 
     d.width = MINIPSD_MAX_SIDE_PSB + 1;
-    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_SIZE);
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_SIZE);
     d.width = w;
     minipsd_layer tall = layer;
     tall.bottom = MINIPSD_MAX_SIDE_PSB + 1;
     tall.right  = 1;
     d.layers = &tall;
-    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_SIZE) << "a layer";
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_SIZE) << "a layer";
     const minipsd_mask big{.bottom = MINIPSD_MAX_SIDE_PSB + 1, .right = 1, .pixels = px.data()};
     minipsd_layer masked = layer;
     masked.mask = &big;
     d.layers = &masked;
-    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_SIZE) << "a mask";
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_SIZE) << "a mask";
+}
+
+// A document written in the other format: its stored channels' RLE count tables and its long
+// blocks' lengths widen or narrow, the rest is copied; and back again, the same bytes.
+TEST(MinipsdWriterTest, AnotherFormatTranslatesWhatTheDocumentKeeps)
+{
+    const Bytes px = testImage(5, 3), ramp{1, 2, 3, 4, 5, 6, 7, 8};
+    // A real mask 1 x 2, RLE, its rectangle after its flags and colour in the rest of the mask data.
+    const Bytes real = {0, 1, 0, 2, 0, 2, 0, 11, 0, 22};
+    const Bytes rest = Bytes{0, 255} + be32(0) + be32(0) + be32(2) + be32(1);
+    const minipsd_mask mask{.top = 1, .left = 1, .bottom = 3, .right = 5, .color = 255, .pixels = ramp.data(),
+                            .real = {real.data(), real.size()}, .rest = {rest.data(), rest.size()}};
+    const Bytes extra = tagged("cinf", {1, 2, 3, 4}) + tagged("Patt", {9, 9});
+    const Bytes tail  = be32(0) + tagged("FMsk", Bytes(12, 7)) + tagged("Patt", {5});   // the last one unpadded
+    const minipsd_layer layer{.name = "Pic", .rgba = px.data(), .opacity = 255, .top = 1, .left = 1, .bottom = 4, .right = 6,
+                              .extra = {extra.data(), extra.size()}, .mask = &mask};
+    minipsd_doc d = docOf(6, 4, &layer, 1);
+    d.layer_tail = {tail.data(), tail.size()};
+    const Bytes psd = write(d);
+    const minipsd_read_opts keep{1};
+    minipsd_doc *s = nullptr;
+    ASSERT_EQ(minipsd_read(psd.data(), psd.size(), nullptr, &keep, &s, nullptr), MINIPSD_OK);
+    ASSERT_NE(s->layers[0].stored, nullptr);
+
+    const minipsd_write_opts asPsb{MINIPSD_PSB}, asPsd{MINIPSD_PSD};
+    const Bytes psb = write(*s, MINIPSD_OK, &asPsb);
+    EXPECT_EQ(pull(*s, 7, &asPsb), psb);
+    EXPECT_EQ(pullTotal(*s, 0, &asPsb), psb.size());
+    EXPECT_EQ(write(*s, MINIPSD_OK, &asPsd), psd) << "its own format: as it is";
+    minipsd_doc *b = nullptr;
+    ASSERT_EQ(minipsd_read(psb.data(), psb.size(), nullptr, &keep, &b, nullptr), MINIPSD_OK);
+    EXPECT_EQ(b->format, MINIPSD_PSB);
+    EXPECT_EQ(write(*b, MINIPSD_OK, &asPsd), psd) << "and back: the same bytes";
+
+    // Through the reader: pixels, the mask, the real mask's rows, the blocks.
+    Bytes workspace(256), got(px.size()), gotMask(ramp.size());
+    minipsd_reader *r = nullptr;
+    minipsd_info    info{};
+    ASSERT_EQ(minipsd_reader_init(&r, psb.data(), psb.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
+    minipsd_layer_view v;
+    ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
+    minipsd_target t;
+    minipsd_target_rgba(&t, got.data(), std::size_t(5) * 4);
+    EXPECT_EQ(minipsd_decode_layer(r, &v, &t, nullptr), MINIPSD_OK);
+    EXPECT_EQ(got, px);
+    const minipsd_plane plane{gotMask.data(), 1, 4};
+    EXPECT_EQ(minipsd_decode_mask(r, &v, &plane, nullptr), MINIPSD_OK);
+    EXPECT_EQ(gotMask, ramp);
+    EXPECT_EQ(Bytes(v.mask.real.data, v.mask.real.data + v.mask.real.size), (Bytes{0, 1, 0, 0, 0, 2, 0, 0, 0, 2, 0, 11, 0, 22}));
+    minipsd_block blk;
+    std::size_t   pos = 0;
+    ASSERT_EQ(minipsd_layer_next_block(&v, &pos, &blk), MINIPSD_MORE);   // 'luni'
+    ASSERT_EQ(minipsd_layer_next_block(&v, &pos, &blk), MINIPSD_MORE);
+    EXPECT_EQ(std::string(blk.key) + std::to_string(blk.data.size), "cinf4");
+    EXPECT_EQ(Bytes(info.layer_tail.data, info.layer_tail.data + 12), (be32(0) + Bytes{'8', 'B', 'I', 'M', 'F', 'M', 's', 'k'}));
+    EXPECT_EQ(Bytes(info.layer_tail.data + 12, info.layer_tail.data + 20), (Bytes{0, 0, 0, 0, 0, 0, 0, 12})) << "eight bytes of length";
+    minipsd_doc_free(b);
+    minipsd_doc_free(s);
+}
+
+// What cannot change format yet is refused before a byte is written; what does not fit a PSD too.
+TEST(MinipsdWriterTest, AnotherFormatRefusesWhatItCannotTranslate)
+{
+    const Bytes px = testImage(2, 2);
+    const minipsd_write_opts asPsb{MINIPSD_PSB}, asPsd{MINIPSD_PSD}, bad{3};
+    minipsd_layer layer{.name = "L", .rgba = px.data(), .opacity = 255, .bottom = 2, .right = 2};
+    minipsd_doc   d = docOf(2, 2, &layer, 1);
+    EXPECT_EQ(minipsd_doc_check(&d, &bad), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_doc_check(&d, &asPsb), MINIPSD_OK) << "nothing kept: nothing to translate";
+
+    const Bytes alph = tagged("Alph", {1, 2});
+    layer.extra = {alph.data(), alph.size()};
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK);
+    EXPECT_EQ(minipsd_doc_check(&d, &asPsb), MINIPSD_ERR_UNSUPPORTED) << "a long key no file has verified";
+    layer.extra = {};
+
+    struct Case {
+        const char *what;
+        Bytes       tail;
+        int         rc;
+    };
+    const Case cases[] = {
+        {"layers in 'Lr16'", be32(0) + tagged("Lr16", {0, 0, 0, 0}), MINIPSD_ERR_UNSUPPORTED},
+        {"not blocks after the mask", be32(0) + Bytes(12, 'x'), MINIPSD_ERR_UNSUPPORTED},
+        {"a mask longer than the tail", be32(9), MINIPSD_ERR_UNSUPPORTED},
+        {"a block longer than the tail", be32(0) + Bytes{'8', 'B', 'I', 'M', 'P', 'a', 't', 't'} + be32(99), MINIPSD_ERR_UNSUPPORTED},
+        {"an empty long block", be32(0) + Bytes{'8', 'B', 'I', 'M', 'F', 'M', 's', 'k'} + be32(0), MINIPSD_OK},
+        {"too short for a length: only bytes", {1, 2}, MINIPSD_OK},
+    };
+    for (const Case &c : cases) {
+        d.layer_tail = {c.tail.data(), c.tail.size()};
+        EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK) << c.what;
+        EXPECT_EQ(minipsd_doc_check(&d, &asPsb), c.rc) << c.what;
+    }
+    d.layer_tail = {};
+
+    // A real mask whose rectangle the mask data does not hold: its rows are unknown.
+    const Bytes real = {0, 1, 0, 2, 0, 2, 0, 11, 0, 22}, shortRest = {0, 255};
+    const minipsd_mask mask{.bottom = 2, .right = 1, .pixels = px.data(), .real = {real.data(), real.size()},
+                            .rest = {shortRest.data(), shortRest.size()}};
+    layer.mask = &mask;
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK);
+    EXPECT_EQ(minipsd_doc_check(&d, &asPsb), MINIPSD_ERR_UNSUPPORTED);
+    layer.mask = nullptr;
+
+    // A PSB that a PSD cannot hold: a side, a row count.
+    d.format = MINIPSD_PSB;
+    d.width = 30001;
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK);
+    EXPECT_EQ(minipsd_doc_check(&d, &asPsd), MINIPSD_ERR_SIZE);
+    d.width = 2;
+    Bytes wide = {0, 1, 0, 1, 0x11, 0x70};                     // one row of 70000 bytes, as a PSB counts it
+    wide.resize(wide.size() + 70000, 0);
+    const minipsd_bytes stored[4] = {{wide.data(), wide.size()}, {wide.data(), wide.size()}, {wide.data(), wide.size()}, {}};
+    const Bytes composite(std::size_t(2) * 2 * 4, 255);
+    minipsd_layer kept{.name = "K", .opacity = 255, .bottom = 1, .right = 1, .stored = stored};
+    d.layers = &kept;
+    d.composite = composite.data();
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK);
+    EXPECT_EQ(minipsd_doc_check(&d, &asPsd), MINIPSD_ERR_SIZE) << "a row count above 65535";
 }
 
 TEST(MinipsdWriterTest, PassThroughEncodesOnlyTheLayerThatChanged)
@@ -745,13 +865,13 @@ TEST(MinipsdWriterTest, RefusesBeforeWritingAnything)
     const minipsd_layer layer{"L", px.data(), 255, 0};
     Bytes out;
 
-    EXPECT_EQ(minipsd_write(nullptr, collect, &out), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_write(nullptr, nullptr, collect, &out), MINIPSD_ERR_ARG);
     minipsd_doc d = docOf(2, 2, &layer, 0);
-    EXPECT_EQ(minipsd_write(&d, collect, &out), minipsd_doc_check(&d)) << "no layers";
+    EXPECT_EQ(minipsd_write(&d, nullptr, collect, &out), minipsd_doc_check(&d, nullptr)) << "no layers";
     d = docOf(0, 2, &layer, 1);
-    EXPECT_EQ(minipsd_write(&d, collect, &out), minipsd_doc_check(&d)) << "no width";
+    EXPECT_EQ(minipsd_write(&d, nullptr, collect, &out), minipsd_doc_check(&d, nullptr)) << "no width";
     d = docOf(2, 2, &layer, 1);
-    EXPECT_EQ(minipsd_write(&d, nullptr, nullptr), MINIPSD_ERR_ARG) << "no callback";
+    EXPECT_EQ(minipsd_write(&d, nullptr, nullptr, nullptr), MINIPSD_ERR_ARG) << "no callback";
 
     // The layer section's length is 32-bit, and only compressing tells it.  The document is refused
     // before a pixel is read, so a 4-byte buffer stands in for gigabytes: RAW channel sizes are
@@ -759,14 +879,14 @@ TEST(MinipsdWriterTest, RefusesBeforeWritingAnything)
     const std::uint8_t stand_in[4] = {};
     const minipsd_layer huge[2] = {{"A", stand_in, 255, 0}, {"B", stand_in, 255, 0}};
     d = docOf(MINIPSD_MAX_SIDE, MINIPSD_MAX_SIDE, huge, 2); d.compression = MINIPSD_RAW;
-    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_OK) << "every field is fine on its own";
-    EXPECT_EQ(minipsd_write(&d, collect, &out), MINIPSD_ERR_SIZE) << "layer section above 4 GiB";
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK) << "every field is fine on its own";
+    EXPECT_EQ(minipsd_write(&d, nullptr, collect, &out), MINIPSD_ERR_SIZE) << "layer section above 4 GiB";
 
     std::size_t size = 0;
-    ASSERT_EQ(minipsd_writer_workspace_size(&d, &size), MINIPSD_OK);
+    ASSERT_EQ(minipsd_writer_workspace_size(&d, nullptr, &size), MINIPSD_OK);
     Bytes workspace(size);
     minipsd_writer *w = nullptr;
-    EXPECT_EQ(minipsd_writer_init(&w, &d, workspace.data(), size), MINIPSD_ERR_SIZE) << "init sizes it too";
+    EXPECT_EQ(minipsd_writer_init(&w, &d, nullptr, workspace.data(), size), MINIPSD_ERR_SIZE) << "init sizes it too";
     EXPECT_EQ(w, nullptr) << "no writer for a refused document";
 
     EXPECT_TRUE(out.empty()) << "nothing is written for a refused document";
@@ -802,10 +922,10 @@ TEST(MinipsdWriterTest, PullWriterFeedsANonBlockingTarget)
         minipsd_doc d = docOf(37, 5, layers, 3);
         d.compression = compression;
         std::size_t size = 0;
-        ASSERT_EQ(minipsd_writer_workspace_size(&d, &size), MINIPSD_OK);
+        ASSERT_EQ(minipsd_writer_workspace_size(&d, nullptr, &size), MINIPSD_OK);
         Bytes workspace(size), target, pending;
         minipsd_writer *w = nullptr;
-        ASSERT_EQ(minipsd_writer_init(&w, &d, workspace.data(), size), MINIPSD_OK);
+        ASSERT_EQ(minipsd_writer_init(&w, &d, nullptr, workspace.data(), size), MINIPSD_OK);
 
         std::uint8_t  chunk[16];
         std::uint32_t state = 7;
@@ -833,10 +953,10 @@ TEST(MinipsdWriterTest, FillKeepsItsProtocol)
     const minipsd_layer layer{"L", px.data(), 255, 0};
     const minipsd_doc d = docOf(4, 4, &layer, 1);
     std::size_t size = 0;
-    ASSERT_EQ(minipsd_writer_workspace_size(&d, &size), MINIPSD_OK);
+    ASSERT_EQ(minipsd_writer_workspace_size(&d, nullptr, &size), MINIPSD_OK);
     Bytes workspace(size), buf(16);
     minipsd_writer *w = nullptr;
-    ASSERT_EQ(minipsd_writer_init(&w, &d, workspace.data(), size), MINIPSD_OK);
+    ASSERT_EQ(minipsd_writer_init(&w, &d, nullptr, workspace.data(), size), MINIPSD_OK);
 
     std::size_t n = 99;
     EXPECT_EQ(minipsd_writer_fill(nullptr, buf.data(), buf.size(), &n), MINIPSD_ERR_ARG);
@@ -861,25 +981,25 @@ TEST(MinipsdWriterTest, PullWriterRefusesWhatItCannotUse)
     minipsd_doc d = docOf(4, 4, &layer, 1);
     std::size_t size = 0;
 
-    EXPECT_EQ(minipsd_writer_workspace_size(nullptr, &size), MINIPSD_ERR_ARG);
-    EXPECT_EQ(minipsd_writer_workspace_size(&d, nullptr), MINIPSD_ERR_ARG);
-    ASSERT_EQ(minipsd_writer_workspace_size(&d, &size), MINIPSD_OK);
+    EXPECT_EQ(minipsd_writer_workspace_size(nullptr, nullptr, &size), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_writer_workspace_size(&d, nullptr, nullptr), MINIPSD_ERR_ARG);
+    ASSERT_EQ(minipsd_writer_workspace_size(&d, nullptr, &size), MINIPSD_OK);
     Bytes workspace(size);
     minipsd_writer *w = nullptr;
-    EXPECT_EQ(minipsd_writer_init(nullptr, &d, workspace.data(), size), MINIPSD_ERR_ARG) << "nowhere to put the writer";
-    EXPECT_EQ(minipsd_writer_init(&w, &d, nullptr, size), MINIPSD_ERR_ARG) << "no workspace";
-    EXPECT_EQ(minipsd_writer_init(&w, &d, workspace.data(), size - 1), MINIPSD_ERR_ARG) << "one byte short";
-    EXPECT_EQ(minipsd_writer_init(&w, nullptr, workspace.data(), size), MINIPSD_ERR_ARG) << "no document";
+    EXPECT_EQ(minipsd_writer_init(nullptr, &d, nullptr, workspace.data(), size), MINIPSD_ERR_ARG) << "nowhere to put the writer";
+    EXPECT_EQ(minipsd_writer_init(&w, &d, nullptr, nullptr, size), MINIPSD_ERR_ARG) << "no workspace";
+    EXPECT_EQ(minipsd_writer_init(&w, &d, nullptr, workspace.data(), size - 1), MINIPSD_ERR_ARG) << "one byte short";
+    EXPECT_EQ(minipsd_writer_init(&w, nullptr, nullptr, workspace.data(), size), MINIPSD_ERR_ARG) << "no document";
     EXPECT_EQ(w, nullptr) << "no writer after a failed init";
     EXPECT_EQ(minipsd_writer_total(nullptr), 0u);
 
-    ASSERT_EQ(minipsd_writer_init(&w, &d, workspace.data(), size), MINIPSD_OK);
+    ASSERT_EQ(minipsd_writer_init(&w, &d, nullptr, workspace.data(), size), MINIPSD_OK);
     EXPECT_GE(static_cast<void *>(w), static_cast<void *>(workspace.data()));
     EXPECT_LT(static_cast<void *>(w), static_cast<void *>(workspace.data() + size)) << "the writer lives in the workspace";
 
     d.width = 0;
-    EXPECT_EQ(minipsd_writer_workspace_size(&d, &size), minipsd_doc_check(&d)) << "the document check comes first";
-    EXPECT_EQ(minipsd_writer_init(&w, &d, workspace.data(), workspace.size()), minipsd_doc_check(&d));
+    EXPECT_EQ(minipsd_writer_workspace_size(&d, nullptr, &size), minipsd_doc_check(&d, nullptr)) << "the document check comes first";
+    EXPECT_EQ(minipsd_writer_init(&w, &d, nullptr, workspace.data(), workspace.size()), minipsd_doc_check(&d, nullptr));
 }
 
 TEST(MinipsdWriterTest, WriteFailureIsReported)
@@ -893,13 +1013,13 @@ TEST(MinipsdWriterTest, WriteFailureIsReported)
         return ++c->made != c->failAt;
     };
     Calls all{0, 0};   // never fails
-    ASSERT_EQ(minipsd_write(&d, failing, &all), MINIPSD_OK);
+    ASSERT_EQ(minipsd_write(&d, nullptr, failing, &all), MINIPSD_OK);
     ASSERT_GE(all.made, 3);
 
     // The first piece, one in the middle, and the last.
     for (int failAt : {1, 2, all.made}) {
         Calls c{0, failAt};
-        EXPECT_EQ(minipsd_write(&d, failing, &c), MINIPSD_ERR_WRITE) << "failing call " << failAt;
+        EXPECT_EQ(minipsd_write(&d, nullptr, failing, &c), MINIPSD_ERR_WRITE) << "failing call " << failAt;
         EXPECT_EQ(c.made, failAt) << "the writer stops calling back after the first failure";
     }
 }

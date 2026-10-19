@@ -703,7 +703,7 @@ TEST(MinipsdReaderTest, RleChannelsAreViewedWholeAndBackToBack)
     for (int i = 0; i < 2; ++i) {
         for (int k = 0; k < 4; ++k) {
             const minipsd_bytes &c = v[i].channel[channelOf[k]];
-            EXPECT_EQ(c.size, mpsd__layer_channel_size(&d, &layers[i], k)) << i << "/" << k;   // k: the order written
+            EXPECT_EQ(c.size, mpsd__layer_channel_size(&d, &layers[i], k, 0)) << i << "/" << k;   // k: the order written
             EXPECT_EQ(c.data[1], 1) << "the marker: RLE";
             if (k) {                       // back to back, in the file's order
                 const minipsd_bytes &before = v[i].channel[channelOf[k - 1]];
@@ -1715,7 +1715,7 @@ TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
     EXPECT_STREQ(d->layers[0].name, "Background");
     EXPECT_EQ(Bytes(d->layers[0].rgba, d->layers[0].rgba + 16), (Bytes{0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255,
                                                                      0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255}));
-    EXPECT_EQ(minipsd_doc_check(d.get()), MINIPSD_OK) << "the writer takes it as it is";
+    EXPECT_EQ(minipsd_doc_check(d.get(), nullptr), MINIPSD_OK) << "the writer takes it as it is";
 }
 
 // A flat 16-bit file: its one layer decoded at 16 bits, opaque as 65535.
@@ -2153,6 +2153,21 @@ std::vector<std::tuple<std::string, std::size_t, std::size_t>> globalBlocksOf(co
 // Init walks the global blocks' headers, one round each, to find layers kept in 'Lr16' or 'Lr32'.
 std::size_t globalBlocks(const minipsd_info &info) { return globalBlocksOf(info.layer_tail, info.format == MINIPSD_PSB).size(); }
 
+// A document written in the other format (PSD as PSB, PSB as PSD), its kept content translated,
+// reads back as a document that written in the first format again gives the same bytes.
+void expectConvertsBack(const minipsd_doc &d)
+{
+    const bool               psb = d.format == MINIPSD_PSB;
+    const minipsd_write_opts other{static_cast<std::uint16_t>(psb ? MINIPSD_PSD : MINIPSD_PSB)};
+    const minipsd_write_opts back{static_cast<std::uint16_t>(psb ? MINIPSD_PSB : MINIPSD_PSD)};
+    const Bytes as = write(d), converted = write(d, MINIPSD_OK, &other);
+    const minipsd_read_opts keep{1};
+    const Doc c = readDoc(converted, nullptr, MINIPSD_OK, nullptr, &keep);
+    ASSERT_TRUE(c);
+    EXPECT_EQ(c->format, other.format);
+    EXPECT_EQ(write(*c, MINIPSD_OK, &back), as) << "into the other format and back: the same bytes";
+}
+
 Bytes readFile(const std::filesystem::path &path)
 {
     std::ifstream in(path, std::ios::binary);
@@ -2214,6 +2229,7 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
                 readDoc(file, &lost, MINIPSD_ERR_UNSUPPORTED);
                 const Doc s = readDoc(file, &lost, MINIPSD_OK, nullptr, &keep);
                 ASSERT_TRUE(s);
+                expectConvertsBack(*s);
                 EXPECT_EQ(s->depth, depth);
                 EXPECT_EQ(Bytes(s->composite, s->composite + composite.size()), stored);
                 const Bytes again = write(*s);
@@ -2266,6 +2282,7 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
             const minipsd_read_opts keep{1};
             const Doc s = readDoc(file, &lost, MINIPSD_OK, nullptr, &keep);
             ASSERT_TRUE(s);
+            expectConvertsBack(*s);
             const Doc f = readDoc(write(*s), &lostAgain);
             ASSERT_TRUE(f);
             ASSERT_EQ(f->layer_count, d->layer_count);

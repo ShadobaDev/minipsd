@@ -80,4 +80,32 @@ static int mpsd__block(minipsd_bytes region, size_t pos, unsigned psb, minipsd_b
     return MINIPSD_OK;
 }
 
+/* --- writing a block in the other format --- */
+
+/* Can a block of this key go into the other format, its length re-written in that format's width
+   and its data copied?  A short key's can: its data never depends on the format (psd-tools parses
+   none of them differently).  So can the long keys checked against psd-tools' files, the PSD and
+   PSB twins: masks' and transparency's parameters, paths, linked files (whose inner lengths are
+   eight bytes in both) and descriptors.  Not yet: the layer structures ('Lr16', 'Lr32', 'Layr',
+   whose data is a layer info of the format), and the long keys no file has shown. */
+static int mpsd__convertible(const uint8_t *key)
+{
+    static const char keys[] = "FMskLMskMt32pthslnk2lnkEcinfartdextdextn";
+    size_t i;
+    if (!mpsd__long_key(key)) return 1;
+    for (i = 0; i + 4 < sizeof keys; i += 4)
+        if (mpsd__tag(key, keys + i)) return 1;
+    return 0;
+}
+
+/* The block at p, whose header takes head bytes and whose length is size, written as the out
+   format lays it out: signature and key, the length in out's width, then the span bytes after the
+   header (the data, and any padding that follows it). */
+static void mpsd__put_block(mpsd__sink *s, const uint8_t *p, size_t head, uint64_t size, size_t span, unsigned out)
+{
+    mpsd__put(s, p, 8);
+    mpsd__putlen(s, size, out && mpsd__long_key(p + 4));
+    mpsd__put(s, p + head, span);
+}
+
 #endif /* MPSD__FORMAT_DONE */

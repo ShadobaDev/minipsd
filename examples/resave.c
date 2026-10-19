@@ -117,7 +117,7 @@ int main(int argc, char **argv)
     f = fopen(argv[2], "wb");
     if (!f) rc = MINIPSD_ERR_OPEN;
     else {
-        rc = minipsd_write(doc, to_file, f);
+        rc = minipsd_write(doc, NULL, to_file, f);
         if (fclose(f) != 0 && rc == MINIPSD_OK) rc = MINIPSD_ERR_WRITE;
     }
     if (rc == MINIPSD_OK)

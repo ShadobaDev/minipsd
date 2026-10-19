@@ -75,11 +75,11 @@ int main(int argc, char **argv)
     if (argc < 2) { fputs("usage: write_nonblocking path\n", stderr); return 2; }
     demo_init(&d);
 
-    rc = minipsd_writer_workspace_size(&d.doc, &need);
+    rc = minipsd_writer_workspace_size(&d.doc, NULL, &need);
     if (rc != MINIPSD_OK) { fprintf(stderr, "write_nonblocking: %s\n", minipsd_error_string(rc)); return 1; }
     workspace = malloc(need);
     if (!workspace) { fputs("write_nonblocking: out of memory\n", stderr); return 1; }
-    rc = minipsd_writer_init(&w, &d.doc, workspace, need);
+    rc = minipsd_writer_init(&w, &d.doc, NULL, workspace, need);
 
     out = fopen(argv[1], "wb");
     if (rc == MINIPSD_OK && (!out || pipe(fds) != 0)) rc = MINIPSD_ERR_OPEN;

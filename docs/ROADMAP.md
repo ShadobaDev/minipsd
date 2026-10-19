@@ -299,7 +299,7 @@ feature; a supplied composite needs nothing. See
         *Done when:* a PSB written from scratch reads back from `psd-tools`; psd-tools' PSB files
         go through `minipsd_read` and `minipsd_write` with their blocks and channels byte for
         byte; GIMP opens a PSB written from scratch, checked by hand once.
-  - [ ] **S6.6c** Convert: an output format on the write calls, zero being the document's; kept
+  - [x] **S6.6c** Convert: an output format on the write calls, zero being the document's; kept
         bytes translated both ways when the formats differ (RLE count tables, long keys'
         lengths); PSB to PSD refused with `MINIPSD_ERR_SIZE` when it does not fit. Long keys by
         policy: neutral ones (descriptors, parameters, paths) have their length translated;
@@ -321,9 +321,10 @@ feature; a supplied composite needs nothing. See
       prediction (part of the format: byte sums at 8 bits, big-endian sample sums at 16, the
       byte shuffle at 32) and spreads the samples into the target as for RLE. The reader still
       allocates nothing: a dense plane (`pixel_step` the sample size) takes the inflated channel
-      directly; any other target needs a scratch buffer of one channel from the caller. ZIP is
-      never written; stored ZIP channels stay copied as they are. Without the function, decoding
-      them stays `MINIPSD_ERR_UNSUPPORTED`.
+      directly; any other target needs a scratch buffer of one channel from the caller. minipsd
+      implements no deflate: ZIP is written only from the caller's buffers (stored ZIP channels,
+      copied as they are), and later perhaps through the caller's deflate (Not scheduled).
+      Without the function, decoding them stays `MINIPSD_ERR_UNSUPPORTED`.
       *Done when:* psd-tools' 16-bit RGB files decode, layers and masks, to the samples psd-tools
       gives, through zlib in the tests; the fuzzer decodes ZIP channels through zlib.
 
@@ -359,6 +360,8 @@ Large cases. Each would start with a *design* step, and only when a real consume
 - Streaming parser without a whole blob (`R9`).
 - Row provider for pixels not in memory (`W6`); layer-at-a-time producer (`W8`).
 - Parallel encoding split API (`W9`).
+- ZIP written through the caller's deflate, a field of `minipsd_write_opts` beside the inflate of
+  S6.9: compression and the composite stay outside minipsd, as libvips provides both.
 - Segment output for zero-copy saves (`E3`).
 - In-place patching of fixed-size fields.
 - Making `packbits` or `composite` public.

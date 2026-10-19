@@ -57,7 +57,7 @@ static int write_file(const minipsd_doc *doc, const char *path)
     int   rc;
     FILE *f = open_utf8(path);
     if (!f) return MINIPSD_ERR_OPEN;
-    rc = minipsd_write(doc, file_out, f);
+    rc = minipsd_write(doc, NULL, file_out, f);
     if (fclose(f) != 0 && rc == MINIPSD_OK) rc = MINIPSD_ERR_OPEN;   /* the last bytes, flushed */
     return rc;
 }
