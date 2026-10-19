@@ -2,20 +2,28 @@
 # compile check, the psd-tools round trip (required here, optional locally) and the consumer tests.
 # Then, on Linux, the same tests under sanitizers, clang-tidy and coverage (job "analysis").
 # release.yml calls this workflow before it publishes anything.
+# Branches run nothing until a pull request is ready for review (drafts are skipped); after that,
+# each push to it runs again and cancels the run it replaces.
 name: CI
 
 on:
   push:
     branches: [ master ]
   pull_request:
+    types: [ opened, synchronize, reopened, ready_for_review ]
   workflow_dispatch:
   workflow_call:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
+    if: ${{ !github.event.pull_request.draft }}
     name: ${{ matrix.preset }}
     strategy:
       fail-fast: false
@@ -76,6 +84,7 @@ jobs:
   #   linux-tidy      clang-tidy with .clang-tidy, findings are errors.
   #   linux-coverage  coverage of minipsd.h, round trip included: lines 100 %, branches >= 95 %.
   analysis:
+    if: ${{ !github.event.pull_request.draft }}
     name: ${{ matrix.preset }}
     strategy:
       fail-fast: false
