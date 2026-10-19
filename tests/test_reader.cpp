@@ -1733,6 +1733,15 @@ TEST(MinipsdReadTest, ItRefusesWhatTheReaderRefusesAndWhatItCannotHold)
     const auto tailEnd = static_cast<std::size_t>(o.info.layer_tail.data - o.blob.data()) + o.info.layer_tail.size;
     readDoc(Bytes(file.begin(), file.begin() + std::ptrdiff_t(tailEnd - 1)), &lost, MINIPSD_ERR_SHORT);
     EXPECT_EQ(minipsd_read(file.data(), file.size(), nullptr, nullptr, nullptr, &lost), MINIPSD_ERR_ARG);
+
+    // Stored: the composite is not decoded, and is refused as decoding would refuse it.
+    const minipsd_read_opts keep{1};
+    readDoc(Bytes(file.begin(), file.end() - 1), &lost, MINIPSD_ERR_SHORT, nullptr, &keep);
+    Bytes badMarker = file;
+    badMarker[tailEnd + 1] = 9;
+    readDoc(badMarker, &lost, MINIPSD_ERR_FORMAT, nullptr, &keep);
+    lim.max_decoded_bytes = 1;   // nothing decoded: neither the layer nor the composite
+    readDoc(file, &lost, MINIPSD_OK, &lim, &keep);
 }
 
 TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
@@ -1752,6 +1761,18 @@ TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
     EXPECT_EQ(Bytes(d->layers[0].rgba, d->layers[0].rgba + 16), (Bytes{0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255,
                                                                      0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255}));
     EXPECT_EQ(minipsd_doc_check(d.get(), nullptr), MINIPSD_OK) << "the writer takes it as it is";
+
+    // Stored: the image copied as the composite, and still decoded as the layer.
+    const minipsd_read_opts keep{1};
+    const Doc k = readDoc(build(s).bytes, &lost, MINIPSD_OK, nullptr, &keep);
+    ASSERT_TRUE(k);
+    EXPECT_EQ(k->composite, nullptr);
+    EXPECT_EQ(k->composite_channels, 3);
+    EXPECT_NE(k->layers[0].rgba, nullptr);
+    const Psd copied = read(write(*k)), decoded = read(write(*d));
+    EXPECT_EQ(copied.channels, 3) << "as the file has it";
+    for (std::size_t i = 0; i < copied.composite.size(); ++i)
+        if (i % 4 != 3) { EXPECT_EQ(copied.composite[i], decoded.composite[i]) << i; }   // the same image
 }
 
 // A flat 16-bit file: its one layer decoded at 16 bits, opaque as 65535.
@@ -2207,6 +2228,20 @@ void expectConvertsBack(const minipsd_doc &d)
     EXPECT_EQ(write(*c, MINIPSD_OK, &back), as) << "into the other format and back: the same bytes";
 }
 
+// A document read with stored: its composite copied as the file ends with it, not decoded, when
+// it is R, G, B and at most transparency; otherwise decoded, as stored (matted).
+void expectStoredComposite(const minipsd_doc &s, const Bytes &file, std::size_t size, const Bytes &stored)
+{
+    if (s.composite_stored.size) {
+        EXPECT_EQ(s.composite, nullptr) << "copied, not decoded";
+        EXPECT_TRUE(s.composite_channels == 3 || s.composite_channels == 4);
+        EXPECT_EQ(Bytes(s.composite_stored.data, s.composite_stored.data + s.composite_stored.size),
+                  Bytes(file.end() - static_cast<std::ptrdiff_t>(s.composite_stored.size), file.end()));
+    } else {
+        EXPECT_EQ(Bytes(s.composite, s.composite + size), stored);
+    }
+}
+
 Bytes readFile(const std::filesystem::path &path)
 {
     std::ifstream in(path, std::ios::binary);
@@ -2277,7 +2312,7 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
                 ASSERT_TRUE(s);
                 expectConvertsBack(*s);
                 EXPECT_EQ(s->depth, depth);
-                EXPECT_EQ(Bytes(s->composite, s->composite + composite.size()), stored);
+                expectStoredComposite(*s, file, composite.size(), stored);
                 const Bytes again = write(*s);
                 expectKeptAlike(file, again);
                 const Doc f = readDoc(again, &lostAgain, MINIPSD_OK, nullptr, &keep);
@@ -2329,8 +2364,10 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
             const Doc s = readDoc(file, &lost, MINIPSD_OK, nullptr, &keep);
             ASSERT_TRUE(s);
             expectConvertsBack(*s);
+            expectStoredComposite(*s, file, composite.size(), stored);
             const Doc f = readDoc(write(*s), &lostAgain);
             ASSERT_TRUE(f);
+            EXPECT_EQ(Bytes(f->composite, f->composite + composite.size()), stored) << "written back, the same composite";
             ASSERT_EQ(f->layer_count, d->layer_count);
             for (std::size_t i = 0; i < d->layer_count; ++i) {
                 const minipsd_layer &a = d->layers[i], &b = f->layers[i];

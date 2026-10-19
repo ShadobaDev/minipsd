@@ -153,6 +153,38 @@ TEST(MinipsdWriterTest, ASuppliedCompositeIsMattedAndWrittenWithoutComposing)
         EXPECT_EQ(pull(d, 7), write(d));
         EXPECT_EQ(pullTotal(d), write(d).size());
         EXPECT_EQ(composedRows, 0);
+
+        // Stored: R, G, B as a file stores them (raw), copied, never encoded; three channels, the
+        // layer count positive.  A supplied composite wins over it.
+        Bytes planes{0, 0};
+        for (int k = 0; k < 3; ++k)
+            for (std::size_t i = 0; i < std::size_t(37) * 5; ++i) planes.push_back(other[i * 4 + std::size_t(k)]);
+        const Bytes withComposite = write(d);
+        d.composite_stored   = {planes.data(), planes.size()};
+        d.composite_channels = 3;
+        EXPECT_EQ(write(d), withComposite) << "the supplied composite wins";
+        d.composite = nullptr;
+        const Bytes copied = write(d);
+        EXPECT_EQ(composedRows, 0) << "nothing composed";
+        EXPECT_EQ(Bytes(copied.end() - static_cast<std::ptrdiff_t>(planes.size()), copied.end()), planes) << "copied as it is";
+        EXPECT_EQ(pull(d, 7), copied);
+        EXPECT_EQ(pullTotal(d), copied.size());
+        const Psd back = read(copied);
+        EXPECT_EQ(back.channels, 3);
+        EXPECT_GT(back.rawLayerCount, 0) << "no transparency in the composite";
+        for (std::size_t i = 0; i < std::size_t(37) * 5 * 4; ++i)
+            if (i % 4 != 3) { ASSERT_EQ(back.composite[i], other[i]) << i; }
+
+        // Refused: a channel count other than 3 or 4, or bytes that do not hold the rows.
+        d.composite_channels = 5;
+        EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG);
+        d.composite_channels = 4;
+        EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "three channels' rows for four";
+        d.composite_stored = {nullptr, planes.size()};
+        d.composite_channels = 3;
+        EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG);
+        d.composite_stored = {};
+        d.composite_matted = 0;
     }
 }
 

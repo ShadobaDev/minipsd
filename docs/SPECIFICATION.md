@@ -119,7 +119,7 @@ The declarations, with every parameter and return code, are in
 | `minipsd_decode_composite(r, target, opts)` | the composite (merged) image, or a band of its rows, un-matted to straight alpha unless `keep_matte` |
 | `minipsd_decode_mask(r, layer, plane, opts)` | a layer's mask, or a band of its rows, into one plane |
 | `minipsd_read_size(data, size, limits, opts, &block_size)` | the block `minipsd_read_into` needs for a whole file |
-| `minipsd_read_into(data, size, limits, opts, block, block_size, &doc, &lost)` | a whole file into a document in the caller's block, everything copied, so the file may go; `lost` says what it could not carry; `opts->stored` keeps each layer's channels as stored instead of decoding them |
+| `minipsd_read_into(data, size, limits, opts, block, block_size, &doc, &lost)` | a whole file into a document in the caller's block, everything copied, so the file may go; `lost` says what it could not carry; `opts->stored` keeps each layer's channels, and the composite, as stored instead of decoding them |
 | `minipsd_read(data, size, limits, opts, &doc, &lost)`, `minipsd_doc_free(doc)` | the same in one `MINIPSD_MALLOC` block, and its free; absent under `MINIPSD_NO_MALLOC` |
 | `minipsd_error_string(code)` | a short English text for a return code |
 
@@ -265,11 +265,14 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
 - **Composite image:**
   - the caller's `composite` when set (the full canvas, straight alpha), whatever the layers
     hold: flattening layers is rendering, the caller's domain;
+  - otherwise a file's composite kept as it stores it (`composite_stored`, with
+    `composite_channels`: 3, or 4 with transparency), copied byte for byte, never decoded nor
+    encoded; the header's channel count and the layer count's sign follow it;
   - otherwise composed as a **best effort, with no guarantee**: the visible layers combined with
     straight-alpha "over", each at its rectangle, clipped to the canvas. Blend modes, masks,
     clipping, groups and effects are not drawn;
-  - transparency is the first extra channel, signalled by writing the layer count as a
-    **negative** number, as the format specifies;
+  - transparency (of a supplied or composed composite, always) is the first extra channel,
+    signalled by writing the layer count as a **negative** number, as the format specifies;
   - **colour is matted against white:** `c*a + max*(1-a)`, `max` being 255 or 65535. Photoshop
     stores it this way and readers subtract the white back out. The writer mattes, a supplied composite too, unless
     `composite_matted` says it already is: then it is written byte for byte.
@@ -349,7 +352,8 @@ them; nothing is copied or allocated. Results on real files from other programs:
 - **As a document** (`minipsd_read`): 8- and 16-bit RGB files, at their depth; each layer's
   rectangle, name, opacity, visibility, blend key, clipping, flags, kind, mask, blending ranges, decoded pixels
   (or, with `opts->stored`, its channels as stored, ZIP ones too) and blocks, the composite as
-  stored (`composite_matted`), the dpi (72 when none is stored), the ICC profile, every resource
+  stored (`composite_matted`; with `opts->stored`, its bytes in `composite_stored` when it holds
+  R, G, B and at most transparency), the dpi (72 when none is stored), the ICC profile, every resource
   and the layer tail without the `Lr16` its layers came from, all copied into one block. A file without layers gets one,
   "Background", holding its image. Anything else is reported in `lost` (`MINIPSD_LOST_*`), never
   dropped silently.

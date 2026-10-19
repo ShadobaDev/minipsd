@@ -531,12 +531,15 @@ writer compose the layers as a best effort. Stale too, and yours to drop: the th
 **Change one layer, copy the rest.** With `opts.stored` set, layers are not decoded: each keeps
 its channels as the file stores them, and the writer copies them back. Decode the one layer you
 change through the reader, from the same bytes, give it pixels, and only that layer is encoded
-again: a fraction of the memory and the time for a large file.
+again: a fraction of the memory and the time for a large file. The composite too is kept as the
+file stores it (`composite_stored`, `composite` stays `NULL`) and copied: a long strip's merged
+image is never decoded. After a change it is stale, as above: set `composite` to a new render,
+which wins over it, or clear `composite_stored` to have the layers composed.
 
 ```mermaid
 flowchart TD
     read["minipsd_read(data, ..., &opts, &doc, &lost)<br>opts.stored = 1"]
-    read -. "every layer's channels, copied as stored" .-> doc["doc"]
+    read -. "every layer's channels and the composite, copied as stored" .-> doc["doc"]
     doc --> pick["the layer to change:<br>minipsd_reader_init, minipsd_reader_next_layer,<br>minipsd_decode_layer, from the same data"]
     pick --> set["layer.rgba = new pixels<br>layer.stored = NULL"]
     set --> write["minipsd_write(doc, NULL, callback, user)"]

@@ -317,7 +317,7 @@ feature; a supplied composite needs nothing. See
         `MINIPSD_LOST_BLENDING_RANGES` no longer set.
   - [x] **S6.7b** Order: the writer's resolution and profile where the file's were, its `luni`
         where the file's was.
-  - [ ] **S6.7c** The composite as the file stores it: its channels, its encoding, the layer
+  - [x] **S6.7c** The composite as the file stores it: its channels, its encoding, the layer
         count's sign.
   - [ ] **S6.7d** A layer without a transparency channel written without one.
   - [ ] **S6.7e** Names: the legacy name and `luni` kept as stored while the name is unchanged.

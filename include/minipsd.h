@@ -334,7 +334,8 @@ typedef struct minipsd_doc {
     int                  compression;    /*!< MINIPSD_RLE or MINIPSD_RAW.                    */
     const uint8_t       *composite;      /*!< The composite (merged) image: width * height * 4
                                               samples, rows top down, straight alpha, written
-                                              whatever the layers hold.  NULL: composed from the
+                                              whatever the layers hold.  NULL: composite_stored
+                                              is copied; without it too, composed from the
                                               layers, a best effort (see "What it writes").  */
     int                  composite_matted; /*!< Non-zero: composite is already matted against
                                               white, as the file stores it (what
@@ -342,9 +343,9 @@ typedef struct minipsd_doc {
                                               and is written as it is.  Ignored without
                                               composite.                                     */
     const minipsd_resource *resources;   /*!< Image resources kept from a file (thumbnail, guides,
-                                              ...), written in order after the resolution and the
-                                              ICC profile, except 1005 and 1039: dpi and icc
-                                              win.                                           */
+                                              ...), written in order; the writer's resolution
+                                              and ICC profile take the place of the first 1005
+                                              and 1039 (dpi and icc win), or come first.      */
     size_t               resource_count; /*!< How many resources.                            */
     minipsd_bytes        layer_tail;     /*!< The rest of the layer and mask section kept from a
                                               file (minipsd_info.layer_tail): the global layer
@@ -360,6 +361,16 @@ typedef struct minipsd_doc {
                                               out; minipsd_read sets it to the file's.  It is
                                               written as this format unless
                                               minipsd_write_opts.format says otherwise.       */
+    minipsd_bytes        composite_stored; /*!< The composite as a file stores it, copied as it is
+                                              when composite is NULL, never decoded: its
+                                              compression marker, then (RLE) every row's byte
+                                              count, channel by channel, then the rows, laid
+                                              out as format lays it out.  minipsd_read sets it
+                                              with minipsd_read_opts.stored.  Size 0: none.   */
+    uint16_t             composite_channels; /*!< The channels composite_stored holds: 3 (red,
+                                              green, blue), or 4, the fourth transparency (the
+                                              layer count is then written negative).  Ignored
+                                              without composite_stored.                       */
 } minipsd_doc;
 
 /**
@@ -908,7 +919,9 @@ typedef struct minipsd_read_opts {
     int stored; /*!< Non-zero: each layer keeps its channels as stored (minipsd_layer.stored), not
                      decoded, so writing it back copies them: a fraction of the memory, and no
                      encoding, and ZIP-compressed channels pass.  A layer without a transparency
-                     channel gets an opaque one when written.                                    */
+                     channel gets an opaque one when written.  The composite too
+                     (minipsd_doc.composite_stored, composite NULL), when it holds red, green,
+                     blue and at most transparency.                                              */
 } minipsd_read_opts;
 
 /**

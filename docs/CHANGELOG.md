@@ -76,6 +76,10 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
 - A document read from a file is written back closer to that file, byte for byte: the
   resolution and ICC profile resources where the file had them, a layer's `luni` where its
   blocks had it (kept resources and blocks were already in their order).
+- `minipsd_read` with `opts->stored` keeps the composite as the file stores it, in
+  `composite_stored` and `composite_channels` at the end of `minipsd_doc` (`composite` is then
+  `NULL`), and the writer copies it: no decoding, no encoding, three channels written as
+  three. A supplied `composite` still wins.
 
 ## [0.2.0] — 2026-10-15
 

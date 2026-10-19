@@ -67,7 +67,8 @@ class Doc(ctypes.Structure):
                 ("icc", ctypes.c_void_p), ("icc_size", ctypes.c_size_t), ("compression", ctypes.c_int),
                 ("composite", ctypes.c_void_p), ("composite_matted", ctypes.c_int),
                 ("resources", ctypes.c_void_p), ("resource_count", ctypes.c_size_t), ("layer_tail", Bytes),
-                ("depth", ctypes.c_uint16), ("format", ctypes.c_uint16)]
+                ("depth", ctypes.c_uint16), ("format", ctypes.c_uint16),
+                ("composite_stored", Bytes), ("composite_channels", ctypes.c_uint16)]
 
 
 class ReadOpts(ctypes.Structure):

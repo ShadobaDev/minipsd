@@ -511,6 +511,12 @@ int            composite_matted;   /* non-zero: composite is already matted, wri
   colours), and a file's own composite must come back pixel for pixel.
 - **Workspace.** A supplied composite is read row by row like a layer; the composed one keeps
   its one row in the workspace, as now.
+- **Kept (`composite_stored`, when `composite == NULL`): a file's own, copied.** The composite as
+  the file stores it, one compression marker and one count table over all its channels' rows,
+  with `composite_channels` (3, or 4 with transparency). The writer copies it like a stored layer
+  channel (its count table re-written when the format changes), and the header's channel count
+  and the layer count's sign follow it. Re-encoding would give the same pixels in other bytes:
+  every program packs PackBits its own way. `minipsd_read` sets it with `opts->stored`.
 
 ### What the document gains
 
@@ -582,7 +588,7 @@ typedef struct minipsd_read_opts {
   | the `minipsd_doc`, the `minipsd_layer` array (aligned) | `sizeof`; `layer_count` entries |
   | names, UTF-8 with their NUL | each name's `needed` |
   | each layer's pixels, or with `opts->stored` its stored channels | `w * h * 4`, or the channels' stored size |
-  | the composite, as stored (matted), `composite_matted` set | `width * height * 4` |
+  | the composite, as stored (matted), `composite_matted` set; with `opts->stored`, its bytes | `width * height * 4`, or its stored size |
   | `extra` blobs, resources, `layer_tail`, the ICC profile | their stored size |
 
   Non-pixel data is usually kilobytes (text, effects, a thumbnail); an embedded smart object can
@@ -595,7 +601,8 @@ typedef struct minipsd_read_opts {
 - **`opts->stored`** decodes nothing: each layer keeps its compressed channels, a fraction of its
   pixels' size. The caller decodes the one layer it edits through the reader, from the same
   file, sets that layer's `rgba` and clears its `stored`, then writes. Untouched layers are never
-  decoded nor encoded again, and the file's own composite needs no rendering (`E1`). ZIP
+  decoded nor encoded again, and the file's own composite is copied, neither rendered nor
+  decoded (`E1`), when it holds R, G, B and at most transparency (more is decoded, and lost). ZIP
   channels, which minipsd cannot decode, pass this way; a layer without a transparency channel
   gets an opaque one when written.
 - **Limits:** `minipsd_limits` as in the reader; `max_decoded_bytes` bounds the sum of the call's

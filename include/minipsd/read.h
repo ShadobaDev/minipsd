@@ -114,7 +114,8 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     minipsd_doc        *d;
     minipsd_layer      *layers;
     uint8_t            *pixels, *flat = NULL;
-    minipsd_bytes       tail;
+    minipsd_bytes       tail, composite = { NULL, 0 };
+    int                 keep_composite;
     const uint64_t      max = limits ? limits->max_decoded_bytes : 0;
     uint64_t            decoded, canvas;
     uint32_t            loss = 0;
@@ -134,7 +135,10 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     as_stored = all;
     as_stored.keep_matte = 1;
     canvas  = (uint64_t)info.width * info.height * MPSD__RGBA << wide;
-    decoded = canvas;                                           /* the composite */
+    /* Stored: the composite copied as it is, never decoded, when it holds R, G, B and at most
+       transparency; anything more is decoded, the rest reported lost. */
+    keep_composite = opts && opts->stored && (info.channels == 3 || (info.channels == MPSD__RGBA && info.composite_has_alpha));
+    decoded = keep_composite ? 0 : canvas;                      /* the composite */
     count   = info.layer_count ? info.layer_count : 1;          /* a flat file: its image as one layer */
     d       = (minipsd_doc *)mpsd__take(a, sizeof *d, 1);
     layers  = (minipsd_layer *)mpsd__take(a, (uint64_t)count * sizeof *layers, 1);
@@ -229,9 +233,17 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         }
     }
 
-    /* The composite as stored, matted, so it is written back exactly; a flat file's image also
-       becomes its one layer, un-matted. */
-    pixels = (uint8_t *)mpsd__take(a, canvas, (int)wide);
+    /* The composite as stored: its bytes, or its pixels matted, so it is written back exactly; a
+       flat file's image also becomes its one layer, un-matted. */
+    if (keep_composite) {
+        if (r->image_start > size) return MINIPSD_ERR_SHORT;
+        composite.data = r->data + (size_t)r->image_start;
+        composite.size = size - (size_t)r->image_start;
+        if (!mpsd__stored_ok(composite, info.width, info.channels * info.height, wide, r->psb))   /* as decoding says it */
+            return composite.size >= MPSD__MARKER_SIZE && mpsd__get16(composite.data) <= MPSD__COMP_ZIP_PREDICTED ? MINIPSD_ERR_SHORT : MINIPSD_ERR_FORMAT;
+        composite = mpsd__copy(a, composite);
+    }
+    pixels = keep_composite ? NULL : (uint8_t *)mpsd__take(a, canvas, (int)wide);
     if (!info.layer_count) {
         flat     = (uint8_t *)mpsd__take(a, canvas, (int)wide);
         decoded += canvas;
@@ -248,9 +260,11 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     if (a->used > (uint64_t)(size_t)-1 - MPSD__ALIGN) return MINIPSD_ERR_SIZE;
     if (!d) return MINIPSD_OK;
 
-    mpsd__target(&t, pixels, (size_t)info.width * MPSD__RGBA << wide, wide);
-    rc = minipsd_decode_composite(r, &t, &as_stored);
-    if (rc != MINIPSD_OK) return rc;
+    if (pixels) {
+        mpsd__target(&t, pixels, (size_t)info.width * MPSD__RGBA << wide, wide);
+        rc = minipsd_decode_composite(r, &t, &as_stored);
+        if (rc != MINIPSD_OK) return rc;
+    }
     if (flat) {
         mpsd__target(&t, flat, (size_t)info.width * MPSD__RGBA << wide, wide);
         rc = minipsd_decode_composite(r, &t, &all);
@@ -270,6 +284,8 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
                               ? MINIPSD_RAW : MINIPSD_RLE;
     d->composite        = pixels;
     d->composite_matted = 1;
+    d->composite_stored = composite;
+    d->composite_channels = keep_composite ? (uint16_t)info.channels : 0;
     d->layer_tail       = tail;
     d->depth            = info.depth;
     d->format           = info.format;
