@@ -320,7 +320,7 @@ feature; a supplied composite needs nothing. See
   - [x] **S6.7c** The composite as the file stores it: its channels, its encoding, the layer
         count's sign.
   - [x] **S6.7d** A layer without a transparency channel written without one.
-  - [ ] **S6.7e** Names: the legacy name and `luni` kept as stored while the name is unchanged.
+  - [x] **S6.7e** Names: the legacy name and `luni` kept as stored while the name is unchanged.
   - [x] **S6.7f** An empty layer's channels kept as stored; the layer info's padding (Photoshop:
         4, others 2 or none).
   - [ ] **S6.7g** The record's inverted rectangle, the channels' order, a layer tail the file

@@ -87,6 +87,10 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   info (Photoshop to 4 bytes, others to 2 or not at all); the writer pads as it says, even by
   default. A layer's all-zero rectangle means the full canvas only with `rgba`: stored channels
   take the rectangle as it is.
+- A layer's names kept from a file: `name_pascal` at the end of `minipsd_layer` holds its legacy
+  name as stored, and while `name` still says what the file's names say, the legacy name and the
+  kept `luni` are written as they are (another program's code page, a counted NUL); a renamed
+  layer gets the writer's own.
 
 ## [0.2.0] — 2026-10-15
 

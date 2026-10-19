@@ -315,6 +315,12 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
                                     of 0: none (what a writer other than Photoshop writes).  The
                                     composed composite ignores them.                               */
     uint32_t       blending_range_count; /*!< How many; 0: none.                                  */
+    minipsd_bytes  name_pascal; /*!< The legacy name kept from a file, raw bytes (at most 255, in the
+                                    code page of the program that wrote it), as
+                                    minipsd_layer_view.name_pascal.  While name still says what the
+                                    file's names say, they are written as they are, this one and
+                                    a kept 'luni'; once it changes, the writer's own.  Size 0 and
+                                    no kept 'luni': the writer's own.                            */
 } minipsd_layer;
 
 /**

@@ -480,7 +480,7 @@ bytes, so nothing here breaks the API.
 | Input | Kept |
 |---|---|
 | a file minipsd wrote | the same bytes (`E4`) |
-| a file from another program | the same content: every layer's pixels, name, rectangle, opacity, visibility, blend key, clipping, kept blocks and resources, and the composite's pixels. Not the same bytes: minipsd writes its own legacy name and PackBits runs, which no reader depends on (S6.7 removes the differences one by one) |
+| a file from another program | the same content: every layer's pixels, name, rectangle, opacity, visibility, blend key, clipping, kept blocks and resources, and the composite's pixels. With `opts->stored`, the same bytes too, for most files (S6.7: what is left is listed there) |
 
 What the document cannot carry is reported (see [Loss](#loss)).
 
@@ -528,6 +528,7 @@ int            composite_matted;   /* non-zero: composite is already matted, wri
 | `char blend[4]` | `norm` | written as given |
 | `uint8_t clipping` | not clipped | written as given |
 | `uint8_t flags` | none | the record's other flag bits (0x01 transparency locked, 0x08 and 0x10 pixel data irrelevant), written as given; 0x02 comes from `hidden` |
+| `minipsd_bytes name_pascal` | the writer's own names | the legacy name kept from a file (`minipsd_read` sets it); while `name` says what the kept names say (a kept `luni`, else this one as Latin-1), both are written as they are, otherwise the writer's own |
 | `minipsd_bytes extra` | no extra blocks | the layer's additional-information blocks as one blob, in the format of the reader's `extra` view; written after the writer's own blocks. `minipsd_doc_check` walks them: a malformed run is `MINIPSD_ERR_ARG` |
 | `const minipsd_bytes *stored` | encode `rgba` | four channel blobs (R, G, B, A, as `minipsd_layer_view.channel`), each the stored data with its compression marker and row counts; transparency of size 0 is none. The writer copies each as one piece instead of encoding `rgba`, and writes no transparency channel where none is stored; the sizing pass takes their sizes. `minipsd_doc_check` checks each against the rectangle (raw rows, or RLE counts adding up within the blob; ZIP passes as it is); a layer with `stored` and no `rgba` needs a supplied `composite`, since nothing could compose it. Name, opacity, visibility, blend, clipping and `extra` still come from the layer |
 

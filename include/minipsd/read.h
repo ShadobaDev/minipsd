@@ -153,7 +153,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     for (i = 0; i < info.layer_count; ++i) {
         uint64_t       w, h;
         char          *name;
-        minipsd_bytes  extra, copies[MPSD__RGBA], *stored = NULL;
+        minipsd_bytes  extra, pascal, copies[MPSD__RGBA], *stored = NULL;
         minipsd_mask  *mask = NULL;
         minipsd_blending_range *ranges;
         uint8_t       *mask_pixels = NULL;
@@ -177,6 +177,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         }
         pixels = w && h && !keep ? (uint8_t *)mpsd__take(a, w * h * MPSD__RGBA << wide, (int)wide) : NULL;
         extra  = mpsd__copy(a, v.extra);                        /* every block, 'luni' too */
+        pascal = mpsd__copy(a, v.name_pascal);
         ranges = (minipsd_blending_range *)mpsd__take(a, (uint64_t)v.blending_range_count * sizeof *ranges, 1);
         if (pixels) decoded += w * h * MPSD__RGBA << wide;
         if (v.has_mask) {                                       /* the mask: decoded, or stored with the layer */
@@ -215,6 +216,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         layers[i].clipping = v.clipping;
         layers[i].flags    = (uint8_t)(v.flags & ~MPSD__FLAG_HIDDEN);
         layers[i].extra    = extra;
+        layers[i].name_pascal = pascal;
         layers[i].kind     = v.kind;
         layers[i].mask     = mask;
         for (j = 0; j < v.blending_range_count; ++j) (void)minipsd_layer_blending_range(&v, j, &ranges[j]);

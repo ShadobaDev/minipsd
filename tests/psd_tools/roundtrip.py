@@ -58,7 +58,8 @@ class Layer(ctypes.Structure):
                 ("blend", ctypes.c_char * 4), ("clipping", ctypes.c_uint8), ("flags", ctypes.c_uint8),
                 ("extra", Bytes), ("stored", ctypes.c_void_p),
                 ("kind", ctypes.c_uint8), ("mask", ctypes.POINTER(Mask)),
-                ("blending_ranges", ctypes.POINTER(BlendingRange)), ("blending_range_count", ctypes.c_uint32)]
+                ("blending_ranges", ctypes.POINTER(BlendingRange)), ("blending_range_count", ctypes.c_uint32),
+                ("name_pascal", Bytes)]
 
 
 class Doc(ctypes.Structure):

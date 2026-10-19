@@ -198,18 +198,20 @@ static int mpsd__kept_kind(minipsd_bytes extra, unsigned kind, unsigned psb)
     return 0;
 }
 
-/* The writer's own blocks: the name in 'luni', then the group marker unless a kept one says it. */
-static void mpsd__own_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned from)
+/* The writer's own blocks: the name in 'luni' (unless the kept names say it), then the group
+   marker unless a kept one says it. */
+static void mpsd__own_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned from, int named)
 {
     const char *name = l->name;
-    size_t      units, luni;
-    units = mpsd__utf16(name, NULL, NULL);
-    luni  = MPSD__LEN + units * 2;            /* the count of UTF-16 units, the units */
-    mpsd__put(s, "8BIMluni", 8);
-    mpsd__u32(s, (uint32_t)mpsd__pad(luni, 4));
-    mpsd__u32(s, (uint32_t)units);
-    mpsd__utf16(name, mpsd__unit_out, s);
-    mpsd__zeros(s, mpsd__pad(luni, 4) - luni);
+    if (!named) {
+        const size_t units = mpsd__utf16(name, NULL, NULL);
+        const size_t luni  = MPSD__LEN + units * 2;   /* the count of UTF-16 units, the units */
+        mpsd__put(s, "8BIMluni", 8);
+        mpsd__u32(s, (uint32_t)mpsd__pad(luni, 4));
+        mpsd__u32(s, (uint32_t)units);
+        mpsd__utf16(name, mpsd__unit_out, s);
+        mpsd__zeros(s, mpsd__pad(luni, 4) - luni);
+    }
     if (l->kind && !mpsd__kept_kind(l->extra, l->kind, from)) {   /* the group marker, unless kept */
         const char *mode = l->blend[0] || l->blend[1] || l->blend[2] || l->blend[3] ? l->blend : "pass";
         mpsd__put(s, "8BIMlsct", 8);
@@ -219,35 +221,50 @@ static void mpsd__own_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned fro
     }
 }
 
-/* Is there a kept 'luni'?  The writer's own then takes its place, so the blocks keep their order. */
-static int mpsd__kept_luni(minipsd_bytes extra, unsigned psb)
+/* Is there a kept 'luni'?  The first one's data in *data.  The writer's own blocks then take its
+   place, so the blocks keep their order. */
+static int mpsd__kept_luni(minipsd_bytes extra, unsigned psb, minipsd_bytes *data)
 {
     minipsd_block block;
     size_t        pos = 0, next;
     for (; pos < extra.size && mpsd__block(extra, pos, psb, &block, &next) == MINIPSD_OK; pos = next)
-        if (mpsd__tag((const uint8_t *)block.key, "luni")) return 1;
+        if (mpsd__tag((const uint8_t *)block.key, "luni")) { *data = block.data; return 1; }
     return 0;
 }
 
+/* Do the names kept from a file (a 'luni' in extra, else name_pascal read as Latin-1) say the
+   layer's name, as minipsd_read made it?  Then they are written as they are. */
+static int mpsd__kept_names(const minipsd_layer *l, unsigned psb)
+{
+    minipsd_bytes luni;
+    if (mpsd__kept_luni(l->extra, psb, &luni)) {
+        const size_t units = luni.size >= MPSD__LEN ? mpsd__get32(luni.data) : 0;
+        return luni.size >= MPSD__LEN && units <= (luni.size - MPSD__LEN) / 2
+            && mpsd__same_name(l->name, luni.data + MPSD__LEN, units * 2, 0);
+    }
+    return l->name_pascal.size && mpsd__same_name(l->name, l->name_pascal.data, l->name_pascal.size, 1);
+}
+
 /* Blocks kept from a file, laid out as the from format lays them out, written in the out format,
-   but where the layer's own fields win: the first 'luni' becomes the writer's own blocks (the
-   name, and the group marker unless kept), a later one goes, and so does an 'lsct' of another
-   kind than the layer's.  minipsd_doc_check has walked them, and checked they can change format. */
-static void mpsd__kept_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned from, unsigned out)
+   but where the layer's own fields win: the first 'luni' becomes the writer's own blocks (itself
+   when it says the layer's name, and the group marker unless kept), a later one goes, and so does
+   an 'lsct' of another kind than the layer's.  minipsd_doc_check has walked them, and checked
+   they can change format. */
+static void mpsd__kept_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned from, unsigned out, int named)
 {
     const minipsd_bytes extra = l->extra;
     minipsd_block block;
     size_t        pos = 0, next;
-    int           named = 0;
+    int           first = 1;
     while (pos < extra.size && mpsd__block(extra, pos, from, &block, &next) == MINIPSD_OK) {
         const int type = mpsd__lsct_type(&block);
-        if (mpsd__tag((const uint8_t *)block.key, "luni")) {
-            if (!named) mpsd__own_blocks(s, l, from);
-            named = 1;
-        } else if (type < 0 || type == (int)l->kind) {
+        const int luni = mpsd__tag((const uint8_t *)block.key, "luni");
+        if ((luni && first && named) || (!luni && (type < 0 || type == (int)l->kind))) {
             if (from == out) mpsd__put(s, extra.data + pos, next - pos);
             else mpsd__put_block(s, extra.data + pos, (size_t)(block.data.data - (extra.data + pos)), block.data.size, block.data.size, out);
         }
+        if (luni && first) mpsd__own_blocks(s, l, from, named);   /* after the kept name, or in its place */
+        first = first && !luni;
         pos = next;
     }
 }
@@ -286,19 +303,26 @@ static void mpsd__layer_extra(mpsd__sink *s, const minipsd_layer *l, unsigned fr
 {
     const char          *name = l->name;
     const unsigned char *p = (const unsigned char *)(name ? name : "");
+    const int            named = mpsd__kept_names(l, from);
+    minipsd_bytes        luni;
     size_t ascii = 0;
     uint8_t pascal[256];
-    while (*p && ascii < 255) {               /* one '?' per non-ASCII character */
-        const uint32_t cp = mpsd__utf8(&p);
-        pascal[1 + ascii++] = (uint8_t)(cp < 0x80 ? cp : '?');
+    if (named) {                              /* the kept legacy name, as it is */
+        ascii = l->name_pascal.size;
+        if (ascii) memcpy(pascal + 1, l->name_pascal.data, ascii);
+    } else {
+        while (*p && ascii < 255) {           /* one '?' per non-ASCII character */
+            const uint32_t cp = mpsd__utf8(&p);
+            pascal[1 + ascii++] = (uint8_t)(cp < 0x80 ? cp : '?');
+        }
     }
     pascal[0] = (uint8_t)ascii;
     mpsd__mask_data(s, l->mask);
     mpsd__blending_ranges(s, l);
     mpsd__put(s, pascal, ascii + 1);
     mpsd__zeros(s, mpsd__pad(ascii + 1, 4) - (ascii + 1));
-    if (!mpsd__kept_luni(l->extra, from)) mpsd__own_blocks(s, l, from);   /* first, or where the kept one was */
-    mpsd__kept_blocks(s, l, from, out);
+    if (!mpsd__kept_luni(l->extra, from, &luni)) mpsd__own_blocks(s, l, from, named);   /* first, or where the kept one was */
+    mpsd__kept_blocks(s, l, from, out, named);
 }
 
 
@@ -527,7 +551,9 @@ static int mpsd__kept_ok(const minipsd_doc *d, unsigned out)
     for (i = 0; i < d->layer_count; ++i) {
         const minipsd_layer *l     = &d->layers[i];
         const minipsd_bytes  extra = l->extra;
-        if ((extra.size && !extra.data) || (l->blending_range_count && !l->blending_ranges)) return MINIPSD_ERR_ARG;
+        if ((extra.size && !extra.data) || (l->blending_range_count && !l->blending_ranges)
+            || (l->name_pascal.size && !l->name_pascal.data)) return MINIPSD_ERR_ARG;
+        if (l->name_pascal.size > 255) return MINIPSD_ERR_SIZE;
         if (l->blending_range_count > MPSD__MAX_SECTION / MPSD__RANGE_SIZE) return MINIPSD_ERR_SIZE;
         for (pos = 0; pos < extra.size; pos = next) {
             if (mpsd__block(extra, pos, mpsd__doc_psb(d), &block, &next) != MINIPSD_OK) return MINIPSD_ERR_ARG;

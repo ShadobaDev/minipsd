@@ -905,6 +905,34 @@ TEST(MinipsdWriterTest, UnicodeNameGoesToLuniAndAsciiToThePascalString)
     const Psd r = read(write(docOf(2, 2, &named, 1)));
     EXPECT_EQ(r.layers[0].pascalName, longName.substr(0, 255)) << "a Pascal string holds 255 bytes";
     EXPECT_EQ(r.layers[0].unicodeName, std::u16string(300, u'x')) << "luni holds the whole name";
+
+    // Names kept from a file, a legacy one in its writer's code page and a 'luni' that counts its
+    // NUL: written as they are while the name is theirs, the writer's own once it changes.
+    const Bytes legacy = {0xAF, 'o', 'l', 'w'};                     // "Zolw" with a Z dot, Windows-1250
+    const Bytes luni   = tagged("luni", {0, 0, 0, 5, 0x01, 0x7B, 0, 'o', 0, 'l', 0, 'w', 0, 0, 0, 0});
+    minipsd_layer kept{.name = "\xC5\xBBolw", .rgba = px.data(), .opacity = 255, .extra = view(luni), .name_pascal = view(legacy)};
+    Psd k = read(write(docOf(2, 2, &kept, 1)));
+    EXPECT_EQ(k.layers[0].pascalName, std::string(legacy.begin(), legacy.end())) << "the kept legacy name";
+    EXPECT_EQ(k.layers[0].unicodeName, (std::u16string{u'\u017B', u'o', u'l', u'w', 0})) << "the kept 'luni', its NUL too";
+    kept.name = "Kot";
+    k = read(write(docOf(2, 2, &kept, 1)));
+    EXPECT_EQ(k.layers[0].pascalName, "Kot") << "renamed: the writer's own";
+    EXPECT_EQ(k.layers[0].unicodeName, u"Kot");
+
+    // Without a 'luni', a legacy name read as Latin-1: kept, and no 'luni' while it is the name.
+    const Bytes cafe = {'C', 'a', 'f', 0xE9};
+    minipsd_layer latin{.name = "Caf\xC3\xA9", .rgba = px.data(), .opacity = 255, .name_pascal = view(cafe)};
+    k = read(write(docOf(2, 2, &latin, 1)));
+    EXPECT_EQ(k.layers[0].pascalName, "Caf\xE9");
+    EXPECT_TRUE(k.layers[0].unicodeName.empty()) << "the file had none";
+
+    // Refused: bytes the pointer cannot give, or more than a Pascal string holds.
+    minipsd_doc d = docOf(2, 2, &latin, 1);
+    latin.name_pascal = {nullptr, 3};
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG);
+    const Bytes tooLong(256, 'x');
+    latin.name_pascal = view(tooLong);
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_SIZE);
 }
 
 TEST(MinipsdWriterTest, NullNameIsEmpty)

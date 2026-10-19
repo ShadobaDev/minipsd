@@ -238,7 +238,9 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
     its RLE row counts are 16 bits, 300 000 in a PSB;
   - or empty: no pixels, a rectangle without area (by default 0x0), channels that hold no data;
   - name twice: a legacy Pascal string (ASCII, every non-ASCII character replaced by `?`) and a
-    `luni` block in UTF-16 with surrogate pairs;
+    `luni` block in UTF-16 with surrogate pairs; or, while `name` still says what the names kept
+    from a file say (a kept `luni`, else `name_pascal` read as Latin-1), those as they are: the
+    legacy name in its writer's code page, and the kept `luni` or none;
   - opacity;
   - visibility: flag bit `0x02` set means hidden; the other flag bits as given (`flags`);
   - the blend key as given, `norm` by default (the keys: [Blend modes](#blend-modes)), and

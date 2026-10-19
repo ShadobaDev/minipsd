@@ -82,4 +82,20 @@ static size_t mpsd__put_utf8(uint8_t *out, uint32_t cp)
     return n;
 }
 
+/* Does a UTF-8 name say what a file's name bytes say, as the reader reads them: UTF-16BE units up
+   to a U+0000, or Latin-1 bytes (latin1)?  Code point by code point, U+FFFD for what is broken. */
+static int mpsd__same_name(const char *utf8, const uint8_t *bytes, size_t size, int latin1)
+{
+    const unsigned char *p   = (const unsigned char *)(utf8 ? utf8 : "");
+    const uint8_t       *q   = bytes;
+    const uint8_t       *end = bytes + size;
+    for (;;) {
+        uint32_t cp = 0;
+        if (latin1 && q < end)         cp = *q++;
+        else if (!latin1 && end - q >= 2) cp = mpsd__utf16be(&q, end);
+        if (cp == 0) return *p == 0;
+        if (*p == 0 || mpsd__utf8(&p) != cp) return 0;
+    }
+}
+
 #endif /* MPSD__UTF_DONE */
