@@ -1,7 +1,8 @@
 /**
  * \file minipsd/detail/bytes.h
- * \brief Internal: the output sink, big-endian integers in both directions, samples of one or two
- *        bytes, and additional-information blocks.  Included by the writer and the reader.
+ * \brief Internal: the output sink, big-endian integers in both directions, and samples of one
+ *        or two bytes.  Included by the writer and the reader; what PSD and PSB differ in, blocks
+ *        among it, is in format.h.
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
@@ -48,8 +49,6 @@ static uint32_t mpsd__get16(const uint8_t *p) { return ((uint32_t)p[0] << 8) | p
 static uint32_t mpsd__get32(const uint8_t *p) { return (mpsd__get16(p) << 16) | mpsd__get16(p + 2); }
 static uint64_t mpsd__get64(const uint8_t *p) { return ((uint64_t)mpsd__get32(p) << 32) | mpsd__get32(p + 4); }
 
-/* A length of four bytes, or (psb) of eight. */
-static uint64_t mpsd__getlen(const uint8_t *p, unsigned psb) { return psb ? mpsd__get64(p) : mpsd__get32(p); }
 
 /* Four bytes equal to a four-character tag. */
 static int mpsd__tag(const uint8_t *p, const char *tag)
@@ -84,45 +83,6 @@ static void mpsd__set_sample(uint8_t *p, unsigned wide, uint32_t v)
     const uint16_t s = (uint16_t)v;
     if (wide) memcpy(p, &s, 2);
     else      *p = (uint8_t)v;
-}
-
-/* --- additional information: a run of blocks, '8BIM' (or '8B64'), a key, a length, the data --- */
-
-/* The keys whose block length is eight bytes in a PSB, four in a PSD: the key decides, not the
-   signature.  Adobe's specification names 13; psd-tools found 8 more in files Photoshop wrote
-   ('lnkE' and 'pths' are in its test files), and this is its list. */
-static int mpsd__long_key(const uint8_t *key)
-{
-    static const char keys[] = "LMskLr16Lr32LayrMt16Mt32MtrnAlphFMsklnk2lnk3lnkEFEidFXidFELSPxSDpthsextdextncinfartd";
-    size_t i;
-    for (i = 0; i + 4 < sizeof keys; i += 4)
-        if (mpsd__tag(key, keys + i)) return 1;
-    return 0;
-}
-
-/* The bytes before the data of the block at p: signature, key and a length of four bytes, or of
-   eight for a long key in a PSB. */
-static size_t mpsd__block_head(const uint8_t *p, unsigned psb) { return psb && mpsd__long_key(p + 4) ? 16 : 12; }
-
-/* The block at pos of region, laid out as a PSB's when psb; *next is where the one after it
-   starts.  The length already includes any padding. */
-static int mpsd__block(minipsd_bytes region, size_t pos, unsigned psb, minipsd_block *block, size_t *next)
-{
-    const uint8_t *p    = region.data + pos;
-    const size_t   left = region.size - pos;
-    size_t         head, i;
-    uint64_t       size;
-    if (left < 12 || !(mpsd__tag(p, "8BIM") || mpsd__tag(p, "8B64"))) return MINIPSD_ERR_FORMAT;
-    head = mpsd__block_head(p, psb);
-    if (left < head) return MINIPSD_ERR_FORMAT;
-    size = mpsd__getlen(p + 8, head == 16);
-    if (size > left - head) return MINIPSD_ERR_FORMAT;
-    for (i = 0; i < 4; ++i) block->key[i] = (char)p[4 + i];
-    block->key[4]    = '\0';
-    block->data.data = p + head;
-    block->data.size = (size_t)size;
-    *next            = pos + head + (size_t)size;
-    return MINIPSD_OK;
 }
 
 #endif /* MPSD__BYTES_DONE */

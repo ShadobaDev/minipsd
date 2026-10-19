@@ -55,7 +55,7 @@ class Doc(ctypes.Structure):
                 ("icc", ctypes.c_void_p), ("icc_size", ctypes.c_size_t), ("compression", ctypes.c_int),
                 ("composite", ctypes.c_void_p), ("composite_matted", ctypes.c_int),
                 ("resources", ctypes.c_void_p), ("resource_count", ctypes.c_size_t), ("layer_tail", Bytes),
-                ("depth", ctypes.c_uint16)]
+                ("depth", ctypes.c_uint16), ("format", ctypes.c_uint16)]
 
 
 class ReadOpts(ctypes.Structure):
@@ -154,6 +154,32 @@ DOCUMENTS = [
     ("blend-modes",  9 * 32, 3 * 32, 72.0, MINIPSD_RLE, blend_modes(32)),
 ]
 
+# The same written as PSB.
+MINIPSD_PSB = 2
+PSB_DOCUMENTS = [(f"{name}-psb", w, h, dpi, compression, layers)
+                 for name, w, h, dpi, compression, layers in DOCUMENTS if name in ("template", "rects-raw")]
+
+# A PSB wider than a PSD may be.  psd-tools' images stop at 30 000 px, PSB or not, so its layer and
+# composite are checked as the channels psd-tools decompresses.
+WIDE = ("wide-psb", 30001, 2, 72.0, MINIPSD_RLE, [("Wide", image(30001, 2, lambda x, y: (x % 256, 200, y * 90, 255)), 255, False)])
+
+
+def check_wide(psd, layers):
+    name, w, h = WIDE[0], WIDE[1], WIDE[2]
+    pixels, errors = layers[0][1], []
+    if (psd.version, psd.size) != (2, (w, h)):
+        errors.append(f"{name}: version {psd.version}, size {psd.size}")
+    planes = [bytes(px[k] for row in pixels for px in row) for k in (0, 1, 2, 3)]
+    info = psd._record.layer_and_mask_information.layer_info
+    rec, data = info.layer_records[0], info.channel_image_data[0]
+    got = {c.id: d.get_data(w, h, 8, 2) for c, d in zip(rec.channel_info, data)}
+    if [got.get(k) for k in (0, 1, 2, -1)] != planes:
+        errors.append(f"{name}: the layer's channels differ")
+    composite = psd._record.image_data.get_data(psd._record.header)
+    if composite[:3] != planes[:3] or composite[3] != planes[3]:   # opaque: the matte changes nothing
+        errors.append(f"{name}: the composite differs")
+    return errors
+
 
 def rect(layer, w, h):
     """The layer's (top, left, bottom, right) on the canvas; None for an empty layer."""
@@ -187,7 +213,7 @@ def composite(w, h, layers):
 
 # --- writing and checking -----------------------------------------------------------------------
 
-def write(lib, path, w, h, dpi, compression, layers):
+def write(lib, path, w, h, dpi, compression, layers, fmt=0):
     keep = []   # the pixel buffers must outlive the call
     records = (Layer * len(layers))()
     for i, layer in enumerate(layers):
@@ -201,6 +227,7 @@ def write(lib, path, w, h, dpi, compression, layers):
         records[i] = Layer(name.encode("utf-8"), rgba, opacity, int(hidden), top, left, bottom, right,
                            layer[5] if len(layer) > 5 else b"\0\0\0\0")
     doc = Doc(w, h, dpi, records, len(layers), None, 0, compression)
+    doc.format = fmt
     out = bytearray()
 
     def collect(_user, data, size):
@@ -427,6 +454,10 @@ KEPT_FILES = ["text.psd", "layer_effects.psd", "group.psd", "blend-and-clipping.
 # Photoshop's 16-bit RGB files: the layers in 'Lr16', their channels ZIP-compressed; resaved as stored.
 KEPT_16 = ["16bit5x5.psd", "colormodes/4x4_16bit_rgb.psd", "adjustments/posterize_16bits_rgb.psd",
            "adjustments/threshold_16bits_rgb.psd"]
+# PSB files, written back as PSB: lengths and row counts stay wide, long keys' blocks too.
+KEPT_PSB = ["text.psb", "group.psb", "hidden-groups.psb", "layer_mask_data.psb", "unicode_pathname.psb",
+            "placedLayer.psb", "layer_comps.psb", "masks.psb"]
+KEPT_PSB_16 = ["16bit5x5.psb"]
 
 
 def resave(lib, source, path, stored=False):
@@ -591,15 +622,25 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
 
     errors = []
-    for name, w, h, dpi, compression, layers in DOCUMENTS:
-        path = out / f"{name}.psd"
-        rc = write(lib, path, w, h, dpi, compression, layers)
+    for (name, w, h, dpi, compression, layers), fmt in [(d, 0) for d in DOCUMENTS] + [(d, MINIPSD_PSB) for d in PSB_DOCUMENTS]:
+        path = out / (f"{name}.psb" if fmt else f"{name}.psd")
+        rc = write(lib, path, w, h, dpi, compression, layers, fmt)
         if rc != MINIPSD_OK:
             errors.append(f"{name}: minipsd_write returned {rc}")
             continue
-        found = check(name, PSDImage.open(path), w, h, dpi, layers)
+        psd = PSDImage.open(path)
+        found = check(name, psd, w, h, dpi, layers)
+        if psd.version != (2 if fmt else 1):
+            found.append(f"{name}: version {psd.version}")
         errors += found
         print(f"{name}: {'FAILED' if found else 'ok'}")
+
+    name, w, h, dpi, compression, layers = WIDE
+    path = out / f"{name}.psb"
+    rc = write(lib, path, w, h, dpi, compression, layers, MINIPSD_PSB)
+    found = [f"{name}: minipsd_write returned {rc}"] if rc != MINIPSD_OK else check_wide(PSDImage.open(path), layers)
+    errors += found
+    print(f"{name}: {'FAILED' if found else 'ok'}")
 
     path = out / "groups-masks.psd"
     rc, mask_px = groups_and_mask(lib, path)
@@ -616,7 +657,8 @@ def main():
     files = pathlib.Path(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] else None
     if files is None:
         print("kept content: skipped, no psd-tools files (MINIPSD_PSD_TOOLS_FILES)")
-    for name, stored in [(n, False) for n in KEPT_FILES] + [(n, True) for n in KEPT_16] if files else []:
+    kept = [(n, False) for n in KEPT_FILES + KEPT_PSB] + [(n, True) for n in KEPT_16 + KEPT_PSB_16]
+    for name, stored in kept if files else []:
         path = out / f"resaved-{pathlib.Path(name).name}"
         rc, lost = resave(lib, files / name, path, stored)
         if rc != MINIPSD_OK:
@@ -624,6 +666,8 @@ def main():
             continue
         before, after = PSDImage.open(files / name), PSDImage.open(path)
         found = check_kept(name, before, after, stored)
+        if after.version != before.version:
+            found.append(f"{name}: written as version {after.version}")
         for lb, la in zip(before.descendants(), after.descendants()):   # mask pixels, as psd-tools decodes them
             if lb.has_mask() and lb.mask.topil() is not None and lb.mask.topil().tobytes() != la.mask.topil().tobytes():
                 found.append(f"{name}: '{lb.name}' mask pixels differ")

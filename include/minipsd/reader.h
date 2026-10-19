@@ -15,6 +15,7 @@
 #define MPSD__READER_DONE
 
 #include "detail/bytes.h"
+#include "detail/format.h"
 #include "detail/utf.h"
 #include "detail/packbits.h"
 #include "detail/composite.h"
@@ -65,16 +66,6 @@ static int mpsd__length(minipsd_reader *r, uint64_t at, unsigned wide, uint64_t 
     if (rc == MINIPSD_OK) *length = mpsd__getlen(r->data + (size_t)at, wide);
     return rc;
 }
-
-/* A row's byte count in an RLE channel's table: two bytes, or four in a PSB. */
-static uint32_t mpsd__count(const uint8_t *table, uint32_t y, unsigned psb)
-{
-    return psb ? mpsd__get32(table + 4 * (size_t)y) : mpsd__get16(table + 2 * (size_t)y);
-}
-
-/* No length in a file comes near this: anything at or past it is malformed, and offsets built
-   from lengths below it cannot wrap. */
-#define MPSD__FAR ((uint64_t)1 << 62)
 
 /* The first bytes of the buffer, as many as there are, agree with the signature. */
 static int mpsd__starts(const minipsd_reader *r, const char *signature)

@@ -218,6 +218,17 @@ minipsd_doc   doc = { .width = width, .height = height, .dpi = 300.0, .layers = 
                       .depth = 16 };
 ```
 
+A document wider or taller than 30 000 px, a long webtoon strip say, is written as a PSB, the
+large document format, up to 300 000 px a side; nothing else in it changes:
+
+```c
+doc.format = MINIPSD_PSB;   /* 0 or MINIPSD_PSD: a PSD, refused above 30 000 px (MINIPSD_ERR_SIZE) */
+```
+
+Many programs that read PSD do not read PSB, so choose it when the size needs it. A document read
+from a file is in that file's format, and so is everything it keeps; writing it in the other one
+is not supported yet.
+
 The composite, the flattened image that viewers and thumbnails show, is yours to render when
 the layers use anything beyond plain "over" (libvips does most of it, see
 [Working with libvips](SPECIFICATION.md#working-with-libvips)). Give it in straight alpha, the
@@ -354,8 +365,8 @@ there are no more. Calling `init` again restarts both.
 A PSB (Photoshop's large document format, sides up to 300 000 px) reads through the same calls.
 `info.format` is `MINIPSD_PSB` then; the decoded pixels, names and rectangles are no different,
 only the raw views are laid out wider (a channel's RLE row counts take four bytes, some blocks'
-lengths eight), which matters only if you parse them yourself. `minipsd_read` does not take a PSB
-yet: its document could not be written back.
+lengths eight), which matters only if you parse them yourself. `minipsd_read` gives a document
+with `format` `MINIPSD_PSB`, which `minipsd_write` writes back as a PSB.
 
 ### A file read in parts
 

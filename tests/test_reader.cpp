@@ -1899,7 +1899,22 @@ TEST(MinipsdReaderTest, APsbReadsWithItsWiderFields)
     ASSERT_EQ(decodeComposite(o.r, 2, composite, 0, 0, 1), MINIPSD_OK);
     EXPECT_EQ(composite, (Bytes{40, 50, 60, 70, 255, 255, 255, 255, 41, 51, 61, 71, 255, 255, 255, 255}));
     nextLayer(o.r, MINIPSD_OK);
-    readDoc(file.bytes, nullptr, MINIPSD_ERR_UNSUPPORTED);      // until a PSB document can be written
+    const Doc doc = readDoc(file.bytes, nullptr);
+    ASSERT_TRUE(doc);
+    EXPECT_EQ(doc->format, MINIPSD_PSB) << "the document is what the file was";
+    const Bytes again = write(*doc);
+    Open back(again);
+    ASSERT_EQ(back.rc, MINIPSD_OK);
+    EXPECT_EQ(back.info.format, MINIPSD_PSB);
+    const minipsd_layer_view bv = nextLayer(back.r);
+    Bytes pxAgain(16);
+    ASSERT_EQ(decodeRgba(back.r, bv, 2, pxAgain), MINIPSD_OK);
+    EXPECT_EQ(pxAgain, px);
+    blocks.clear();
+    for (std::size_t at = 0; minipsd_layer_next_block(&bv, &at, &blk) == MINIPSD_MORE;)
+        blocks.emplace_back(blk.key, Bytes(blk.data.data, blk.data.data + blk.data.size));
+    ASSERT_EQ(blocks.size(), 3u) << "luni written, lnk2 and Patt kept";
+    EXPECT_EQ(blocks[1], std::make_pair(std::string("lnk2"), Bytes{1, 2, 3, 4}));
 
     // Layers in a global 'Lr16', whose length takes eight bytes, followed by a short key's block.
     Out info;
@@ -2046,7 +2061,7 @@ Bytes tailOf(const minipsd_info &i)
     const minipsd_bytes t = i.layer_tail;
     if (!t.size) return Bytes(4, 0);   // none at all is an empty global layer mask
     Bytes out(t.data, t.data + t.size);
-    const auto blocks = globalBlocksOf(t);
+    const auto blocks = globalBlocksOf(t, i.format == MINIPSD_PSB);
     for (auto b = blocks.rbegin(); b != blocks.rend(); ++b)
         if (std::get<0>(*b) == "Lr16" || std::get<0>(*b) == "Lr32")
             out.erase(out.begin() + std::ptrdiff_t(std::get<1>(*b)), out.begin() + std::ptrdiff_t(std::get<2>(*b)));
@@ -2193,9 +2208,7 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
             EXPECT_EQ(decodeComposite(o.r, w, stored, 0, 0, 1, depth), MINIPSD_OK);
             std::uint32_t lost = 0, lostAgain = 99;
             const minipsd_read_opts keep{1};
-            if (psb) {
-                readDoc(file, &lost, MINIPSD_ERR_UNSUPPORTED);   // until a PSB document can be written
-            } else if (zip) {
+            if (zip) {
                 // Only as stored: the ZIP channels are copied, and the file written from them
                 // keeps what the original had.
                 readDoc(file, &lost, MINIPSD_ERR_UNSUPPORTED);
@@ -2221,7 +2234,7 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
                 EXPECT_EQ(write(*f), again) << "a second pass changes nothing";
             }
         }
-        if (rgb && !zip && !psb) {
+        if (rgb && !zip) {
             // As a document: what the reader sees left out is reported lost, and the document
             // writes a file that reads back as the same document.
             std::uint32_t lost = 0;

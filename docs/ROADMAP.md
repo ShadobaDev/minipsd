@@ -292,16 +292,20 @@ feature; a supplied composite needs nothing. See
         *Done when:* every PSB of psd-tools' set is read, whole and in parts; its layers and
         composite decode to what psd-tools decompresses from the same file (`roundtrip.py`);
         COMPATIBILITY.md refuses none.
-  - [ ] **S6.6b** Write: `format` on `minipsd_doc` and an output format on the write calls; v2
-        layout; `minipsd_doc_check` against the output format's limits; `minipsd_read` of a PSB.
-        Documents from scratch, and PSB to PSB with kept bytes copied.
+  - [x] **S6.6b** Write: `format` on `minipsd_doc`, the document written in its own format; v2
+        layout; `minipsd_doc_check` against that format's limits; `minipsd_read` of a PSB.
+        Documents from scratch, and PSB to PSB with kept bytes copied. `detail/format.h` holds
+        what the two formats differ in, for the reader and the writer.
         *Done when:* a PSB written from scratch reads back from `psd-tools`; psd-tools' PSB files
         go through `minipsd_read` and `minipsd_write` with their blocks and channels byte for
         byte; GIMP opens a PSB written from scratch, checked by hand once.
-  - [ ] **S6.6c** Convert: kept bytes translated both ways when the formats differ (RLE count
-        tables, long keys' lengths); PSB to PSD refused with `MINIPSD_ERR_SIZE` when it does not
-        fit; the policy for long-key blocks whose content may itself depend on the format,
-        decided from what psd-tools' files hold.
+  - [ ] **S6.6c** Convert: an output format on the write calls, zero being the document's; kept
+        bytes translated both ways when the formats differ (RLE count tables, long keys'
+        lengths); PSB to PSD refused with `MINIPSD_ERR_SIZE` when it does not fit. Long keys by
+        policy: neutral ones (descriptors, parameters, paths) have their length translated;
+        layer structures (`Lr16`, `Lr32`, `Layr`) are refused until their insides are; the
+        unverified (`Alph`, `FEid`, `FXid`, `FELS`, embedded files until their structure is
+        checked) are refused until verification puts each in one group or the other.
         *Done when:* psd-tools' PSB files written as PSD, and PSD files as PSB, read back from
         `psd-tools` with the same layers, blocks and pixels.
 - [ ] **S6.7** Blending ranges ("Blend If") kept on the layer; until then `MINIPSD_LOST_BLENDING_RANGES`.

@@ -61,7 +61,7 @@ static minipsd_bytes mpsd__copy_tail(mpsd__arena *a, const minipsd_reader *r, mi
     end = r->li_start - 2 + mpsd__pad((size_t)(r->li_end - (r->li_start - 2)), 4);   /* data: count, records, ... */
     if (end > at + tail.size) end = at + tail.size;
     before.data = tail.data;                                    /* the block: '8BIM', key, length, count */
-    before.size = (size_t)(r->li_start - 14 - at);
+    before.size = (size_t)(r->li_start - (r->psb ? 18 : 14) - at);   /* a long key: eight bytes of length in a PSB */
     after.data  = r->data + (size_t)end;
     after.size  = (size_t)(at + tail.size - end);
     out   = mpsd__copy(a, before);                              /* the two copies lie end to end */
@@ -78,7 +78,7 @@ static uint32_t mpsd__record_loss(const minipsd_reader *r, uint64_t at, const mi
     static const uint8_t no_range[8] = { 0, 0, 255, 255, 0, 0, 255, 255 };   /* "Blend If" left alone */
     const uint8_t *d        = r->data;
     const uint32_t channels = mpsd__get16(d + (size_t)at + 16);
-    uint64_t       extra    = at + 18 + 6 * (uint64_t)channels + 16, ranges;
+    uint64_t       extra    = at + 18 + (2 + (4u << r->psb)) * (uint64_t)channels + 16, ranges;
     uint32_t       loss = 0, length;
     if (v->other_channels) loss |= MINIPSD_LOST_CHANNELS;          /* TODO(S6.8): alpha and spot channels */
     length = mpsd__get32(d + (size_t)extra);                        /* the mask data, kept */
@@ -137,12 +137,14 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     uint32_t            loss = 0;
     size_t              i, count, n = 0;
     unsigned            wide;
+    uint32_t            side;
     int                 rc;
 
     rc = minipsd_reader_init(&r, data, size, workspace, sizeof workspace, limits, &info);
     if (rc != MINIPSD_OK) return rc;
-    if (!r->rgb || r->psb) return MINIPSD_ERR_UNSUPPORTED;     /* PSB: until a document of one can be written */
+    if (!r->rgb) return MINIPSD_ERR_UNSUPPORTED;
     wide = r->wide;                                            /* 16-bit samples, aligned for a uint16_t */
+    side = r->psb ? MINIPSD_MAX_SIDE_PSB : MINIPSD_MAX_SIDE;
     all.y_first = all.y_count = 0;
     all.keep_matte = 0;
     all.depth      = wide ? 16 : 8;
@@ -173,7 +175,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         loss |= mpsd__record_loss(r, at, &v);
         w = (uint64_t)((int64_t)v.right - v.left);
         h = (uint64_t)((int64_t)v.bottom - v.top);
-        if (w > MINIPSD_MAX_SIDE || h > MINIPSD_MAX_SIDE) return MINIPSD_ERR_UNSUPPORTED;   /* the writer's limit */
+        if (w > side || h > side) return MINIPSD_ERR_UNSUPPORTED;   /* the writer's limit */
         (void)minipsd_layer_name(&v, NULL, 0, &n);
         name   = (char *)mpsd__take(a, n, 0);
         /* Stored: every channel copied as it is, never decoded; one without transparency is
@@ -282,6 +284,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     d->composite_matted = 1;
     d->layer_tail       = tail;
     d->depth            = info.depth;
+    d->format           = info.format;
     *out = d;
     if (lost) *lost = loss;
     return MINIPSD_OK;

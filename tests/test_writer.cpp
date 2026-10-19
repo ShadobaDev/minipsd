@@ -516,6 +516,103 @@ TEST(MinipsdWriterTest, SixteenBitDocumentsAreWrittenAndReadBack)
     EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_ARG);
 }
 
+// A PSB from scratch: a layer with a rectangle and a mask, a group, a kept block of a long key,
+// written with PSB's widths; read back as given, and as a document written back to the same bytes.
+TEST(MinipsdWriterTest, PsbDocumentsAreWrittenAndReadBack)
+{
+    const Bytes px = testImage(5, 3), ramp{1, 2, 3, 4, 5, 6, 7, 8};
+    Bytes lnk2 = {'8', 'B', 'I', 'M', 'l', 'n', 'k', '2', 0, 0, 0, 0, 0, 0, 0, 2, 7, 7};   // eight bytes of length
+    const minipsd_mask  mask{.top = 1, .left = 1, .bottom = 3, .right = 5, .color = 255, .pixels = ramp.data()};
+    const minipsd_layer layers[3] = {
+        {.name = "Pic", .rgba = px.data(), .opacity = 200, .top = 1, .left = 1, .bottom = 4, .right = 6,
+         .extra = {lnk2.data(), lnk2.size()}, .mask = &mask},
+        {.name = "</Group>", .opacity = 255, .kind = MINIPSD_KIND_GROUP_END},
+        {.name = "Group", .opacity = 255, .kind = MINIPSD_KIND_GROUP}};
+    for (int compression : {MINIPSD_RLE, MINIPSD_RAW}) {
+        SCOPED_TRACE(compression);
+        minipsd_doc d = docOf(6, 4, layers, 3);
+        d.compression = compression;
+        d.format = MINIPSD_PSB;
+        const Bytes file = write(d);
+        EXPECT_EQ(pull(d, 7), file);
+        EXPECT_EQ(pullTotal(d), file.size());
+        ASSERT_GT(file.size(), 5u);
+        EXPECT_EQ(file[5], 2) << "version 2";
+
+        Bytes workspace(256);
+        minipsd_reader *r = nullptr;
+        minipsd_info info{};
+        ASSERT_EQ(minipsd_reader_init(&r, file.data(), file.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
+        EXPECT_EQ(info.format, MINIPSD_PSB);
+        ASSERT_EQ(info.layer_count, 3u);
+        minipsd_layer_view v;
+        ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
+        Bytes got(px.size()), gotMask(ramp.size());
+        minipsd_target t;
+        minipsd_target_rgba(&t, got.data(), std::size_t(5) * 4);
+        EXPECT_EQ(minipsd_decode_layer(r, &v, &t, nullptr), MINIPSD_OK);
+        EXPECT_EQ(got, px);
+        const minipsd_plane plane{gotMask.data(), 1, 4};
+        EXPECT_EQ(minipsd_decode_mask(r, &v, &plane, nullptr), MINIPSD_OK);
+        EXPECT_EQ(gotMask, ramp);
+        minipsd_block blk;
+        std::size_t   pos = 0;
+        ASSERT_EQ(minipsd_layer_next_block(&v, &pos, &blk), MINIPSD_MORE);   // 'luni'
+        ASSERT_EQ(minipsd_layer_next_block(&v, &pos, &blk), MINIPSD_MORE);
+        EXPECT_STREQ(blk.key, "lnk2");
+        EXPECT_EQ(Bytes(blk.data.data, blk.data.data + blk.data.size), (Bytes{7, 7}));
+        ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
+        EXPECT_EQ(v.kind, MINIPSD_KIND_GROUP_END);
+
+        for (int keep : {0, 1}) {
+            const minipsd_read_opts opts{keep};
+            minipsd_doc *back = nullptr;
+            ASSERT_EQ(minipsd_read(file.data(), file.size(), nullptr, &opts, &back, nullptr), MINIPSD_OK);
+            EXPECT_EQ(back->format, MINIPSD_PSB);
+            EXPECT_EQ(write(*back), file) << "stored " << keep;
+            minipsd_doc_free(back);
+        }
+    }
+
+    // The same block is not one in a PSD's layout: the kept bytes say which format they are in.
+    minipsd_doc d = docOf(6, 4, layers, 3);
+    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_ARG);
+    d.format = 3;
+    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_ARG);
+}
+
+// PSB's sides go to 300 000: past a PSD's, for the canvas, a layer and a mask alike.
+TEST(MinipsdWriterTest, APsbTakesSidesAPsdCannot)
+{
+    const std::uint32_t w = 30001;
+    Bytes px(std::size_t(w) * 4);
+    for (std::size_t i = 0; i < px.size(); ++i) px[i] = static_cast<std::uint8_t>(i % 4 == 3 ? 255 : i * 7);
+    const minipsd_layer layer{.name = "Wide", .rgba = px.data(), .opacity = 255};
+    minipsd_doc d = docOf(w, 1, &layer, 1);
+    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_SIZE) << "a PSD";
+    d.format = MINIPSD_PSB;
+    const Bytes file = write(d);
+    minipsd_doc *back = nullptr;
+    ASSERT_EQ(minipsd_read(file.data(), file.size(), nullptr, nullptr, &back, nullptr), MINIPSD_OK);
+    EXPECT_EQ(back->width, w);
+    EXPECT_TRUE(std::equal(px.begin(), px.end(), back->layers[0].rgba));
+    minipsd_doc_free(back);
+
+    d.width = MINIPSD_MAX_SIDE_PSB + 1;
+    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_SIZE);
+    d.width = w;
+    minipsd_layer tall = layer;
+    tall.bottom = MINIPSD_MAX_SIDE_PSB + 1;
+    tall.right  = 1;
+    d.layers = &tall;
+    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_SIZE) << "a layer";
+    const minipsd_mask big{.bottom = MINIPSD_MAX_SIDE_PSB + 1, .right = 1, .pixels = px.data()};
+    minipsd_layer masked = layer;
+    masked.mask = &big;
+    d.layers = &masked;
+    EXPECT_EQ(minipsd_doc_check(&d), MINIPSD_ERR_SIZE) << "a mask";
+}
+
 TEST(MinipsdWriterTest, PassThroughEncodesOnlyTheLayerThatChanged)
 {
     const Bytes a = testImage(37, 5), b = testImage(20, 3), c = testImage(37, 5);

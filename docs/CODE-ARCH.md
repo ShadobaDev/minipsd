@@ -98,6 +98,7 @@ include/
       utf.h                    UTF-8 <-> UTF-16 for layer names
       packbits.h               PackBits encode, decode, size bound; strided source and target
       composite.h              blending one row "over", white matte and un-matte
+      format.h                 what PSD and PSB differ in: length and row-count widths, long keys, blocks
 examples/                      the I/O implementations; built and run in CI, never installed
   hello_write.c, hello_read.c  the shortest writer and reader: the manual's Getting started
   demo.h                       the document the other writers write (the golden "template-rle")
@@ -439,10 +440,10 @@ while ((rc = minipsd_reader_init(&r, buf, have, ws, ws_size, NULL, &info)) == MI
     (`R1`). Only the pixel decoding is limited to 8- and 16-bit RGB (`MINIPSD_ERR_UNSUPPORTED`,
     from `decode_*`), as is any feature it does not decode yet, ZIP among them.
   - **PSB is a layout, not a feature.** The reader keeps one flag, and every width that depends on
-    it comes from one place: section and channel lengths (`mpsd__length`, `mpsd__getlen`), RLE row
-    counts (`mpsd__count`), and a block's header, whose length is eight bytes for the keys in
-    `mpsd__long_key` (psd-tools' list, which Photoshop's files bear out: Adobe's names 13 of the
-    21). Views keep the file's layout and say so (`format` in the info and the view). A section
+    it comes from `detail/format.h`, which the writer shares: lengths (`mpsd__getlen`,
+    `mpsd__putlen`), RLE row counts (`mpsd__count`, `mpsd__putcount`), and a block's header, whose
+    length is eight bytes for the keys in `mpsd__long_key` (psd-tools' list, which Photoshop's
+    files bear out: Adobe's names 13 of the 21). Views keep the file's layout and say so (`format` in the info and the view). A section
     length of 2^62 or more is malformed, so offsets built from lengths never wrap; one above
     `SIZE_MAX` (a 32-bit platform) is `MINIPSD_ERR_UNSUPPORTED`, since views could not state their
     sizes.
@@ -640,7 +641,7 @@ feature is serialization: written and read as data. The composite composed as a 
 | **Layer groups (`lsct`)** | done: `kind` (`MINIPSD_KIND_*`); zero = layer | done: the `lsct` block, the group's mode in it; a kept one of the same kind as it is; nesting checked | done: `kind` in the view | — | the composed composite draws groups flat |
 | **Layer masks** | done: `mask` (`minipsd_mask`: rectangle, colour, flags, pixels or stored, kept real mask and rest) | done: mask data, channels -2 and -3 | done: the view's mask, `minipsd_decode_mask` | — | the composed composite ignores masks |
 | **16-bit channels** | done: `depth` on `minipsd_doc`; zero = 8 | done: 2-byte samples, big-endian, in the layer info | done: `depth` in `minipsd_decode_opts`, layers from `Lr16`, `minipsd_read` | done: `bytes` (`mpsd__at`, samples), `packbits` over a row's bytes, `composite` against 65535 | ZIP channels pass only as stored |
-| **PSB (version 2)** | `format` on `minipsd_doc` (`MINIPSD_PSD`, `MINIPSD_PSB`; zero = PSD): the layout of everything in the document, set by `minipsd_read`; the output format a write option, zero = the document's (decided over two document fields and over a converting copy: one field never describes a wish, and a translating writer stays zero-copy, as `tiffsave`'s `bigtiff` does) | 8-byte lengths, 4-byte RLE counts; kept bytes translated when the two formats differ | done: both versions, `format` in the info and the view; `minipsd_read` refuses a PSB until the writer takes one | `bytes`: 64-bit lengths, the long keys | sides up to 300 000 px |
+| **PSB (version 2)** | done: `format` on `minipsd_doc` (`MINIPSD_PSD`, `MINIPSD_PSB`; zero = PSD): the layout of everything in the document, set by `minipsd_read`; the output format a write option, zero = the document's (decided over two document fields and over a converting copy: one field never describes a wish, and a translating writer stays zero-copy, as `tiffsave`'s `bigtiff` does) | done: 8-byte lengths, 4-byte RLE counts, kept bytes copied in the document's format; to come: an output format other than the document's, kept bytes translated | done: both versions, `format` in the info and the view, `minipsd_read` sets the document's | `format`: widths, long keys, blocks | sides up to 300 000 px |
 
 ## Distribution of a multi-file library
 

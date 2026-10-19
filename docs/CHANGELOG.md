@@ -40,10 +40,11 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   reader decodes 16-bit layers, masks and composites with `depth` in `minipsd_decode_opts` and
   `minipsd_target_rgba16`, and finds the layers Photoshop keeps in its `Lr16` block. ZIP
   channels are not decoded; read with `stored`, they are copied as they are.
-- PSB (Photoshop's large document format, sides up to 300 000 px) reads through the same reader
-  calls: `format` (`MINIPSD_PSD`, `MINIPSD_PSB`) in `minipsd_info` and the layer view says how its
-  views are laid out, and `MINIPSD_MAX_SIDE_PSB` is the canvas's default limit for one.
-  `minipsd_read` does not take a PSB yet.
+- PSB, Photoshop's large document format, up to 300 000 px a side (`MINIPSD_MAX_SIDE_PSB`):
+  `format` (`MINIPSD_PSD`, `MINIPSD_PSB`) at the end of `minipsd_doc` writes one, and the reader
+  reads one through the same calls, `format` in `minipsd_info` and the layer view saying how its
+  views are laid out. `minipsd_read` gives a document in the file's format, written back as it
+  was; writing kept content in the other format is not supported yet.
 - Pass-through re-save: `minipsd_read_opts.stored` keeps each layer's channels as the file
   stores them (`minipsd_layer.stored`), and the writer copies them instead of encoding pixels, so
   changing one layer encodes only that one. A stored layer without transparency gets an opaque
