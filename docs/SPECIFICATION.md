@@ -243,8 +243,9 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
   - visibility: flag bit `0x02` set means hidden; the other flag bits as given (`flags`);
   - the blend key as given, `norm` by default (the keys: [Blend modes](#blend-modes)), and
     clipping as given;
-  - after the writer's own `luni`, the blocks kept from a file (`extra`), as they are, except a
-    kept `luni`: the name wins;
+  - the blocks kept from a file (`extra`), as they are and in their order, with the writer's own
+    `luni` (and group marker) where the first kept `luni` was, or first without one: the name
+    wins, and a second kept `luni` goes;
   - channel data encoded from `rgba`, or copied as it is from `stored` (any compression the
     file had, ZIP included), so a layer that was not changed is not encoded again; a stored
     layer without transparency gets an opaque transparency channel;
@@ -272,12 +273,12 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
   - **colour is matted against white:** `c*a + max*(1-a)`, `max` being 255 or 65535. Photoshop
     stores it this way and readers subtract the white back out. The writer mattes, a supplied composite too, unless
     `composite_matted` says it already is: then it is written byte for byte.
-- **Image resources:**
+- **Image resources:** the resources kept from a file (`resources`), in order, with their names;
+  the writer's own two take the place of the first kept one with the same id, or come first:
   - 1005 ResolutionInfo: dpi as 16.16 fixed point, unit inches; a kept 1005 that says the same
     dpi is written instead, with its own units and vertical resolution;
   - 1039 ICC profile, only when `icc` is set;
-  - then the resources kept from a file (`resources`), in order, with their names, except 1005
-    and 1039: `dpi` and `icc` win;
+  - a later kept 1005 or 1039 goes: `dpi` and `icc` win;
   - a resource of odd length is padded to even.
 - **After the layer info:** the kept `layer_tail` (global layer mask, global blocks) as it is,
   or an empty global layer mask.

@@ -480,7 +480,7 @@ bytes, so nothing here breaks the API.
 | Input | Kept |
 |---|---|
 | a file minipsd wrote | the same bytes (`E4`) |
-| a file from another program | the same content: every layer's pixels, name, rectangle, opacity, visibility, blend key, clipping, kept blocks and resources, and the composite's pixels. Not the same bytes: minipsd writes its own legacy name, PackBits runs and block order, which no reader depends on |
+| a file from another program | the same content: every layer's pixels, name, rectangle, opacity, visibility, blend key, clipping, kept blocks and resources, and the composite's pixels. Not the same bytes: minipsd writes its own legacy name and PackBits runs, which no reader depends on (S6.7 removes the differences one by one) |
 
 What the document cannot carry is reported (see [Loss](#loss)).
 
@@ -529,7 +529,7 @@ int            composite_matted;   /* non-zero: composite is already matted, wri
 
 | Field | Zero means | Notes |
 |---|---|---|
-| `const minipsd_resource *resources`, `size_t resource_count` | no other resources | written in order after the writer's own; the reader's `minipsd_resource` type, which carries the resource's name (`name`, a Pascal string's bytes, at most 255) |
+| `const minipsd_resource *resources`, `size_t resource_count` | no other resources | written in order, the writer's own 1005 and 1039 in place of the first kept ones (first without them); the reader's `minipsd_resource` type, which carries the resource's name (`name`, a Pascal string's bytes, at most 255) |
 | `minipsd_bytes layer_tail` | an empty global layer mask (four zero bytes) | the rest of the layer and mask section after the layer info: the global layer mask information and the global additional blocks (`Txt2`, `Patt`, `Lr16`, ...), written back as they are |
 
 The reader gives the matching fields: `minipsd_layer_view.clipping` and `.flags`,

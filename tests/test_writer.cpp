@@ -179,7 +179,9 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
 {
     const Bytes px = testImage(2, 2);
     const Bytes lsct = tagged("lsct", {0, 0, 0, 0}), tysh = tagged("TySh", Bytes(6, 7));   // an 'lsct' of a plain layer
-    const Bytes extra = tagged("luni", {0, 0, 0, 1, 0, 'X', 0, 0}) + lsct + tysh;   // a stale name, then two blocks
+    const Bytes vmsk = tagged("vmsk", Bytes(8, 3));
+    const Bytes extra = vmsk + tagged("luni", {0, 0, 0, 1, 0, 'X', 0, 0}) + lsct      // a block, a stale name, a block,
+                      + tagged("luni", {0, 0, 0, 1, 0, 'Y', 0, 0}) + tysh;             // another stale name, a block
     const minipsd_blending_range ranges[2] = {{{{0, 0}, {255, 255}}, {{59, 60}, {210, 220}}},   // grey, then red
                                               {{{10, 10}, {200, 200}}, {{0, 0}, {255, 255}}}};
     const minipsd_layer layer{.name = "Mine", .rgba = px.data(), .opacity = 200, .hidden = 1,
@@ -187,7 +189,8 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
                               .blending_ranges = ranges, .blending_range_count = 2};
     const Bytes cm = {0, 150, 0, 0, 0, 1, 0, 2, 0, 150, 0, 0, 0, 1, 0, 2};   // 150 dpi, shown in centimetres
     const Bytes thumb = {1, 2, 3}, oldIcc = {9, 9}, icc = {5, 6, 7}, nm = {'n', 'm'};
-    const minipsd_resource resources[3] = {{1005, view(cm), {}}, {1036, view(thumb), view(nm)}, {1039, view(oldIcc), {}}};
+    const Bytes resName = {'r'};
+    const minipsd_resource resources[3] = {{1036, view(thumb), view(nm)}, {1005, view(cm), view(resName)}, {1039, view(oldIcc), {}}};
     const Bytes tail = Bytes{0, 0, 0, 0} + tagged("Patt", Bytes(4, 1));
     minipsd_doc d = docOf(2, 2, &layer, 1);
     d.dpi = 150; d.icc = icc.data(); d.icc_size = icc.size();
@@ -206,10 +209,13 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     std::vector<int> ids;
     while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE) {
         ids.push_back(res.id);
-        if (res.id == 1005) { EXPECT_EQ(Bytes(res.data.data, res.data.data + 16), cm) << "the same dpi: kept, units too"; }
+        if (res.id == 1005) {
+            EXPECT_EQ(Bytes(res.data.data, res.data.data + 16), cm) << "the same dpi: kept, units too";
+            EXPECT_EQ(Bytes(res.name.data, res.name.data + res.name.size), resName) << "and its name";
+        }
         if (res.id == 1036) { EXPECT_EQ(Bytes(res.name.data, res.name.data + res.name.size), nm); }
     }
-    EXPECT_EQ(ids, (std::vector<int>{1005, 1039, 1036}));
+    EXPECT_EQ(ids, (std::vector<int>{1036, 1005, 1039})) << "the writer's own resources where the kept ones were";
     minipsd_layer_view v;
     ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
     EXPECT_STREQ(v.blend, "mul ");
@@ -221,16 +227,29 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     EXPECT_EQ(Bytes(v.blending_ranges.data, v.blending_ranges.data + v.blending_ranges.size),
               (Bytes{0, 0, 255, 255, 59, 60, 210, 220, 10, 10, 200, 200, 0, 0, 255, 255})) << "the ranges, as given";
     const Bytes blocks(v.extra.data, v.extra.data + v.extra.size);
+    EXPECT_EQ(Bytes(blocks.begin(), blocks.begin() + static_cast<std::ptrdiff_t>(vmsk.size())), vmsk) << "a kept block first";
+    EXPECT_EQ(std::string(blocks.begin() + static_cast<std::ptrdiff_t>(vmsk.size()) + 4, blocks.begin() + static_cast<std::ptrdiff_t>(vmsk.size()) + 8), "luni")
+        << "the writer's 'luni' where the kept one was";
     EXPECT_EQ(Bytes(blocks.end() - static_cast<std::ptrdiff_t>(lsct.size() + tysh.size()), blocks.end()), lsct + tysh)
-        << "kept blocks follow the writer's own 'luni', in order";
+        << "kept blocks follow it, in order, without the second 'luni'";
 
     // Another dpi: the writer's own resolution, in inches.
     d.dpi = 72;
     const Bytes other = write(d);
     ASSERT_EQ(minipsd_reader_init(&r, other.data(), other.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
     EXPECT_EQ(info.dpi, 72.0);
-    ASSERT_EQ(minipsd_reader_next_resource(r, &res), MINIPSD_MORE);
+    while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE && res.id != 1005) {}
+    ASSERT_EQ(res.id, 1005);
     EXPECT_EQ(res.data.data[7], 1) << "shown in inches";
+
+    // No profile: a kept one goes with it.
+    d.icc = nullptr; d.icc_size = 0;
+    const Bytes noIcc = write(d);
+    ASSERT_EQ(minipsd_reader_init(&r, noIcc.data(), noIcc.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
+    EXPECT_EQ(info.icc.size, 0u);
+    ids.clear();
+    while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE) ids.push_back(res.id);
+    EXPECT_EQ(ids, (std::vector<int>{1036, 1005}));
 }
 
 TEST(MinipsdWriterTest, GroupsAndMasksAreWritten)

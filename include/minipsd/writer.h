@@ -164,16 +164,53 @@ static int mpsd__kept_kind(minipsd_bytes extra, unsigned kind, unsigned psb)
     return 0;
 }
 
-/* Blocks kept from a file, laid out as the from format lays them out, written in the out format,
-   but where the layer's own fields win: 'luni' (name) and an 'lsct' of another kind than the
-   layer's.  minipsd_doc_check has walked them, and checked they can change format. */
-static void mpsd__kept_blocks(mpsd__sink *s, minipsd_bytes extra, unsigned kind, unsigned from, unsigned out)
+/* The writer's own blocks: the name in 'luni', then the group marker unless a kept one says it. */
+static void mpsd__own_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned from)
+{
+    const char *name = l->name;
+    size_t      units, luni;
+    units = mpsd__utf16(name, NULL, NULL);
+    luni  = MPSD__LEN + units * 2;            /* the count of UTF-16 units, the units */
+    mpsd__put(s, "8BIMluni", 8);
+    mpsd__u32(s, (uint32_t)mpsd__pad(luni, 4));
+    mpsd__u32(s, (uint32_t)units);
+    mpsd__utf16(name, mpsd__unit_out, s);
+    mpsd__zeros(s, mpsd__pad(luni, 4) - luni);
+    if (l->kind && !mpsd__kept_kind(l->extra, l->kind, from)) {   /* the group marker, unless kept */
+        const char *mode = l->blend[0] || l->blend[1] || l->blend[2] || l->blend[3] ? l->blend : "pass";
+        mpsd__put(s, "8BIMlsct", 8);
+        mpsd__u32(s, l->kind == MINIPSD_KIND_GROUP_END ? MPSD__LSCT_TYPE : MPSD__LSCT_FULL);
+        mpsd__u32(s, l->kind);
+        if (l->kind != MINIPSD_KIND_GROUP_END) { mpsd__put(s, "8BIM", 4); mpsd__put(s, mode, 4); }
+    }
+}
+
+/* Is there a kept 'luni'?  The writer's own then takes its place, so the blocks keep their order. */
+static int mpsd__kept_luni(minipsd_bytes extra, unsigned psb)
 {
     minipsd_block block;
     size_t        pos = 0, next;
+    for (; pos < extra.size && mpsd__block(extra, pos, psb, &block, &next) == MINIPSD_OK; pos = next)
+        if (mpsd__tag((const uint8_t *)block.key, "luni")) return 1;
+    return 0;
+}
+
+/* Blocks kept from a file, laid out as the from format lays them out, written in the out format,
+   but where the layer's own fields win: the first 'luni' becomes the writer's own blocks (the
+   name, and the group marker unless kept), a later one goes, and so does an 'lsct' of another
+   kind than the layer's.  minipsd_doc_check has walked them, and checked they can change format. */
+static void mpsd__kept_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned from, unsigned out)
+{
+    const minipsd_bytes extra = l->extra;
+    minipsd_block block;
+    size_t        pos = 0, next;
+    int           named = 0;
     while (pos < extra.size && mpsd__block(extra, pos, from, &block, &next) == MINIPSD_OK) {
         const int type = mpsd__lsct_type(&block);
-        if (!mpsd__tag((const uint8_t *)block.key, "luni") && (type < 0 || type == (int)kind)) {
+        if (mpsd__tag((const uint8_t *)block.key, "luni")) {
+            if (!named) mpsd__own_blocks(s, l, from);
+            named = 1;
+        } else if (type < 0 || type == (int)l->kind) {
             if (from == out) mpsd__put(s, extra.data + pos, next - pos);
             else mpsd__put_block(s, extra.data + pos, (size_t)(block.data.data - (extra.data + pos)), block.data.size, block.data.size, out);
         }
@@ -207,13 +244,15 @@ static void mpsd__blending_ranges(mpsd__sink *s, const minipsd_layer *l)
     }
 }
 
-/* The extra-data block of a layer record: the mask, the blending ranges, the names, the group
-   marker, kept blocks (laid out as the from format lays them out, written in the out format). */
+/* The extra-data block of a layer record: the mask, the blending ranges, the legacy name, then
+   the blocks: the kept ones in their order (laid out as the from format lays them out, written in
+   the out format), the writer's own ('luni', the group marker) where the kept 'luni' was, or
+   first. */
 static void mpsd__layer_extra(mpsd__sink *s, const minipsd_layer *l, unsigned from, unsigned out)
 {
     const char          *name = l->name;
     const unsigned char *p = (const unsigned char *)(name ? name : "");
-    size_t ascii = 0, units, luni;
+    size_t ascii = 0;
     uint8_t pascal[256];
     while (*p && ascii < 255) {               /* one '?' per non-ASCII character */
         const uint32_t cp = mpsd__utf8(&p);
@@ -224,23 +263,10 @@ static void mpsd__layer_extra(mpsd__sink *s, const minipsd_layer *l, unsigned fr
     mpsd__blending_ranges(s, l);
     mpsd__put(s, pascal, ascii + 1);
     mpsd__zeros(s, mpsd__pad(ascii + 1, 4) - (ascii + 1));
-
-    units = mpsd__utf16(name, NULL, NULL);
-    luni  = MPSD__LEN + units * 2;            /* the count of UTF-16 units, the units */
-    mpsd__put(s, "8BIMluni", 8);
-    mpsd__u32(s, (uint32_t)mpsd__pad(luni, 4));
-    mpsd__u32(s, (uint32_t)units);
-    mpsd__utf16(name, mpsd__unit_out, s);
-    mpsd__zeros(s, mpsd__pad(luni, 4) - luni);
-    if (l->kind && !mpsd__kept_kind(l->extra, l->kind, from)) {   /* the group marker, unless kept */
-        const char *mode = l->blend[0] || l->blend[1] || l->blend[2] || l->blend[3] ? l->blend : "pass";
-        mpsd__put(s, "8BIMlsct", 8);
-        mpsd__u32(s, l->kind == MINIPSD_KIND_GROUP_END ? MPSD__LSCT_TYPE : MPSD__LSCT_FULL);
-        mpsd__u32(s, l->kind);
-        if (l->kind != MINIPSD_KIND_GROUP_END) { mpsd__put(s, "8BIM", 4); mpsd__put(s, mode, 4); }
-    }
-    mpsd__kept_blocks(s, l->extra, l->kind, from, out);
+    if (!mpsd__kept_luni(l->extra, from)) mpsd__own_blocks(s, l, from);   /* first, or where the kept one was */
+    mpsd__kept_blocks(s, l, from, out);
 }
+
 
 /* --- the layer section --- */
 
@@ -311,17 +337,6 @@ static uint64_t mpsd__max_layers_section(unsigned psb) { return psb ? MPSD__FAR 
 /* A kept resource is written unless the document's own field says the same: dpi, icc. */
 static int mpsd__kept_resource(const minipsd_resource *r) { return r->id != MPSD__RES_RESOLUTION && r->id != MPSD__RES_ICC; }
 
-/* The image resources' length: the resolution, the ICC profile if any, the kept resources. */
-static uint64_t mpsd__resources_size(const minipsd_doc *d)
-{
-    uint64_t size = mpsd__resource_size(0, MPSD__RESOLUTION_SIZE) + (d->icc ? mpsd__resource_size(0, d->icc_size) : 0);
-    size_t   i;
-    for (i = 0; i < d->resource_count; ++i)
-        if (mpsd__kept_resource(&d->resources[i]))
-            size += mpsd__resource_size(d->resources[i].name.size, d->resources[i].data.size);
-    return size;
-}
-
 /* The dpi as stored: 16.16 fixed point. */
 static uint32_t mpsd__dpi_fixed(const minipsd_doc *d) { return (uint32_t)(d->dpi * MPSD__FIXED_ONE + 0.5); }
 
@@ -336,6 +351,67 @@ static const uint8_t *mpsd__kept_resolution(const minipsd_doc *d)
             return r->data.size == MPSD__RESOLUTION_SIZE && r->data.data && mpsd__get32(r->data.data) == mpsd__dpi_fixed(d) ? r->data.data : NULL;
     }
     return NULL;
+}
+
+/* The first kept resource with this id; NULL when there is none. */
+static const minipsd_resource *mpsd__find_resource(const minipsd_doc *d, unsigned id)
+{
+    size_t i;
+    for (i = 0; i < d->resource_count; ++i)
+        if (d->resources[i].id == id) return &d->resources[i];
+    return NULL;
+}
+
+/* One resource, laid out as detail/format.h shows: a Pascal name padded to even, the data too. */
+static void mpsd__put_resource(mpsd__sink *s, unsigned id, minipsd_bytes name, const void *data, size_t size)
+{
+    mpsd__put(s, "8BIM", 4); mpsd__u16(s, id);
+    mpsd__u8(s, (unsigned)name.size);
+    mpsd__put(s, name.data, name.size);
+    mpsd__zeros(s, mpsd__pad(1 + name.size, 2) - (1 + name.size));
+    mpsd__u32(s, (uint32_t)size);
+    mpsd__put(s, data, size);
+    mpsd__zeros(s, size & 1);
+}
+
+/* The resolution: a kept one that says the document's dpi, or the writer's own, in inches. */
+static void mpsd__resolution(mpsd__sink *s, const minipsd_doc *d, minipsd_bytes name)
+{
+    const uint32_t res  = mpsd__dpi_fixed(d);
+    const uint8_t *kept = mpsd__kept_resolution(d);
+    uint8_t        own[MPSD__RESOLUTION_SIZE] = { 0 };
+    int            k;
+    for (k = 0; k < 2; ++k) {                 /* horizontal, vertical: pixels per inch, shown in inches */
+        own[8 * k] = (uint8_t)(res >> 24); own[8 * k + 1] = (uint8_t)(res >> 16);
+        own[8 * k + 2] = (uint8_t)(res >> 8); own[8 * k + 3] = (uint8_t)res;
+        own[8 * k + 5] = own[8 * k + 7] = 1;
+    }
+    mpsd__put_resource(s, MPSD__RES_RESOLUTION, name, kept ? kept : own, MPSD__RESOLUTION_SIZE);
+}
+
+/* The image resources: the writer's own (the resolution, the ICC profile if any) where the first
+   kept one of the same id was, so a file's order comes back, or first when there is none; then
+   the kept ones.  A later kept resolution or profile goes: the document's field says it. */
+static void mpsd__resources(mpsd__sink *s, const minipsd_doc *d)
+{
+    const minipsd_resource *res = mpsd__find_resource(d, MPSD__RES_RESOLUTION), *icc = mpsd__find_resource(d, MPSD__RES_ICC);
+    const minipsd_bytes     none = { NULL, 0 };
+    size_t                  i;
+    if (!res) mpsd__resolution(s, d, none);
+    if (!icc && d->icc) mpsd__put_resource(s, MPSD__RES_ICC, none, d->icc, d->icc_size);
+    for (i = 0; i < d->resource_count; ++i) {
+        const minipsd_resource *r = &d->resources[i];
+        if (r == res)                mpsd__resolution(s, d, r->name);
+        else if (r == icc && d->icc) mpsd__put_resource(s, MPSD__RES_ICC, r->name, d->icc, d->icc_size);
+        else if (mpsd__kept_resource(r)) mpsd__put_resource(s, r->id, r->name, r->data.data, r->data.size);
+    }
+}
+
+static uint64_t mpsd__resources_size(const minipsd_doc *d)
+{
+    mpsd__sink c = { NULL, NULL, 0, 0 };
+    mpsd__resources(&c, d);
+    return c.count;
 }
 
 /* A stored channel that fits a width x height rectangle of one-byte or (wide) two-byte samples:
@@ -549,9 +625,6 @@ static int mpsd__measure_layers(const minipsd_doc *d, unsigned psb, uint64_t *si
    the layer count. */
 static void mpsd__head(mpsd__sink *s, const minipsd_doc *d, uint64_t info, unsigned out)
 {
-    const uint32_t res  = mpsd__dpi_fixed(d);
-    const uint8_t *kept = mpsd__kept_resolution(d);
-    size_t         i;
     mpsd__put(s, "8BPS", 4);
     mpsd__u16(s, out ? MINIPSD_PSB : MINIPSD_PSD);   /* the version */
     mpsd__zeros(s, 6);                        /* reserved            */
@@ -564,32 +637,7 @@ static void mpsd__head(mpsd__sink *s, const minipsd_doc *d, uint64_t info, unsig
     mpsd__u32(s, 0);                          /* colour mode data    */
 
     mpsd__u32(s, (uint32_t)mpsd__resources_size(d));
-    mpsd__put(s, "8BIM", 4); mpsd__u16(s, MPSD__RES_RESOLUTION);
-    mpsd__u16(s, 0);                          /* no name, padded to even */
-    mpsd__u32(s, MPSD__RESOLUTION_SIZE);
-    if (kept) {
-        mpsd__put(s, kept, MPSD__RESOLUTION_SIZE);
-    } else {
-        mpsd__u32(s, res); mpsd__u16(s, 1); mpsd__u16(s, 1);  /* pixels per inch, shown in inches */
-        mpsd__u32(s, res); mpsd__u16(s, 1); mpsd__u16(s, 1);
-    }
-    if (d->icc) {
-        mpsd__put(s, "8BIM", 4); mpsd__u16(s, MPSD__RES_ICC); mpsd__u16(s, 0);
-        mpsd__u32(s, (uint32_t)d->icc_size);
-        mpsd__put(s, d->icc, d->icc_size);
-        mpsd__zeros(s, d->icc_size & 1);
-    }
-    for (i = 0; i < d->resource_count; ++i) {
-        const minipsd_resource *r = &d->resources[i];
-        if (!mpsd__kept_resource(r)) continue;
-        mpsd__put(s, "8BIM", 4); mpsd__u16(s, r->id);
-        mpsd__u8(s, (unsigned)r->name.size);
-        mpsd__put(s, r->name.data, r->name.size);
-        mpsd__zeros(s, mpsd__pad(1 + r->name.size, 2) - (1 + r->name.size));
-        mpsd__u32(s, (uint32_t)r->data.size);
-        mpsd__put(s, r->data.data, r->data.size);
-        mpsd__zeros(s, r->data.size & 1);
-    }
+    mpsd__resources(s, d);
 
     mpsd__putlen(s, mpsd__len_size(out) + info + mpsd__tail_size(d, out), out);   /* layer and mask information */
     mpsd__putlen(s, info, out);

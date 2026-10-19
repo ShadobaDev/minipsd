@@ -308,7 +308,22 @@ feature; a supplied composite needs nothing. See
         checked) are refused until verification puts each in one group or the other.
         *Done when:* psd-tools' PSB files written as PSD, and PSD files as PSB, read back from
         `psd-tools` with the same layers, blocks and pixels.
-- [ ] **S6.7** Blending ranges ("Blend If") kept on the layer; until then `MINIPSD_LOST_BLENDING_RANGES`.
+- [ ] **S6.7** A file read and written back is the same file, byte for byte: what `minipsd_read`
+      keeps, `minipsd_write` puts back where the file had it.
+      *Done when:* every file of psd-tools' set that `minipsd_read` takes comes back identical
+      through `minipsd_read` and `minipsd_write`, but for a listed few with the reason for each;
+      `roundtrip.py` checks it.
+  - [x] **S6.7a** Blending ranges ("Blend If") kept on the layer, typed as the file stores them;
+        `MINIPSD_LOST_BLENDING_RANGES` no longer set.
+  - [x] **S6.7b** Order: the writer's resolution and profile where the file's were, its `luni`
+        where the file's was.
+  - [ ] **S6.7c** The composite as the file stores it: its channels, its encoding, the layer
+        count's sign.
+  - [ ] **S6.7d** A layer without a transparency channel written without one.
+  - [ ] **S6.7e** Names: the legacy name and `luni` kept as stored while the name is unchanged.
+  - [ ] **S6.7f** The record's rectangle and flags, the layer info's padding (Photoshop: 4, others
+        2 or none), the layer tail.
+  - [ ] **S6.7g** Layers in `Lr16`, files without layers, channel data re-encoded.
 - [ ] **S6.8** Channels beyond RGBA (alpha and spot channels, of layers and of the composite)
       kept; until then `MINIPSD_LOST_CHANNELS`.
 - [ ] **S6.9** ZIP channels (compression 2, and 3 with prediction), Photoshop's 16- and 32-bit

@@ -72,6 +72,11 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   `MINIPSD_ERR_LIMIT`, and `minipsd_limits` for untrusted files: the largest side (canvas, and
   layers when set), the most layers, the most bytes one decode call writes.
 
+### Changed
+- A document read from a file is written back closer to that file, byte for byte: the
+  resolution and ICC profile resources where the file had them, a layer's `luni` where its
+  blocks had it (kept resources and blocks were already in their order).
+
 ## [0.2.0] — 2026-10-15
 
 **Breaking:** `minipsd_write_file` is gone; minipsd does no I/O of its own. To migrate, copy
