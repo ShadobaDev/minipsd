@@ -1744,6 +1744,38 @@ TEST(MinipsdReadTest, ItRefusesWhatTheReaderRefusesAndWhatItCannotHold)
     readDoc(file, &lost, MINIPSD_OK, &lim, &keep);
 }
 
+TEST(MinipsdReadTest, AStoredLayerWithoutTransparencyIsWrittenWithoutOne)
+{
+    Rec r;
+    r.right = 2; r.bottom = 1;
+    r.channels = {chan(0, 4, 10), chan(1, 4, 20), chan(2, 4, 30)};
+    // As the file has it; a mask still follows.
+    for (const bool masked : {false, true}) {
+        SCOPED_TRACE(masked);
+        Rec m = r;
+        if (masked) {
+            m.mask = Out().u32(0).u32(0).u32(1).u32(2).u8(0).u8(0).zeros(2).b;
+            m.channels.push_back(chan(-2, 4, 99));
+        }
+        Spec s;
+        s.layers = {m};
+        s.count = -1;
+        s.image = rawImage(4, 2, 2, 0x80);
+        const minipsd_read_opts keep{1};
+        const Doc d = readDoc(build(s).bytes, nullptr, MINIPSD_OK, nullptr, &keep);
+        ASSERT_TRUE(d);
+        const Bytes file = write(*d);
+        EXPECT_EQ(pull(*d, 7), file);
+        Open o(file);
+        ASSERT_EQ(o.rc, MINIPSD_OK);
+        const minipsd_layer_view v = nextLayer(o.r);
+        EXPECT_EQ(v.channel[MINIPSD_CH_A].size, 0u);
+        EXPECT_EQ(v.channel[MINIPSD_CH_B].size, 4u);
+        EXPECT_EQ(v.mask.stored.size, masked ? 4u : 0u);
+        EXPECT_EQ(v.other_channels, 0);
+    }
+}
+
 TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
 {
     Spec s;

@@ -80,6 +80,8 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   `composite_stored` and `composite_channels` at the end of `minipsd_doc` (`composite` is then
   `NULL`), and the writer copies it: no decoding, no encoding, three channels written as
   three. A supplied `composite` still wins.
+- A stored layer without a transparency channel is written without one, as its file has it,
+  instead of with an opaque one.
 
 ## [0.2.0] — 2026-10-15
 

@@ -167,7 +167,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         (void)minipsd_layer_name(&v, NULL, 0, &n);
         name   = (char *)mpsd__take(a, n, 0);
         /* Stored: every channel copied as it is, never decoded; one without transparency is
-           written opaque. */
+           written without one, as the file has it. */
         keep = opts && opts->stored && w && h;
         for (k = 0; k < MINIPSD_CH_A; ++k) keep = keep && v.channel[k].size;   /* R, G, B */
         if (keep) {

@@ -551,7 +551,7 @@ flowchart TD
 [examples/resave.c](../examples/resave.c) is the whole program: it inverts the colours of one
 layer, copies every other one, and frees the file's bytes before writing. The one layer of a file
 without layers comes decoded even with `stored`: there is nothing to copy for it. A layer without
-a transparency channel is copied, and gets an opaque one when written. `stored` is also how
+a transparency channel is copied, and written without one, as the file has it. `stored` is also how
 Photoshop's 16-bit files go through: their ZIP channels are copied byte for byte.
 
 **What is lost, and a request.** `lost` is 0 when the document carries everything. Otherwise its

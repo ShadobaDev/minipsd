@@ -432,7 +432,8 @@ TEST(MinipsdWriterTest, ChannelsOverNoAreaHaveNoRows)
     ASSERT_EQ(minipsd_reader_init(&r, file.data(), file.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
     minipsd_layer_view v;
     ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
-    EXPECT_EQ(v.channel[MINIPSD_CH_A].size, 2u) << "an opaque transparency, with no rows to fill";
+    EXPECT_EQ(v.channel[MINIPSD_CH_R].size, 2u) << "a marker, no rows";
+    EXPECT_EQ(v.channel[MINIPSD_CH_A].size, 0u) << "stored without transparency: written without one";
     ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
     ASSERT_TRUE(v.has_mask);
     EXPECT_EQ(v.mask.stored.size, 2u) << "the mask's pixels have no area to cover";

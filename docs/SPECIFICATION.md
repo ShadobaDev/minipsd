@@ -248,7 +248,7 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
     wins, and a second kept `luni` goes;
   - channel data encoded from `rgba`, or copied as it is from `stored` (any compression the
     file had, ZIP included), so a layer that was not changed is not encoded again; a stored
-    layer without transparency gets an opaque transparency channel;
+    layer without transparency is written without one (three colour channels);
   - groups (`kind`), bottom first: a divider (`lsct` type 3), the group's layers, then the
     group's top record (type 1 open, 2 closed) with its name, visibility and mode in its `lsct`
     block (`blend`, Pass Through by default; the record keeps `norm`). A kept `lsct` of the same

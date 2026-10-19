@@ -529,7 +529,7 @@ int            composite_matted;   /* non-zero: composite is already matted, wri
 | `uint8_t clipping` | not clipped | written as given |
 | `uint8_t flags` | none | the record's other flag bits (0x01 transparency locked, 0x08 and 0x10 pixel data irrelevant), written as given; 0x02 comes from `hidden` |
 | `minipsd_bytes extra` | no extra blocks | the layer's additional-information blocks as one blob, in the format of the reader's `extra` view; written after the writer's own blocks. `minipsd_doc_check` walks them: a malformed run is `MINIPSD_ERR_ARG` |
-| `const minipsd_bytes *stored` | encode `rgba` | four channel blobs (R, G, B, A, as `minipsd_layer_view.channel`), each the stored data with its compression marker and row counts; transparency of size 0 is none. The writer copies each as one piece instead of encoding `rgba`, and for a missing transparency encodes an opaque channel from one full sample read with a step of 0; the sizing pass takes their sizes. `minipsd_doc_check` checks each against the rectangle (raw rows, or RLE counts adding up within the blob; ZIP passes as it is); a layer with `stored` and no `rgba` needs a supplied `composite`, since nothing could compose it. Name, opacity, visibility, blend, clipping and `extra` still come from the layer |
+| `const minipsd_bytes *stored` | encode `rgba` | four channel blobs (R, G, B, A, as `minipsd_layer_view.channel`), each the stored data with its compression marker and row counts; transparency of size 0 is none. The writer copies each as one piece instead of encoding `rgba`, and writes no transparency channel where none is stored; the sizing pass takes their sizes. `minipsd_doc_check` checks each against the rectangle (raw rows, or RLE counts adding up within the blob; ZIP passes as it is); a layer with `stored` and no `rgba` needs a supplied `composite`, since nothing could compose it. Name, opacity, visibility, blend, clipping and `extra` still come from the layer |
 
 `minipsd_doc`, at the end, after `composite` and `composite_matted`:
 
@@ -604,7 +604,7 @@ typedef struct minipsd_read_opts {
   decoded nor encoded again, and the file's own composite is copied, neither rendered nor
   decoded (`E1`), when it holds R, G, B and at most transparency (more is decoded, and lost). ZIP
   channels, which minipsd cannot decode, pass this way; a layer without a transparency channel
-  gets an opaque one when written.
+  is written without one.
 - **Limits:** `minipsd_limits` as in the reader; `max_decoded_bytes` bounds the sum of the call's
   decoded pixels. A block larger than `SIZE_MAX` is `MINIPSD_ERR_SIZE`.
 - **What it accepts:** 8- and 16-bit RGB, as the decoder; the document has the file's `depth`.

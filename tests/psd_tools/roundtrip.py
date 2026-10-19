@@ -570,15 +570,14 @@ def check_kept(name, before, after, stored=False):
 
         for i, (b, a, db, da) in enumerate(zip(rb, ra, cb, ca)):
             got = {c.id.value: data(a, c, d, va) for c, d in zip(a.channel_info, da)}
-            same(f"layer {i} channel data", {c.id.value: data(b, c, d, vb) for c, d in zip(b.channel_info, db)},
-                 {k: v for k, v in got.items() if k != -1 or -1 in [c.id.value for c in b.channel_info]})
+            same(f"layer {i} channel data", {c.id.value: data(b, c, d, vb) for c, d in zip(b.channel_info, db)}, got)
     for i, (b, a) in enumerate(zip(rb, ra)):
         same(f"layer {i} blocks", blocks(b.tagged_blocks), blocks(a.tagged_blocks))
         same(f"layer {i} mask data", b.mask_data.tobytes() if b.mask_data else None, a.mask_data.tobytes() if a.mask_data else None)
         same(f"layer {i} blending ranges", b.blending_ranges.tobytes(), a.blending_ranges.tobytes())
         ids = [c.id.value for c in b.channel_info]
-        added = [] if -1 in ids else [-1]   # a layer without transparency gets an opaque one
-        same(f"layer {i} channels", added + ids if added else ids, [c.id.value for c in a.channel_info])
+        added = [] if -1 in ids or stored else [-1]   # decoded, a layer without transparency gets an opaque one
+        same(f"layer {i} channels", added + ids, [c.id.value for c in a.channel_info])
         same(f"layer {i} blend, clipping, flags", (b.blend_mode, b.clipping, b.flags), (a.blend_mode, a.clipping, a.flags))
     return errors
 

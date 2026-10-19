@@ -302,7 +302,7 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
                                     the compression marker, then the rows), copied as they are
                                     instead of encoding rgba: a layer never decoded is never encoded
                                     again.  Each is checked against the rectangle; transparency of
-                                     size 0 is none, written opaque.  rgba may then be NULL, as long
+                                    size 0 is none, and written as none.  rgba may then be NULL, as long
                                     as the document supplies its composite.                       */
     uint8_t        kind;        /*!< MINIPSD_KIND_*: a layer, or a group's top record or divider.
                                     Groups nest bottom first: a divider, the group's layers, then
@@ -919,7 +919,7 @@ typedef struct minipsd_read_opts {
     int stored; /*!< Non-zero: each layer keeps its channels as stored (minipsd_layer.stored), not
                      decoded, so writing it back copies them: a fraction of the memory, and no
                      encoding, and ZIP-compressed channels pass.  A layer without a transparency
-                     channel gets an opaque one when written.  The composite too
+                     channel is written without one.  The composite too
                      (minipsd_doc.composite_stored, composite NULL), when it holds red, green,
                      blue and at most transparency.                                              */
 } minipsd_read_opts;
