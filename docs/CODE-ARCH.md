@@ -98,7 +98,8 @@ include/
       utf.h                    UTF-8 <-> UTF-16 for layer names
       packbits.h               PackBits encode, decode, size bound; strided source and target
       composite.h              blending one row "over", white matte and un-matte
-      format.h                 what PSD and PSB differ in: length and row-count widths, long keys, blocks
+      format.h                 the file's layout: each structure's fields and sizes, and what PSD and PSB
+                               differ in (length and row-count widths, long keys, blocks)
 examples/                      the I/O implementations; built and run in CI, never installed
   hello_write.c, hello_read.c  the shortest writer and reader: the manual's Getting started
   demo.h                       the document the other writers write (the golden "template-rle")

@@ -23,6 +23,17 @@ repository is in [This project](#this-project) at the end. C++ code follows
 - **Every allocation is freed on every path**, error paths included. Libraries allocate through
   overridable macros (`<PREFIX>_MALLOC` / `<PREFIX>_FREE`), never `malloc` directly.
 
+## Numbers
+
+A number that states a fact of a file format, or of the library's own layout, gets a name when it
+appears in more than one place or differs between variants of the format: a named constant
+(`<SHORT>__<NAME>`) for a fixed size, a `static` function for a size that depends on something
+(a width by format version, a structure's size by its count of entries). A function rather than
+a macro: its arguments are typed and evaluated once. Names and the layout they come from live
+together, under a table of the structure's fields and sizes, in the module the reader and writer
+share. An offset read once, right where the table shows it, may stay a number. Plain arithmetic
+and alignment (`pad(n, 4)`, `* 2` for UTF-16 units) are not facts to name.
+
 ## Naming
 
 | Kind | Form |
@@ -139,4 +150,5 @@ enum {
 | public header / implementation | `include/minipsd.h` / `include/minipsd/<module>.h`, internals in `include/minipsd/detail/` |
 | implementation guards | `MPSD__<MODULE>_DONE` |
 
-Implementation sections follow the order of the PSD file they write or read.
+Implementation sections follow the order of the PSD file they write or read. The file's layout,
+with the names of its sizes ([Numbers](#numbers)), is in `detail/format.h`.
