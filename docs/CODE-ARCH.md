@@ -689,6 +689,21 @@ Every stage follows these rules:
 - **The spec follows the code.** When a stage lands, its part of this file moves into
   [SPECIFICATION.md](SPECIFICATION.md), and this file keeps only what is still ahead.
 
+Work reaches `master` only through a pull request whose CI passes. Its branch is named
+`<prefix>/<short-name>` (lower case, words joined by `-`, an issue's number first when there is
+one: `fix/12-real-mask-table`), the prefix saying what kind of change it is:
+
+| Prefix | The change |
+|---|---|
+| `feature/` | a new function or addition, a ROADMAP step or a requested feature |
+| `fix/` | a repair of existing code, a reported issue |
+| `refactor/` | code changed without changing what it does: the same bytes, the same results |
+| `ci/` | the CI workflows |
+| `docs/` | files that are not source code |
+
+A branch holding several kinds is named by the main one, as its commits' types (`feat`, `fix`,
+`refactor`, `ci`, `docs`) say.
+
 ## Decisions
 
 Taken at review, 2026-10-14.

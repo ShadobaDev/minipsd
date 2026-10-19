@@ -282,7 +282,7 @@ feature; a supplied composite needs nothing. See
       files go through `minipsd_read` (stored) and `minipsd_write` with their blocks and channel
       data byte for byte; the fuzzer decodes at 16 bits; GIMP opens `deep-16.psd`, checked by
       hand once.
-- [ ] **S6.6** PSB (version 2): the same format with wider lengths (sections, channels, the blocks
+- [x] **S6.6** PSB (version 2): the same format with wider lengths (sections, channels, the blocks
       of 21 keys) and RLE row counts of four bytes. Decided: one `format` on the document, the
       layout of everything in it; the output format a write option; the writer translates kept
       bytes when the two differ (see [CODE-ARCH.md](CODE-ARCH.md), PSB row).
