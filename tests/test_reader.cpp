@@ -37,6 +37,8 @@ struct Out {
     Out &u8(unsigned v)  { b.push_back(static_cast<std::uint8_t>(v)); return *this; }
     Out &u16(unsigned v) { return u8(v >> 8).u8(v); }
     Out &u32(std::uint32_t v) { return u16(v >> 16).u16(v & 0xFFFF); }
+    Out &u64(std::uint64_t v) { return u32(static_cast<std::uint32_t>(v >> 32)).u32(static_cast<std::uint32_t>(v)); }
+    Out &len(std::uint64_t v, bool psb) { return psb ? u64(v) : u32(static_cast<std::uint32_t>(v)); }   // a length, eight bytes in a PSB
     Out &raw(const Bytes &x) { b.insert(b.end(), x.begin(), x.end()); return *this; }
     Out &str(const std::string &s) { b.insert(b.end(), s.begin(), s.end()); return *this; }
     Out &zeros(std::size_t n) { b.insert(b.end(), n, 0); return *this; }
@@ -63,11 +65,12 @@ Bytes resolution(double dpi)
     return o.b;
 }
 
-// One tagged block of a layer's additional information.
-Bytes block(const std::string &key, const Bytes &data, const std::string &sig = "8BIM")
+// One tagged block of a layer's additional information; with `wide`, its length takes eight bytes,
+// as a long key's does in a PSB.
+Bytes block(const std::string &key, const Bytes &data, const std::string &sig = "8BIM", bool wide = false)
 {
     Out o;
-    o.str(sig).str(key).u32(static_cast<std::uint32_t>(data.size())).raw(data);
+    o.str(sig).str(key).len(data.size(), wide).raw(data);
     return o.b;
 }
 
@@ -107,7 +110,7 @@ Chan chan(int id, std::size_t length, unsigned fill)   // the two-byte marker 0 
     return c;
 }
 
-Bytes record(const Rec &r)
+Bytes record(const Rec &r, bool psb = false)
 {
     Out extra;
     if (r.hasRawExtra) {
@@ -122,7 +125,8 @@ Bytes record(const Rec &r)
     o.u32(static_cast<std::uint32_t>(r.top)).u32(static_cast<std::uint32_t>(r.left))
      .u32(static_cast<std::uint32_t>(r.bottom)).u32(static_cast<std::uint32_t>(r.right));
     o.u16(r.channelCount < 0 ? static_cast<unsigned>(r.channels.size()) : static_cast<unsigned>(r.channelCount));
-    for (const Chan &c : r.channels) o.u16(static_cast<unsigned>(c.id) & 0xFFFF).u32(static_cast<std::uint32_t>(static_cast<std::int64_t>(c.data.size()) + c.lengthDelta));
+    for (const Chan &c : r.channels)
+        o.u16(static_cast<unsigned>(c.id) & 0xFFFF).len(static_cast<std::uint64_t>(static_cast<std::int64_t>(c.data.size()) + c.lengthDelta), psb);
     o.str(r.blendSig).str(r.blendKey).u8(r.opacity).u8(0).u8(r.flags).u8(0);
     o.u32(static_cast<std::uint32_t>(static_cast<std::int64_t>(extra.b.size()) + r.extraLengthDelta)).raw(extra.b);
     return o.b;
@@ -135,11 +139,13 @@ Bytes channelData(const Rec &r)
     return o.b;
 }
 
-// The layer and mask information section around a layer info.
-Bytes layerSection(const Bytes &info)
+// The layer and mask information section around a layer info; its two lengths take eight bytes in
+// a PSB.
+Bytes layerSection(const Bytes &info, bool psb = false)
 {
+    const std::size_t w = psb ? 8 : 4;
     Out o;
-    o.u32(static_cast<std::uint32_t>(4 + info.size() + 4)).u32(static_cast<std::uint32_t>(info.size())).raw(info).u32(0);
+    o.len(w + info.size() + 4, psb).len(info.size(), psb).raw(info).u32(0);
     return o.b;
 }
 
@@ -176,12 +182,14 @@ Built build(const Spec &s)
     } else {
         Out info;
         info.u16(static_cast<unsigned>(static_cast<std::int16_t>(s.count)));
-        for (const Rec &r : s.layers) info.raw(record(r));
-        out.recordsEnd = o.b.size() + 4 + 4 + info.b.size();
+        const bool psb = s.version == 2;
+        const std::size_t lengths = psb ? 16 : 8;
+        for (const Rec &r : s.layers) info.raw(record(r, psb));
+        out.recordsEnd = o.b.size() + lengths + info.b.size();
         for (const Rec &r : s.layers) info.raw(channelData(r));
-        out.dataEnd = o.b.size() + 4 + 4 + info.b.size();
+        out.dataEnd = o.b.size() + lengths + info.b.size();
         if (info.b.size() & 1) info.u8(0);
-        o.raw(layerSection(info.b));
+        o.raw(layerSection(info.b, psb));
     }
     o.raw(s.image);
     out.bytes = o.b;
@@ -348,8 +356,6 @@ TEST(MinipsdReaderTest, TheHeaderIsChecked)
     EXPECT_EQ(Open(build(ok).bytes).rc, MINIPSD_OK);
 
     Spec s;
-    s.version = 2;
-    EXPECT_EQ(Open(build(s).bytes).rc, MINIPSD_ERR_UNSUPPORTED) << "PSB: lengths of eight bytes";
     for (int version : {0, 3}) { s = Spec(); s.version = version; EXPECT_EQ(Open(build(s).bytes).rc, MINIPSD_ERR_FORMAT) << version; }
     for (unsigned channels : {0u, 57u}) { s = Spec(); s.channels = channels; EXPECT_EQ(Open(build(s).bytes).rc, MINIPSD_ERR_FORMAT) << channels; }
     for (unsigned depth : {0u, 2u, 24u}) { s = Spec(); s.depth = depth; EXPECT_EQ(Open(build(s).bytes).rc, MINIPSD_ERR_FORMAT) << depth; }
@@ -358,6 +364,22 @@ TEST(MinipsdReaderTest, TheHeaderIsChecked)
         s = Spec(); s.width = side;  EXPECT_EQ(Open(build(s).bytes).rc, MINIPSD_ERR_FORMAT) << "width " << side;
         s = Spec(); s.height = side; EXPECT_EQ(Open(build(s).bytes).rc, MINIPSD_ERR_FORMAT) << "height " << side;
     }
+
+    // A PSB allows sides up to 300000, which its own limit then takes.
+    for (std::uint32_t side : {30001u, 300000u}) {
+        s = Spec(); s.version = 2; s.width = side;
+        const Open o(build(s).bytes);
+        EXPECT_EQ(o.rc, MINIPSD_OK) << side;
+        EXPECT_EQ(o.info.format, MINIPSD_PSB);
+        EXPECT_EQ(o.info.width, side);
+    }
+    s = Spec(); s.version = 2; s.height = 300001;
+    EXPECT_EQ(Open(build(s).bytes).rc, MINIPSD_ERR_FORMAT);
+    minipsd_limits lim{};
+    lim.max_side = 30000;
+    s = Spec(); s.version = 2; s.width = 30001;
+    EXPECT_EQ(Open(build(s).bytes, SIZE_MAX, &lim).rc, MINIPSD_ERR_LIMIT) << "the caller's limit is the caller's";
+    EXPECT_EQ(Open(build(ok).bytes).info.format, MINIPSD_PSD);
 }
 
 TEST(MinipsdReaderTest, AnyColourModeAndDepthIsDescribedEvenThoughOnlyRgbWillDecode)
@@ -980,12 +1002,15 @@ TEST(MinipsdReaderTest, ACallOnAReaderThatNeverStartedIsRefused)
 
 namespace {
 
-// A PackBits channel: the marker 1, the rows' byte counts, the rows.
-Chan rleChan(int id, const std::vector<Bytes> &rows)
+// A PackBits channel: the marker 1, the rows' byte counts (four bytes each in a PSB), the rows.
+Chan rleChan(int id, const std::vector<Bytes> &rows, bool psb = false)
 {
     Out o;
     o.u16(1);
-    for (const Bytes &row : rows) o.u16(static_cast<unsigned>(row.size()));
+    for (const Bytes &row : rows) {
+        if (psb) o.u32(static_cast<std::uint32_t>(row.size()));
+        else     o.u16(static_cast<unsigned>(row.size()));
+    }
     for (const Bytes &row : rows) o.raw(row);
     return Chan{id, o.b};
 }
@@ -1813,6 +1838,123 @@ TEST(MinipsdReaderTest, MaskAndKindAtTheEdges)
     EXPECT_EQ(OneLayer(twice).v.kind, MINIPSD_KIND_GROUP) << "the first kind";
 }
 
+// A PSB: the layer and mask section's two lengths, each channel's length and a long key's block
+// length take eight bytes, RLE row counts four; the rest reads as in a PSD.
+TEST(MinipsdReaderTest, APsbReadsWithItsWiderFields)
+{
+    auto rows = [](unsigned a, unsigned b, unsigned c, unsigned d) {   // two rows of two, as literals
+        return std::vector<Bytes>{{1, std::uint8_t(a), std::uint8_t(b)}, {1, std::uint8_t(c), std::uint8_t(d)}};
+    };
+    Rec rec;
+    rec.right = 2; rec.bottom = 2;
+    rec.channels = {rleChan(-1, rows(255, 255, 255, 128), true), rleChan(0, rows(10, 11, 12, 13), true),
+                    rleChan(1, rows(20, 21, 22, 23), true), rleChan(2, rows(30, 31, 32, 33), true),
+                    rleChan(-2, rows(1, 2, 3, 4), true)};
+    rec.mask = Out().u32(0).u32(0).u32(2).u32(2).u8(255).u8(0).zeros(2).b;
+    rec.pascal = "P";
+    rec.blocks = Out().raw(luniBlock(u"Psb")).raw(block("lnk2", {1, 2, 3, 4}, "8BIM", true)).raw(block("Patt", {9, 9})).b;
+    Spec s;
+    s.version = 2;
+    s.layers = {rec};
+    s.count = -1;
+    Out image;
+    image.u16(1);
+    for (int k = 0; k < 8; ++k) image.u32(3);                   // 4 channels x 2 rows
+    for (unsigned k = 0; k < 4; ++k)
+        for (unsigned y = 0; y < 2; ++y) image.u8(1).u8(40 + 10 * k + y).u8(255);
+    s.image = image.b;
+    const Built file = build(s);
+
+    Open o(file.bytes);
+    ASSERT_EQ(o.rc, MINIPSD_OK);
+    EXPECT_EQ(o.info.format, MINIPSD_PSB);
+    ASSERT_EQ(o.info.layer_count, 1u);
+    const minipsd_layer_view v = nextLayer(o.r);
+    EXPECT_EQ(v.format, MINIPSD_PSB);
+    EXPECT_EQ(nameOf(v), "Psb");
+    std::vector<std::pair<std::string, Bytes>> blocks;
+    minipsd_block blk;
+    for (std::size_t pos = 0; minipsd_layer_next_block(&v, &pos, &blk) == MINIPSD_MORE;)
+        blocks.emplace_back(blk.key, Bytes(blk.data.data, blk.data.data + blk.data.size));
+    EXPECT_EQ(blocks.size(), 3u);
+    EXPECT_EQ(blocks[1], std::make_pair(std::string("lnk2"), Bytes{1, 2, 3, 4})) << "a long key: eight bytes of length";
+    EXPECT_EQ(blocks[2], std::make_pair(std::string("Patt"), Bytes{9, 9})) << "any other: four";
+    minipsd_layer_view asPsd = v;                               // the same bytes walked as a PSD's
+    asPsd.format = 0;
+    std::size_t pos = 0;
+    while (minipsd_layer_next_block(&asPsd, &pos, &blk) == MINIPSD_MORE) {}
+    EXPECT_EQ(minipsd_layer_next_block(&asPsd, &pos, &blk), MINIPSD_ERR_FORMAT);
+
+    Bytes px(16);
+    ASSERT_EQ(decodeRgba(o.r, v, 2, px), MINIPSD_OK);
+    EXPECT_EQ(px, (Bytes{10, 20, 30, 255, 11, 21, 31, 255, 12, 22, 32, 255, 13, 23, 33, 128}));
+    Bytes band(8);
+    ASSERT_EQ(decodeRgba(o.r, v, 2, band, 1, 1), MINIPSD_OK) << "a band skips rows by their four-byte counts";
+    EXPECT_EQ(band, rowsOf(px, 2, 1, 1));
+    Bytes mask(4);
+    const minipsd_plane plane{mask.data(), 1, 2};
+    ASSERT_EQ(minipsd_decode_mask(o.r, &v, &plane, nullptr), MINIPSD_OK);
+    EXPECT_EQ(mask, (Bytes{1, 2, 3, 4}));
+    Bytes composite(16);
+    ASSERT_EQ(decodeComposite(o.r, 2, composite, 0, 0, 1), MINIPSD_OK);
+    EXPECT_EQ(composite, (Bytes{40, 50, 60, 70, 255, 255, 255, 255, 41, 51, 61, 71, 255, 255, 255, 255}));
+    nextLayer(o.r, MINIPSD_OK);
+    readDoc(file.bytes, nullptr, MINIPSD_ERR_UNSUPPORTED);      // until a PSB document can be written
+
+    // Layers in a global 'Lr16', whose length takes eight bytes, followed by a short key's block.
+    Out info;
+    info.u16(static_cast<unsigned>(std::int16_t(-1))).raw(record(simpleRec(), true)).raw(channelData(simpleRec()));
+    Out tail;
+    tail.u32(0).str("8BIM").str("Lr16").u64(info.b.size()).raw(info.b).zeros((4 - info.b.size() % 4) % 4);
+    tail.raw(block("Patt", {}));
+    Spec deep;
+    deep.version = 2;
+    deep.hasRawSection = true;
+    deep.rawLayerSection = Out().u64(8 + tail.b.size()).u64(0).raw(tail.b).b;
+    deep.image = rawImage(4, 2, 2, 0x80);
+    const Built d = build(deep);
+    Open od(d.bytes);
+    ASSERT_EQ(od.rc, MINIPSD_OK);
+    ASSERT_EQ(od.info.layer_count, 1u);
+    const minipsd_layer_view dv = nextLayer(od.r);
+    EXPECT_EQ(nameOf(dv), "L");
+    EXPECT_EQ(decodeRgba(od.r, dv, 2, px), MINIPSD_OK);
+    const std::size_t lengthAt = d.resourcesEnd + 16 + 4 + 8;   // the 'Lr16' block's length
+    EXPECT_EQ(Open(d.bytes, lengthAt + 6).rc, MINIPSD_ERR_SHORT) << "inside the eight-byte length";
+
+    // Refused: a section length no file comes near, one too short for the layer info's length, a
+    // channel longer than the layer info, a long key's header cut short.
+    auto section = [](const Bytes &raw) {
+        Spec x;
+        x.version = 2;
+        x.hasRawSection = true;
+        x.rawLayerSection = raw;
+        return Open(build(x).bytes).rc;
+    };
+    EXPECT_EQ(section(Out().u64(std::uint64_t(1) << 62).zeros(8).b), MINIPSD_ERR_FORMAT);
+    EXPECT_EQ(section(Out().u64(4).u32(0).b), MINIPSD_ERR_FORMAT);
+    EXPECT_EQ(section(Out().u64(8 + 16).u64(0).u32(0).str("8BIM").str("lnk2").u32(0).b), MINIPSD_OK)
+        << "a tail ending inside a long key's header is only kept";
+    Rec longChannel = simpleRec();
+    longChannel.channels[0].lengthDelta = std::int64_t(1) << 40;
+    Spec lc;
+    lc.version = 2;
+    lc.layers = {longChannel};
+    lc.count = -1;
+    Open ol(build(lc).bytes);
+    ASSERT_EQ(ol.rc, MINIPSD_OK);
+    nextLayer(ol.r, MINIPSD_ERR_FORMAT);
+    Rec cut = simpleRec();
+    cut.blocks = Out().str("8BIM").str("lnk2").zeros(6).b;      // 14 bytes: a long key needs 16
+    Spec cs;
+    cs.version = 2;
+    cs.layers = {cut};
+    cs.count = -1;
+    Open oc(build(cs).bytes);
+    ASSERT_EQ(oc.rc, MINIPSD_OK);
+    nextLayer(oc.r, MINIPSD_ERR_FORMAT);
+}
+
 TEST(MinipsdReadTest, LostSaysWhatTheDocumentCannotCarry)
 {
     struct Case {
@@ -1884,7 +2026,7 @@ std::vector<std::filesystem::path> filesFromOtherPrograms()
         std::error_code ec;
         if (!*dir) continue;
         for (const auto &entry : std::filesystem::recursive_directory_iterator(dir, ec))
-            if (entry.path().extension() == ".psd") files.push_back(entry.path());
+            if (entry.path().extension() == ".psd" || entry.path().extension() == ".psb") files.push_back(entry.path());
     }
     std::sort(files.begin(), files.end());
     return files;
@@ -1896,7 +2038,7 @@ bool zipped(const minipsd_bytes &c)
     return c.data && c.size >= 2 && c.data[0] == 0 && (c.data[1] == 2 || c.data[1] == 3);
 }
 
-std::vector<std::tuple<std::string, std::size_t, std::size_t>> globalBlocksOf(const minipsd_bytes &t);
+std::vector<std::tuple<std::string, std::size_t, std::size_t>> globalBlocksOf(const minipsd_bytes &t, bool psb = false);
 
 // The layer tail without an 'Lr16' or 'Lr32' block: once read, its layers are the document's.
 Bytes tailOf(const minipsd_info &i)
@@ -1970,19 +2112,23 @@ void expectKeptAlike(const Bytes &before, const Bytes &after)
 }
 
 // The global blocks after the global layer mask, as (key, start, end) in the tail, each padded to
-// four past its length, as init walks them.
-std::vector<std::tuple<std::string, std::size_t, std::size_t>> globalBlocksOf(const minipsd_bytes &t)
+// four past its length (eight bytes of it for a PSB's long keys), as init walks them.
+std::vector<std::tuple<std::string, std::size_t, std::size_t>> globalBlocksOf(const minipsd_bytes &t, bool psb)
 {
-    auto get32 = [&](std::size_t at) {
-        return (std::size_t(t.data[at]) << 24) | (std::size_t(t.data[at + 1]) << 16) | (std::size_t(t.data[at + 2]) << 8) | t.data[at + 3];
+    auto get = [&](std::size_t at, std::size_t n) {
+        std::size_t v = 0;
+        for (std::size_t i = 0; i < n; ++i) v = (v << 8) | t.data[at + i];
+        return v;
     };
     std::vector<std::tuple<std::string, std::size_t, std::size_t>> out;
     if (!t.data || t.size < 4) return out;
-    for (std::size_t at = 4 + get32(0); at + 12 <= t.size;) {
+    for (std::size_t at = 4 + get(0, 4); at + 12 <= t.size;) {
         const std::string sig(t.data + at, t.data + at + 4);
-        const std::size_t length = get32(at + 8);
-        if ((sig != "8BIM" && sig != "8B64") || length > t.size - at - 12) break;
-        const std::size_t end = std::min(t.size, at + 12 + (length + 3) / 4 * 4);
+        const std::size_t head = mpsd__block_head(t.data + at, psb);
+        if ((sig != "8BIM" && sig != "8B64") || at + head > t.size) break;
+        const std::size_t length = get(at + 8, head - 8);
+        if (length > t.size - at - head) break;
+        const std::size_t end = std::min(t.size, at + head + (length + 3) / 4 * 4);
         out.emplace_back(std::string(t.data + at + 4, t.data + at + 8), at, end);
         at = end;
     }
@@ -1990,7 +2136,7 @@ std::vector<std::tuple<std::string, std::size_t, std::size_t>> globalBlocksOf(co
 }
 
 // Init walks the global blocks' headers, one round each, to find layers kept in 'Lr16' or 'Lr32'.
-std::size_t globalBlocks(const minipsd_info &info) { return globalBlocksOf(info.layer_tail).size(); }
+std::size_t globalBlocks(const minipsd_info &info) { return globalBlocksOf(info.layer_tail, info.format == MINIPSD_PSB).size(); }
 
 Bytes readFile(const std::filesystem::path &path)
 {
@@ -2013,7 +2159,7 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
         Open o(file);
         ASSERT_EQ(o.rc, MINIPSD_OK);
         const int depth = o.info.depth;
-        const bool rgb = (depth == 8 || depth == 16) && o.info.color_mode == 3;
+        const bool rgb = (depth == 8 || depth == 16) && o.info.color_mode == 3, psb = o.info.format == MINIPSD_PSB;
         const std::size_t bytes = depth == 16 ? 2 : 1;
         const std::uint32_t w = o.info.width, h = o.info.height;
         std::size_t layers = 0;
@@ -2047,7 +2193,9 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
             EXPECT_EQ(decodeComposite(o.r, w, stored, 0, 0, 1, depth), MINIPSD_OK);
             std::uint32_t lost = 0, lostAgain = 99;
             const minipsd_read_opts keep{1};
-            if (zip) {
+            if (psb) {
+                readDoc(file, &lost, MINIPSD_ERR_UNSUPPORTED);   // until a PSB document can be written
+            } else if (zip) {
                 // Only as stored: the ZIP channels are copied, and the file written from them
                 // keeps what the original had.
                 readDoc(file, &lost, MINIPSD_ERR_UNSUPPORTED);
@@ -2073,7 +2221,7 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
                 EXPECT_EQ(write(*f), again) << "a second pass changes nothing";
             }
         }
-        if (rgb && !zip) {
+        if (rgb && !zip && !psb) {
             // As a document: what the reader sees left out is reported lost, and the document
             // writes a file that reads back as the same document.
             std::uint32_t lost = 0;
@@ -2123,7 +2271,7 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
         // table, its extra data), so the rounds stay within a few per layer, and one per global
         // block init walks.
         std::size_t have = 0, rounds = 0;
-        const std::size_t most = 8 + 3 * o.info.layer_count + 3 + globalBlocks(o.info);
+        const std::size_t most = 8 + 3 * o.info.layer_count + 3 + globalBlocks(o.info) * (psb ? 2 : 1);   // a PSB: a long key's header in two steps
         auto grow = [&](minipsd_reader *r) {
             const auto needed = static_cast<std::size_t>(minipsd_reader_needed(r));
             EXPECT_GT(needed, have) << "every round asks for more";

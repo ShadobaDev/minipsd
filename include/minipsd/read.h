@@ -141,8 +141,8 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
 
     rc = minipsd_reader_init(&r, data, size, workspace, sizeof workspace, limits, &info);
     if (rc != MINIPSD_OK) return rc;
-    if (!r->rgb) return MINIPSD_ERR_UNSUPPORTED;
-    wide = r->wide;                                             /* 16-bit samples, aligned for a uint16_t */
+    if (!r->rgb || r->psb) return MINIPSD_ERR_UNSUPPORTED;     /* PSB: until a document of one can be written */
+    wide = r->wide;                                            /* 16-bit samples, aligned for a uint16_t */
     all.y_first = all.y_count = 0;
     all.keep_matte = 0;
     all.depth      = wide ? 16 : 8;

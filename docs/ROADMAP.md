@@ -282,7 +282,28 @@ feature; a supplied composite needs nothing. See
       files go through `minipsd_read` (stored) and `minipsd_write` with their blocks and channel
       data byte for byte; the fuzzer decodes at 16 bits; GIMP opens `deep-16.psd`, checked by
       hand once.
-- [ ] **S6.6** PSB (version 2).
+- [ ] **S6.6** PSB (version 2): the same format with wider lengths (sections, channels, the blocks
+      of 21 keys) and RLE row counts of four bytes. Decided: one `format` on the document, the
+      layout of everything in it; the output format a write option; the writer translates kept
+      bytes when the two differ (see [CODE-ARCH.md](CODE-ARCH.md), PSB row).
+  - [x] **S6.6a** Read: `format` in `minipsd_info` and the layer view, `MINIPSD_MAX_SIDE_PSB`,
+        wide lengths and counts in the reader, the long keys in the block walks and the `Lr16`
+        search; `minipsd_read` refuses a PSB (`MINIPSD_ERR_UNSUPPORTED`) until S6.6b.
+        *Done when:* every PSB of psd-tools' set is read, whole and in parts; its layers and
+        composite decode to what psd-tools decompresses from the same file (`roundtrip.py`);
+        COMPATIBILITY.md refuses none.
+  - [ ] **S6.6b** Write: `format` on `minipsd_doc` and an output format on the write calls; v2
+        layout; `minipsd_doc_check` against the output format's limits; `minipsd_read` of a PSB.
+        Documents from scratch, and PSB to PSB with kept bytes copied.
+        *Done when:* a PSB written from scratch reads back from `psd-tools`; psd-tools' PSB files
+        go through `minipsd_read` and `minipsd_write` with their blocks and channels byte for
+        byte; GIMP opens a PSB written from scratch, checked by hand once.
+  - [ ] **S6.6c** Convert: kept bytes translated both ways when the formats differ (RLE count
+        tables, long keys' lengths); PSB to PSD refused with `MINIPSD_ERR_SIZE` when it does not
+        fit; the policy for long-key blocks whose content may itself depend on the format,
+        decided from what psd-tools' files hold.
+        *Done when:* psd-tools' PSB files written as PSD, and PSD files as PSB, read back from
+        `psd-tools` with the same layers, blocks and pixels.
 - [ ] **S6.7** Blending ranges ("Blend If") kept on the layer; until then `MINIPSD_LOST_BLENDING_RANGES`.
 - [ ] **S6.8** Channels beyond RGBA (alpha and spot channels, of layers and of the composite)
       kept; until then `MINIPSD_LOST_CHANNELS`.

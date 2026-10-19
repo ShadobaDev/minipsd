@@ -124,7 +124,7 @@ static int mpsd__kept_kind(minipsd_bytes extra, unsigned kind)
 {
     minipsd_block block;
     size_t        pos = 0, next;
-    for (; pos < extra.size && mpsd__block(extra, pos, &block, &next) == MINIPSD_OK; pos = next)
+    for (; pos < extra.size && mpsd__block(extra, pos, 0, &block, &next) == MINIPSD_OK; pos = next)
         if (mpsd__lsct_type(&block) == (int)kind) return 1;
     return 0;
 }
@@ -135,7 +135,7 @@ static void mpsd__kept_blocks(mpsd__sink *s, minipsd_bytes extra, unsigned kind)
 {
     minipsd_block block;
     size_t        pos = 0, next;
-    while (pos < extra.size && mpsd__block(extra, pos, &block, &next) == MINIPSD_OK) {
+    while (pos < extra.size && mpsd__block(extra, pos, 0, &block, &next) == MINIPSD_OK) {
         const int type = mpsd__lsct_type(&block);
         if (!mpsd__tag((const uint8_t *)block.key, "luni") && (type < 0 || type == (int)kind))
             mpsd__put(s, extra.data + pos, next - pos);
@@ -323,7 +323,7 @@ static int mpsd__kept_ok(const minipsd_doc *d)
         const minipsd_bytes extra = d->layers[i].extra;
         if (extra.size && !extra.data) return MINIPSD_ERR_ARG;
         for (pos = 0; pos < extra.size; pos = next)
-            if (mpsd__block(extra, pos, &block, &next) != MINIPSD_OK) return MINIPSD_ERR_ARG;
+            if (mpsd__block(extra, pos, 0, &block, &next) != MINIPSD_OK) return MINIPSD_ERR_ARG;
     }
     return MINIPSD_OK;
 }

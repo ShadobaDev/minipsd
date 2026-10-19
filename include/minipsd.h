@@ -133,8 +133,9 @@ enum {
     MINIPSD_ERR_OPEN    = -5, /*!< Not returned by minipsd; kept for the caller's own file
                                    code (examples/): a file not opened or closed.             */
     MINIPSD_ERR_FORMAT  = -6, /*!< Reader: the bytes are not a well-formed PSD.                */
-    MINIPSD_ERR_UNSUPPORTED = -7, /*!< Reader: a valid PSD outside what minipsd reads: a PSB, or
-                                       pixels other than 8- or 16-bit RGB, or ZIP-compressed.     */
+    MINIPSD_ERR_UNSUPPORTED = -7, /*!< Reader: a valid file outside what minipsd reads: pixels
+                                       other than 8- or 16-bit RGB, or ZIP-compressed; for
+                                       minipsd_read, also a PSB.                                  */
     MINIPSD_ERR_SHORT   = -8, /*!< Reader: the buffer ends inside data the call needs; the
                                    file may be fine.  minipsd_reader_needed says how much more.  */
     MINIPSD_ERR_LIMIT   = -9  /*!< Reader: a value is over a limit (minipsd_limits).           */
@@ -164,6 +165,19 @@ typedef void minipsd_workspace;
 
 /** \brief The largest width or height PSD allows, in pixels. */
 #define MINIPSD_MAX_SIDE 30000
+
+/** \brief The largest width or height PSB allows, in pixels. */
+#define MINIPSD_MAX_SIDE_PSB 300000
+
+/**
+ * \brief The file format, as the version field of the header says.  PSB ("large document format")
+ *        is PSD with wider lengths and row counts; what the file holds means the same in both.
+ */
+enum {
+    MINIPSD_PSD = 1, /*!< Version 1: lengths of four bytes, row counts of two. */
+    MINIPSD_PSB = 2  /*!< Version 2: section, channel and some block lengths of eight bytes, row
+                          counts of four; sides up to MINIPSD_MAX_SIDE_PSB.                   */
+};
 
 /** \brief Channel compression.  Zero is RLE, so a zero-initialised document gets the compact one. */
 enum {
@@ -448,8 +462,9 @@ MINIPSDDEF int minipsd_writer_fill(minipsd_writer *w, void *buf, size_t cap, siz
  */
 typedef struct minipsd_limits {
     uint32_t max_side;          /*!< Largest width or height of the canvas, checked by init, and of
-                                     a layer, checked by next_layer; 0 is MINIPSD_MAX_SIDE for the
-                                     canvas and no limit for layers, which may reach past it.     */
+                                     a layer, checked by next_layer; 0 is the format's own for the
+                                     canvas (MINIPSD_MAX_SIDE, MINIPSD_MAX_SIDE_PSB for a PSB) and
+                                     no limit for layers, which may reach past it.                */
     uint32_t max_layers;        /*!< Most layers in a file; 0 is 32767, the format's cap.          */
     uint64_t max_decoded_bytes; /*!< Most bytes one decode call may write, width * rows * planes;
                                      0 is no limit.                                              */
@@ -458,8 +473,8 @@ typedef struct minipsd_limits {
 /**
  * \brief What a file says about itself, read by minipsd_reader_init.
  *
- * Any PSD of version 1 is described, whatever its colour mode or depth; it is the decoding that
- * is limited to 8- and 16-bit RGB.
+ * Any PSD or PSB is described, whatever its colour mode or depth; it is the decoding that is
+ * limited to 8- and 16-bit RGB.  Fields are only ever added at the end.
  */
 typedef struct minipsd_info {
     uint32_t      width, height;       /*!< In pixels.                                                 */
@@ -477,6 +492,9 @@ typedef struct minipsd_info {
                                             when the buffer ends before its end.  With an empty layer
                                             info, a block 'Lr16' or 'Lr32' (Photoshop's 16- and 32-bit
                                             files) holds the layers: next_layer reads them there.      */
+    uint16_t      format;              /*!< MINIPSD_PSD or MINIPSD_PSB: the layout of every view of the
+                                            file's bytes (channels with their row counts, blocks, the
+                                            layer tail).                                               */
 } minipsd_info;
 
 /** \brief The index of a colour channel in minipsd_layer_view.channel. */
@@ -526,6 +544,9 @@ typedef struct minipsd_layer_view {
                                                  buffer ends before it), real and rest as views;
                                                  pixels is NULL: minipsd_decode_mask decodes.          */
     uint64_t      mask_offset;              /*!< Where the mask's channel starts in the file (0: none). */
+    uint8_t       format;                   /*!< MINIPSD_PSD or MINIPSD_PSB, the file's: how extra's
+                                                 blocks and the channels' row counts are laid out.
+                                                 0 in a view built by hand is MINIPSD_PSD.             */
 } minipsd_layer_view;
 
 /**
@@ -569,7 +590,8 @@ MINIPSDDEF int minipsd_reader_workspace_size(size_t *size);
  *                                 workspace_size is too small.
  * \retval MINIPSD_ERR_SHORT       The buffer ends too soon.
  * \retval MINIPSD_ERR_FORMAT      Not a PSD, or malformed.  Four wrong bytes at the start are enough.
- * \retval MINIPSD_ERR_UNSUPPORTED A PSB (version 2).
+ * \retval MINIPSD_ERR_UNSUPPORTED A PSB whose layer and mask section is larger than size_t holds
+ *                                 (on a 32-bit platform).
  * \retval MINIPSD_ERR_LIMIT       A side or the layer count is over limits.
  */
 MINIPSDDEF int minipsd_reader_init(minipsd_reader **r, const void *data, size_t size, minipsd_workspace *workspace,
@@ -846,8 +868,8 @@ MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_li
  *
  * \retval MINIPSD_ERR_ARG         doc or block is NULL, or block_size is too small.
  * \retval MINIPSD_ERR_UNSUPPORTED Not 8- or 16-bit RGB, ZIP-compressed pixels to decode (with
- *                                 opts->stored they are copied), a PSB, or a layer wider or taller
- *                                 than MINIPSD_MAX_SIDE.
+ *                                 opts->stored they are copied), a PSB (no document of one can be
+ *                                 written yet), or a layer wider or taller than MINIPSD_MAX_SIDE.
  * \retval MINIPSD_ERR_SIZE        The document does not fit in memory (a block above SIZE_MAX).
  * \retval MINIPSD_ERR_FORMAT, MINIPSD_ERR_SHORT, MINIPSD_ERR_LIMIT  As the reader.
  */

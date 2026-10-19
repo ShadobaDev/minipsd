@@ -53,7 +53,9 @@ Channel pixel data is either raw or **PackBits RLE**: a per-row byte-count table
 the compressed rows; a 16-bit sample is two bytes, high first, and RLE packs a row's bytes.
 Photoshop compresses 16-bit layers with ZIP instead, and keeps their records in a global block
 `Lr16` after an empty layer info. Sides are capped at 30 000 px in PSD; PSB (version 2) lifts that to
-300 000 px and widens several length fields.
+300 000 px and widens several fields: the layer and mask section's length and the layer info's, each
+channel's length in a layer record and the length of blocks with certain keys take eight bytes, and
+RLE row counts take four. What every field means stays the same.
 
 Reference: Adobe's *Photoshop File Formats Specification*. When it and real readers disagree,
 real readers win (see [Verification](#verification)).
@@ -142,7 +144,7 @@ of 8- and 16-bit RGB files, layers and composite.
 | `minipsd_write_fn` | the callback of `minipsd_write`: non-zero to go on, 0 to abort |
 | `minipsd_reader` | opaque; built by `minipsd_reader_init` inside the workspace |
 | `minipsd_limits` | what the reader refuses: largest side (canvas, and layers when set), most layers, most bytes one decode call writes; zero fields keep the format's caps |
-| `minipsd_info` | what the file says about itself: size, depth, colour mode, dpi, ICC profile, layer count |
+| `minipsd_info` | what the file says about itself: size, depth, colour mode, dpi, ICC profile, layer count, format (PSD or PSB) |
 | `minipsd_bytes` | a read-only view into the caller's buffer |
 | `minipsd_resource`, `minipsd_layer_view`, `minipsd_block` | an image resource, a layer record, an additional-information block, as views |
 | `minipsd_target`, `minipsd_plane` | where decoded samples go: per channel R, G, B, A a pointer, a pixel step and a row step; any layout |
@@ -166,7 +168,7 @@ of 8- and 16-bit RGB files, layers and composite.
 | `MINIPSD_ERR_ALLOC` | -4 | `MINIPSD_MALLOC` returned NULL |
 | `MINIPSD_ERR_OPEN` | -5 | not returned by minipsd; reserved for the caller's file code (`examples/write_file.c`) |
 | `MINIPSD_ERR_FORMAT` | -6 | reader: not a well-formed PSD |
-| `MINIPSD_ERR_UNSUPPORTED` | -7 | reader: a valid PSD outside what minipsd reads: a PSB (version 2); for decoding, a file not 8- or 16-bit RGB, of another depth than `opts->depth`, or a ZIP-compressed channel |
+| `MINIPSD_ERR_UNSUPPORTED` | -7 | reader: a valid file outside what minipsd reads: for decoding, a file not 8- or 16-bit RGB, of another depth than `opts->depth`, or a ZIP-compressed channel; for `minipsd_read`, a PSB; on a 32-bit platform, a PSB whose layer and mask section `size_t` cannot hold |
 | `MINIPSD_ERR_SHORT` | -8 | reader: the buffer ends inside data the call needs; read more, `minipsd_reader_needed` says how much |
 | `MINIPSD_ERR_LIMIT` | -9 | reader: over `minipsd_limits`: the canvas's or a layer's side, the layer count, or the bytes of a decode call; the file is not known to be bad |
 
@@ -274,15 +276,21 @@ them; nothing is copied or allocated. Results on real files from other programs:
 [COMPATIBILITY.md](COMPATIBILITY.md).
 
 - **Which files:**
-  - every PSD of version 1 is described, whatever its colour mode (bitmap, grey, indexed, RGB,
+  - every PSD and PSB is described, whatever its colour mode (bitmap, grey, indexed, RGB,
     CMYK, multichannel, duotone, Lab) or depth (1, 8, 16, 32 bits);
   - pixels are decoded from 8- and 16-bit RGB files only, raw or PackBits; any other file, and
     a ZIP-compressed channel (Photoshop's at 16 bits), gives `MINIPSD_ERR_UNSUPPORTED` from the
     decode call;
   - the layers of a file whose layer info is empty come from its global block `Lr16` or `Lr32`
     (Photoshop's 16- and 32-bit files);
-  - a PSB (version 2) is refused by `minipsd_reader_init` with `MINIPSD_ERR_UNSUPPORTED`; four
-    wrong bytes at the start are `MINIPSD_ERR_FORMAT`.
+  - a PSB (version 2) reads as a PSD does, through the same calls; `minipsd_info.format` and
+    `minipsd_layer_view.format` say which, so a caller reading the views knows how wide their
+    lengths and row counts are. The 21 keys whose block length takes eight bytes in a PSB are
+    psd-tools' list: Adobe's specification names 13 (`LMsk`, `Lr16`, `Lr32`, `Layr`, `Mt16`,
+    `Mt32`, `Mtrn`, `Alph`, `FMsk`, `lnk2`, `FEid`, `FXid`, `PxSD`), and Photoshop also writes
+    `lnk3`, `lnkE`, `FELS`, `pths`, `extd`, `extn`, `cinf` and `artd` so. `minipsd_read` refuses
+    a PSB with `MINIPSD_ERR_UNSUPPORTED` until a document of one can be written;
+  - four wrong bytes at the start are `MINIPSD_ERR_FORMAT`.
 - **Header and resources:** size, channels, depth, colour mode; dpi from resource 1005
   (horizontal, 0 without it); the ICC profile from 1039. Every resource, these two included, is
   also returned as a raw view, with its name, in file order.

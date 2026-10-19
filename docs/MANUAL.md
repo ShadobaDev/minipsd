@@ -351,6 +351,12 @@ do not need: a file manager stops after `init`; a viewer goes straight to the co
 layers are iterators: each call returns `MINIPSD_MORE` with one item, then `MINIPSD_OK` when
 there are no more. Calling `init` again restarts both.
 
+A PSB (Photoshop's large document format, sides up to 300 000 px) reads through the same calls.
+`info.format` is `MINIPSD_PSB` then; the decoded pixels, names and rectangles are no different,
+only the raw views are laid out wider (a channel's RLE row counts take four bytes, some blocks'
+lengths eight), which matters only if you parse them yourself. `minipsd_read` does not take a PSB
+yet: its document could not be written back.
+
 ### A file read in parts
 
 Skip this section if your program holds the whole file in memory, as
@@ -451,7 +457,7 @@ malformed file:
 
 | Field | Checked by | 0 means |
 |---|---|---|
-| `max_side` | `init` for the canvas, `next_layer` for each layer | 30 000 for the canvas; no limit for layers, which may reach past it |
+| `max_side` | `init` for the canvas, `next_layer` for each layer | 30 000 for a PSD's canvas, 300 000 for a PSB's; no limit for layers, which may reach past it |
 | `max_layers` | `init` | 32 767, the format's cap |
 | `max_decoded_bytes` | each `decode_*` call, before it writes: width x rows x planes | no limit |
 

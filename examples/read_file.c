@@ -141,8 +141,11 @@ int main(int argc, char **argv)
     else if (show_pixels(r, NULL, info.width, info.height, info.depth) != MINIPSD_OK) failed = 1;
 
     /* The same file as a document, which minipsd_write takes back: anything lost is worth an issue.
-       ZIP channels cannot be decoded; read as stored, they are copied. */
-    if (rgb) {
+       ZIP channels cannot be decoded; read as stored, they are copied.  A PSB is read above, but
+       not as a document until one can be written. */
+    if (rgb && info.format == MINIPSD_PSB) {
+        printf("as a document: not yet, a PSB\n");
+    } else if (rgb) {
         minipsd_doc      *doc;
         minipsd_read_opts stored;
         uint32_t          lost = 0;
