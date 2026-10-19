@@ -420,8 +420,8 @@ static int mpsd__kept_ok(const minipsd_doc *d, unsigned out)
     }
 }
 
-/* A stored channel going into the other format: an RLE one's rows must be known, and fit a PSD's
-   two-byte counts when it goes there. */
+/* A stored channel going into the other format: an RLE one's rows must be known, its table must
+   hold them, and they must fit a PSD's two-byte counts when it goes there. */
 static int mpsd__retable_ok(const minipsd_doc *d, const minipsd_layer *l, int k, unsigned out)
 {
     const mpsd__source src = mpsd__channel_source(d, l, k);
@@ -429,6 +429,8 @@ static int mpsd__retable_ok(const minipsd_doc *d, const minipsd_layer *l, int k,
     if (!mpsd__retable(&src, mpsd__doc_psb(d), out)) return MINIPSD_OK;
     if (k == MPSD__CH_REAL && l->mask->rest.size < MPSD__REAL_RECT + MPSD__RECT_SIZE)
         return MINIPSD_ERR_UNSUPPORTED;                           /* no real rectangle to count rows by */
+    if (!mpsd__stored_ok(*src.stored, 0, src.height, 0, mpsd__doc_psb(d)))
+        return MINIPSD_ERR_ARG;                                   /* a real mask's table: mpsd__mask_ok knew no rows */
     for (y = 0; !out && y < src.height; ++y)                      /* a PSD's counts: two bytes */
         if (mpsd__count(src.stored->data + MPSD__MARKER_SIZE, y, 1) > 0xFFFFu) return MINIPSD_ERR_SIZE;
     return MINIPSD_OK;

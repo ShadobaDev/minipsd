@@ -709,11 +709,18 @@ TEST(MinipsdWriterTest, AnotherFormatRefusesWhatItCannotTranslate)
 
     // A real mask whose rectangle the mask data does not hold: its rows are unknown.
     const Bytes real = {0, 1, 0, 2, 0, 2, 0, 11, 0, 22}, shortRest = {0, 255};
-    const minipsd_mask mask{.bottom = 2, .right = 1, .pixels = px.data(), .real = {real.data(), real.size()},
-                            .rest = {shortRest.data(), shortRest.size()}};
+    minipsd_mask mask{.bottom = 2, .right = 1, .pixels = px.data(), .real = {real.data(), real.size()},
+                      .rest = {shortRest.data(), shortRest.size()}};
     layer.mask = &mask;
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK);
     EXPECT_EQ(minipsd_doc_check(&d, &asPsb), MINIPSD_ERR_UNSUPPORTED);
+
+    // A real mask whose rectangle (50 rows) its count table (2 rows) does not hold: copied as it is,
+    // it passes; going into the other format, its counts would be read past its end.
+    const Bytes tallRest = Bytes{0, 255} + be32(0) + be32(0) + be32(50) + be32(1);
+    mask.rest            = {tallRest.data(), tallRest.size()};
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK);
+    EXPECT_EQ(minipsd_doc_check(&d, &asPsb), MINIPSD_ERR_ARG);
     layer.mask = nullptr;
 
     // A PSB that a PSD cannot hold: a side, a row count.
