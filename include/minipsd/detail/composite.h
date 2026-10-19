@@ -25,7 +25,7 @@ static int mpsd__contributes(const minipsd_layer *l) { return l->rgba && !l->hid
 
 /* A layer's rectangle as written, and the size of its pixels: 0 by 0 for a layer without pixels or
    without area.  All four sides zero with pixels (rgba or stored channels) is the full canvas.
-   Valid after minipsd_doc_check, which keeps width and height within MINIPSD_MAX_SIDE. */
+   Valid after minipsd_doc_check, which keeps width and height within the format's side limit. */
 typedef struct mpsd__rect {
     int32_t  top, left, bottom, right;
     uint32_t width, height;

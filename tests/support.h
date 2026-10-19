@@ -33,10 +33,10 @@ int collect(void *user, const void *data, size_t size)
     return 1;
 }
 
-Bytes write(const minipsd_doc &doc, int expected = MINIPSD_OK)
+Bytes write(const minipsd_doc &doc, int expected = MINIPSD_OK, const minipsd_write_opts *opts = nullptr)
 {
     Bytes out;
-    EXPECT_EQ(minipsd_write(&doc, collect, &out), expected) << minipsd_error_string(expected);
+    EXPECT_EQ(minipsd_write(&doc, opts, collect, &out), expected) << minipsd_error_string(expected);
     return out;
 }
 
@@ -237,26 +237,26 @@ minipsd_doc docOf(std::uint32_t w, std::uint32_t h, const minipsd_layer *layers,
 
 // The pull writer's file size, from a workspace of exactly the size it asks for, starting
 // `offset` bytes into a buffer (so any alignment is exercised).
-std::uint64_t pullTotal(const minipsd_doc &d, std::size_t offset = 0)
+std::uint64_t pullTotal(const minipsd_doc &d, std::size_t offset = 0, const minipsd_write_opts *opts = nullptr)
 {
     std::size_t size = 0;
-    EXPECT_EQ(minipsd_writer_workspace_size(&d, &size), MINIPSD_OK);
+    EXPECT_EQ(minipsd_writer_workspace_size(&d, opts, &size), MINIPSD_OK);
     Bytes workspace(size + offset);
     minipsd_writer *w = nullptr;
-    EXPECT_EQ(minipsd_writer_init(&w, &d, workspace.data() + offset, size), MINIPSD_OK);
+    EXPECT_EQ(minipsd_writer_init(&w, &d, opts, workspace.data() + offset, size), MINIPSD_OK);
     EXPECT_NE(w, nullptr);
     return minipsd_writer_total(w);
 }
 
 // The whole file through the pull writer, cap bytes per call; cap 0 draws a cap of 1..97 per call.
 // Checks the protocol on the way: every call but the last fills buf, and the size is the total.
-Bytes pull(const minipsd_doc &d, std::size_t cap)
+Bytes pull(const minipsd_doc &d, std::size_t cap, const minipsd_write_opts *opts = nullptr)
 {
     std::size_t size = 0;
-    EXPECT_EQ(minipsd_writer_workspace_size(&d, &size), MINIPSD_OK);
+    EXPECT_EQ(minipsd_writer_workspace_size(&d, opts, &size), MINIPSD_OK);
     Bytes workspace(size), out, buf;
     minipsd_writer *w = nullptr;
-    EXPECT_EQ(minipsd_writer_init(&w, &d, workspace.data(), size), MINIPSD_OK);
+    EXPECT_EQ(minipsd_writer_init(&w, &d, opts, workspace.data(), size), MINIPSD_OK);
     if (!w) return out;
     std::uint32_t state = 12345;
     int rc = MINIPSD_MORE;

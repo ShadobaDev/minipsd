@@ -27,7 +27,7 @@
  *         { .name = "Layer", .opacity = 255 },                    // empty, above it
  *     };
  *     minipsd_doc doc = { .width = width, .height = height, .dpi = 300.0, .layers = layers, .layer_count = 2 };
- *     int rc = minipsd_write(&doc, file_out, f);   // file_out: fwrite to f, see minipsd_write_fn
+ *     int rc = minipsd_write(&doc, NULL, file_out, f);   // file_out: fwrite to f, see minipsd_write_fn
  *     if (rc != MINIPSD_OK) puts(minipsd_error_string(rc));
  * \endcode
  *
@@ -45,7 +45,8 @@
  * nothing.
  *
  * \par What it writes
- * An RGB document (PSD version 1), 8 or 16 bits a channel, with a transparency channel:
+ * An RGB document, as a PSD or (minipsd_doc.format) a PSB, 8 or 16 bits a channel, with a
+ * transparency channel:
  * - one or more layers, bottom first, each a rectangle anywhere on or off the canvas (by default
  *   the full canvas) or empty, with a name, opacity, visibility, blend key, clipping and flags;
  *   names go out both as a legacy Pascal string (ASCII) and as Unicode ('luni'), followed by any
@@ -63,8 +64,8 @@
  * Channel data is PackBits RLE by default (small for flat art), or raw.
  *
  * Groups (minipsd_layer.kind) and layer masks (minipsd_layer.mask) are written; text and effects
- * only as blocks kept from a file.  Not written: 32-bit, other colour modes, PSB.
- * PSD caps each side at 30000 px; larger documents are refused (MINIPSD_ERR_SIZE).
+ * only as blocks kept from a file.  Not written: 32-bit, other colour modes.
+ * PSD caps each side at 30000 px, PSB at 300000; larger documents are refused (MINIPSD_ERR_SIZE).
  *
  * \par Output
  * Bytes come out in order, never seeking back, so a pipe or a socket works as well as a file:
@@ -126,15 +127,18 @@ enum {
     MINIPSD_OK          =  0, /*!< Success.                                                   */
     MINIPSD_MORE        =  1, /*!< Not an error: the work is not finished, call again.         */
     MINIPSD_ERR_ARG     = -1, /*!< A NULL document, no layers, or a dpi outside (0, 65536).    */
-    MINIPSD_ERR_SIZE    = -2, /*!< A side is 0 or above MINIPSD_MAX_SIDE, or the document is too
-                                   large for PSD's 32-bit section lengths (about 4 GiB).      */
+    MINIPSD_ERR_SIZE    = -2, /*!< A side is 0 or above the format's (MINIPSD_MAX_SIDE, or
+                                   MINIPSD_MAX_SIDE_PSB), or the document is too large for
+                                   PSD's 32-bit section lengths (about 4 GiB).                */
     MINIPSD_ERR_WRITE   = -3, /*!< The write callback reported a failure.                      */
     MINIPSD_ERR_ALLOC   = -4, /*!< MINIPSD_MALLOC returned NULL.                               */
     MINIPSD_ERR_OPEN    = -5, /*!< Not returned by minipsd; kept for the caller's own file
                                    code (examples/): a file not opened or closed.             */
     MINIPSD_ERR_FORMAT  = -6, /*!< Reader: the bytes are not a well-formed PSD.                */
-    MINIPSD_ERR_UNSUPPORTED = -7, /*!< Reader: a valid PSD outside what minipsd reads: a PSB, or
-                                       pixels other than 8- or 16-bit RGB, or ZIP-compressed.     */
+    MINIPSD_ERR_UNSUPPORTED = -7, /*!< Valid, but outside what minipsd handles yet: reading,
+                                       pixels other than 8- or 16-bit RGB, or ZIP-compressed;
+                                       writing in the other format, kept content that cannot
+                                       change format yet.                                         */
     MINIPSD_ERR_SHORT   = -8, /*!< Reader: the buffer ends inside data the call needs; the
                                    file may be fine.  minipsd_reader_needed says how much more.  */
     MINIPSD_ERR_LIMIT   = -9  /*!< Reader: a value is over a limit (minipsd_limits).           */
@@ -164,6 +168,19 @@ typedef void minipsd_workspace;
 
 /** \brief The largest width or height PSD allows, in pixels. */
 #define MINIPSD_MAX_SIDE 30000
+
+/** \brief The largest width or height PSB allows, in pixels. */
+#define MINIPSD_MAX_SIDE_PSB 300000
+
+/**
+ * \brief The file format, as the version field of the header says.  PSB ("large document format")
+ *        is PSD with wider lengths and row counts; what the file holds means the same in both.
+ */
+enum {
+    MINIPSD_PSD = 1, /*!< Version 1: lengths of four bytes, row counts of two. */
+    MINIPSD_PSB = 2  /*!< Version 2: section, channel and some block lengths of eight bytes, row
+                          counts of four; sides up to MINIPSD_MAX_SIDE_PSB.                   */
+};
 
 /** \brief Channel compression.  Zero is RLE, so a zero-initialised document gets the compact one. */
 enum {
@@ -279,7 +296,8 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
  * borrowed for the duration of the write call.
  */
 typedef struct minipsd_doc {
-    uint32_t             width, height;  /*!< 1 .. MINIPSD_MAX_SIDE.                        */
+    uint32_t             width, height;  /*!< 1 .. MINIPSD_MAX_SIDE, or MINIPSD_MAX_SIDE_PSB
+                                              for a PSB.                                      */
     double               dpi;            /*!< Above 0, below 65536; recorded, not resampled. */
     const minipsd_layer *layers;         /*!< Bottom first.                                  */
     size_t               layer_count;    /*!< >= 1.                                          */
@@ -307,19 +325,43 @@ typedef struct minipsd_doc {
     uint16_t             depth;          /*!< Bits per channel: 0 or 8, or 16, where every sample
                                               (rgba, mask pixels, composite) is a uint16_t in
                                               host order, 0 .. 65535.                         */
+    uint16_t             format;         /*!< MINIPSD_PSD (or 0) or MINIPSD_PSB: what the
+                                              document is.  Everything kept from a file
+                                              (stored channels, masks' stored and real, extra,
+                                              layer_tail) is laid out as this format lays it
+                                              out; minipsd_read sets it to the file's.  It is
+                                              written as this format unless
+                                              minipsd_write_opts.format says otherwise.       */
 } minipsd_doc;
 
 /**
- * \brief Checks that a document can be written as PSD, without writing anything.
+ * \brief How a document is written.  NULL options write it as it is.
+ *
+ * Fields are only ever added at the end, and zero keeps the previous behaviour.
+ */
+typedef struct minipsd_write_opts {
+    uint16_t format; /*!< The file written: MINIPSD_PSD or MINIPSD_PSB; 0 is the document's own
+                          format.  When it differs from the document's, what the document keeps
+                          is translated: RLE row counts and long blocks' lengths widen or narrow.
+                          Blocks whose data itself depends on the format ('Lr16', 'Lr32',
+                          'Layr') and long keys not yet verified ('Alph', 'FELS', 'FEid', 'FXid',
+                          'Mt16', 'Mtrn', 'PxSD', 'lnk3') are refused (MINIPSD_ERR_UNSUPPORTED);
+                          a PSB that does not fit a PSD is MINIPSD_ERR_SIZE.                  */
+} minipsd_write_opts;
+
+/**
+ * \brief Checks that a document can be written, without writing anything.
  *
  * The writer runs the same check first; call it alone to validate a document early.  One limit
- * is left to the writer: the layer section must fit 4 GiB once compressed, which only the sizing
- * pass can tell (MINIPSD_ERR_SIZE from minipsd_writer_init or minipsd_write).
+ * is left to the writer: a PSD's layer section must fit 4 GiB once compressed, which only the
+ * sizing pass can tell (MINIPSD_ERR_SIZE from minipsd_writer_init or minipsd_write).
  *
- * \param doc The document to check.
+ * \param doc  The document to check.
+ * \param opts How it is to be written; NULL: as it is.
  * \return MINIPSD_OK or an error code.
  *
- * \retval MINIPSD_ERR_ARG  doc is NULL, there are no layers (or more than 32767), dpi is outside
+ * \retval MINIPSD_ERR_ARG  doc is NULL, a format is neither 0, MINIPSD_PSD nor MINIPSD_PSB (the
+ *                          document's or opts'), there are no layers (or more than 32767), dpi is outside
  *                          (0, 65536), depth is not 0, 8 or 16, a size is set without its data (icc, a resource, a name,
  *                          extra, layer_tail), a layer's rectangle is inverted, an empty layer's
  *                          has an area, extra is not a run of well-formed blocks, a stored
@@ -327,11 +369,18 @@ typedef struct minipsd_doc {
  *                          channels while the composite is to be composed, groups do not nest
  *                          (every group's top record needs its divider below it), or a mask's
  *                          rectangle is inverted or has an area without pixels.
- * \retval MINIPSD_ERR_SIZE A side of the canvas or of a layer is 0 or above MINIPSD_MAX_SIDE (a
- *                          layer's may be 0), a resource name is longer than 255 bytes, or the
- *                          resources or a layer's extra data do not fit a 32-bit length.
+ * \retval MINIPSD_ERR_SIZE A side of the canvas, a layer or a mask is 0 or above the format's
+ *                          (MINIPSD_MAX_SIDE, MINIPSD_MAX_SIDE_PSB; a layer's may be 0), a
+ *                          resource name is longer than 255 bytes, or the resources or a layer's
+ *                          extra data do not fit a 32-bit length, or a PSD's layers its 32-bit
+ *                          section length; written as a PSD from a PSB, a stored RLE row count
+ *                          above 65535 or a kept block above 4 GiB.
+ * \retval MINIPSD_ERR_UNSUPPORTED Written in the other format than the document's, a kept block
+ *                          that cannot change format yet (see minipsd_write_opts.format), a
+ *                          layer tail that is not blocks to its end, or an RLE real mask whose
+ *                          rectangle the mask data does not hold.
  */
-MINIPSDDEF int minipsd_doc_check(const minipsd_doc *doc);
+MINIPSDDEF int minipsd_doc_check(const minipsd_doc *doc, const minipsd_write_opts *opts);
 
 /* --- Writer -------------------------------------------------------------------------------- */
 
@@ -347,13 +396,14 @@ typedef int (*minipsd_write_fn)(void *user, const void *data, size_t size);
 
 #ifndef MINIPSD_NO_MALLOC
 /**
- * \brief Writes a document as PSD through a callback.
+ * \brief Writes a document as PSD (or PSB) through a callback.
  *
  * The callback receives the whole file front to back, in pieces of up to 4 KiB, and is never
  * asked to seek.  After it returns 0 it is not called again.  The same document always produces
  * the same bytes.  This is the pull writer driven to the end on a workspace from MINIPSD_MALLOC.
  *
  * \param doc  The document to write.
+ * \param opts How to write it; NULL: as it is, in its own format.
  * \param fn   Receives the bytes.
  * \param user Passed to fn unchanged.
  * \return MINIPSD_OK or an error code.
@@ -361,12 +411,13 @@ typedef int (*minipsd_write_fn)(void *user, const void *data, size_t size);
  * \retval MINIPSD_OK        The whole file went to fn.
  * \retval MINIPSD_ERR_ARG   doc or fn is NULL, or the document fails minipsd_doc_check with it.
  *                           Nothing was written.
- * \retval MINIPSD_ERR_SIZE  As minipsd_doc_check, or the layers do not fit a 32-bit section
+ * \retval MINIPSD_ERR_SIZE  As minipsd_doc_check, or a PSD's layers do not fit a 32-bit section
  *                           length.  Nothing was written.
+ * \retval MINIPSD_ERR_UNSUPPORTED As minipsd_doc_check.  Nothing was written.
  * \retval MINIPSD_ERR_ALLOC An allocation failed.  Nothing was written.
  * \retval MINIPSD_ERR_WRITE fn returned 0; the output is incomplete.
  */
-MINIPSDDEF int minipsd_write(const minipsd_doc *doc, minipsd_write_fn fn, void *user);
+MINIPSDDEF int minipsd_write(const minipsd_doc *doc, const minipsd_write_opts *opts, minipsd_write_fn fn, void *user);
 #endif
 
 /**
@@ -386,10 +437,11 @@ typedef struct minipsd_writer minipsd_writer;
  * one composite row, plus slack for aligning them: any pointer will do as the workspace.
  *
  * \param doc  The document to write.
+ * \param opts How it is to be written, as for minipsd_writer_init.
  * \param size Receives the size in bytes.
  * \return MINIPSD_OK or an error code: as minipsd_doc_check, or MINIPSD_ERR_ARG when size is NULL.
  */
-MINIPSDDEF int minipsd_writer_workspace_size(const minipsd_doc *doc, size_t *size);
+MINIPSDDEF int minipsd_writer_workspace_size(const minipsd_doc *doc, const minipsd_write_opts *opts, size_t *size);
 
 /**
  * \brief Prepares a pull writer: checks the document and runs the sizing pass.
@@ -399,16 +451,18 @@ MINIPSDDEF int minipsd_writer_workspace_size(const minipsd_doc *doc, size_t *siz
  *
  * \param w         Receives the writer, built at the start of workspace; NULL on failure.
  * \param doc       The document to write; borrowed for as long as the writer is used.
+ * \param opts      How to write it; NULL: as it is, in its own format.  Read here only.
  * \param workspace At least minipsd_writer_workspace_size bytes, any alignment; borrowed likewise.
  * \param size      The size of workspace in bytes.
  * \return MINIPSD_OK or an error code.
  *
  * \retval MINIPSD_ERR_ARG  As minipsd_doc_check, or w or workspace is NULL, or size is too small.
- * \retval MINIPSD_ERR_SIZE As minipsd_doc_check, or the compressed layers do not fit a 32-bit
+ * \retval MINIPSD_ERR_SIZE As minipsd_doc_check, or a PSD's compressed layers do not fit a 32-bit
  *                          section length.
+ * \retval MINIPSD_ERR_UNSUPPORTED As minipsd_doc_check.
  */
-MINIPSDDEF int minipsd_writer_init(minipsd_writer **w, const minipsd_doc *doc, minipsd_workspace *workspace,
-                                   size_t size);
+MINIPSDDEF int minipsd_writer_init(minipsd_writer **w, const minipsd_doc *doc, const minipsd_write_opts *opts,
+                                   minipsd_workspace *workspace, size_t size);
 
 /**
  * \brief The size of the whole file in bytes, known once minipsd_writer_init succeeded.
@@ -448,8 +502,9 @@ MINIPSDDEF int minipsd_writer_fill(minipsd_writer *w, void *buf, size_t cap, siz
  */
 typedef struct minipsd_limits {
     uint32_t max_side;          /*!< Largest width or height of the canvas, checked by init, and of
-                                     a layer, checked by next_layer; 0 is MINIPSD_MAX_SIDE for the
-                                     canvas and no limit for layers, which may reach past it.     */
+                                     a layer, checked by next_layer; 0 is the format's own for the
+                                     canvas (MINIPSD_MAX_SIDE, MINIPSD_MAX_SIDE_PSB for a PSB) and
+                                     no limit for layers, which may reach past it.                */
     uint32_t max_layers;        /*!< Most layers in a file; 0 is 32767, the format's cap.          */
     uint64_t max_decoded_bytes; /*!< Most bytes one decode call may write, width * rows * planes;
                                      0 is no limit.                                              */
@@ -458,8 +513,8 @@ typedef struct minipsd_limits {
 /**
  * \brief What a file says about itself, read by minipsd_reader_init.
  *
- * Any PSD of version 1 is described, whatever its colour mode or depth; it is the decoding that
- * is limited to 8- and 16-bit RGB.
+ * Any PSD or PSB is described, whatever its colour mode or depth; it is the decoding that is
+ * limited to 8- and 16-bit RGB.  Fields are only ever added at the end.
  */
 typedef struct minipsd_info {
     uint32_t      width, height;       /*!< In pixels.                                                 */
@@ -477,6 +532,9 @@ typedef struct minipsd_info {
                                             when the buffer ends before its end.  With an empty layer
                                             info, a block 'Lr16' or 'Lr32' (Photoshop's 16- and 32-bit
                                             files) holds the layers: next_layer reads them there.      */
+    uint16_t      format;              /*!< MINIPSD_PSD or MINIPSD_PSB: the layout of every view of the
+                                            file's bytes (channels with their row counts, blocks, the
+                                            layer tail).                                               */
 } minipsd_info;
 
 /** \brief The index of a colour channel in minipsd_layer_view.channel. */
@@ -526,6 +584,9 @@ typedef struct minipsd_layer_view {
                                                  buffer ends before it), real and rest as views;
                                                  pixels is NULL: minipsd_decode_mask decodes.          */
     uint64_t      mask_offset;              /*!< Where the mask's channel starts in the file (0: none). */
+    uint8_t       format;                   /*!< MINIPSD_PSD or MINIPSD_PSB, the file's: how extra's
+                                                 blocks and the channels' row counts are laid out.
+                                                 0 in a view built by hand is MINIPSD_PSD.             */
 } minipsd_layer_view;
 
 /**
@@ -569,7 +630,8 @@ MINIPSDDEF int minipsd_reader_workspace_size(size_t *size);
  *                                 workspace_size is too small.
  * \retval MINIPSD_ERR_SHORT       The buffer ends too soon.
  * \retval MINIPSD_ERR_FORMAT      Not a PSD, or malformed.  Four wrong bytes at the start are enough.
- * \retval MINIPSD_ERR_UNSUPPORTED A PSB (version 2).
+ * \retval MINIPSD_ERR_UNSUPPORTED A PSB whose layer and mask section is larger than size_t holds
+ *                                 (on a 32-bit platform).
  * \retval MINIPSD_ERR_LIMIT       A side or the layer count is over limits.
  */
 MINIPSDDEF int minipsd_reader_init(minipsd_reader **r, const void *data, size_t size, minipsd_workspace *workspace,
@@ -846,8 +908,8 @@ MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_li
  *
  * \retval MINIPSD_ERR_ARG         doc or block is NULL, or block_size is too small.
  * \retval MINIPSD_ERR_UNSUPPORTED Not 8- or 16-bit RGB, ZIP-compressed pixels to decode (with
- *                                 opts->stored they are copied), a PSB, or a layer wider or taller
- *                                 than MINIPSD_MAX_SIDE.
+ *                                 opts->stored they are copied), or a layer wider or taller than
+ *                                 the format allows the writer (MINIPSD_MAX_SIDE, _PSB).
  * \retval MINIPSD_ERR_SIZE        The document does not fit in memory (a block above SIZE_MAX).
  * \retval MINIPSD_ERR_FORMAT, MINIPSD_ERR_SHORT, MINIPSD_ERR_LIMIT  As the reader.
  */

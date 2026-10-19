@@ -98,6 +98,8 @@ include/
       utf.h                    UTF-8 <-> UTF-16 for layer names
       packbits.h               PackBits encode, decode, size bound; strided source and target
       composite.h              blending one row "over", white matte and un-matte
+      format.h                 the file's layout: each structure's fields and sizes, and what PSD and PSB
+                               differ in (length and row-count widths, long keys, blocks)
 examples/                      the I/O implementations; built and run in CI, never installed
   hello_write.c, hello_read.c  the shortest writer and reader: the manual's Getting started
   demo.h                       the document the other writers write (the golden "template-rle")
@@ -117,7 +119,7 @@ tools/
 | Module (section of `minipsd.h`) | Struct | Functions (sketch) | Implementation |
 |---|---|---|---|
 | Version, linkage, return codes | `minipsd_bytes { const uint8_t *data; size_t size; }` | `minipsd_error_string`; new codes, added never renumbered: `MINIPSD_MORE = 1` (positive: not an error, call again), `MINIPSD_ERR_FORMAT = -6`, `MINIPSD_ERR_UNSUPPORTED = -7`, `MINIPSD_ERR_SHORT = -8`, `MINIPSD_ERR_LIMIT = -9` | `base.h` |
-| Document | `minipsd_doc`, `minipsd_layer` (unchanged from 0.1) | `minipsd_doc_check(doc)`: the validation `minipsd_write` does today, now callable on its own | `writer.h` today; its own file if the reader shares it |
+| Document | `minipsd_doc`, `minipsd_layer` (unchanged from 0.1) | `minipsd_doc_check(doc, NULL)`: the validation `minipsd_write` does today, now callable on its own | `writer.h` today; its own file if the reader shares it |
 | Writer | `minipsd_writer` (opaque, built in the workspace) | `minipsd_writer_workspace_size`, `_init`, `_total`, `_fill`; `minipsd_write` | `writer.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
 | Reader | `minipsd_reader` (opaque, like the writer), `minipsd_info`, `minipsd_resource`, `minipsd_layer_view`, `minipsd_target` (of `minipsd_plane`), `minipsd_decode_opts`, `minipsd_limits` | `minipsd_reader_workspace_size`, `_init`, `_needed`, `_next_resource`, `_next_layer`, `minipsd_layer_name`, `minipsd_decode_layer`, `minipsd_decode_composite`, `minipsd_decode_mask`, `minipsd_target_rgba`, `minipsd_target_rgba16` | `reader.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
 | Document from a file | `MINIPSD_LOST_*` | `minipsd_read_size`, `minipsd_read_into`, `minipsd_read`, `minipsd_doc_free` | `read.h`, on the public reader (and its record offsets, to tell what is lost) |
@@ -151,7 +153,7 @@ three:
 | Scenario | Write | Read |
 |---|---|---|
 | **Memory** (whole buffer, `mmap`, upload body) | `minipsd_writer_total` gives the exact size; one `minipsd_writer_fill` call fills the buffer | `minipsd_reader_init` over the buffer |
-| **Blocking stream** (file, blocking pipe or socket) | `minipsd_write(doc, fn, user)`: the library calls `fn` until done | the caller reads everything into memory, then as above |
+| **Blocking stream** (file, blocking pipe or socket) | `minipsd_write(doc, NULL, fn, user)`: the library calls `fn` until done | the caller reads everything into memory, then as above |
 | **Non-blocking stream** (`O_NONBLOCK`, event loop, async I/O) | `minipsd_writer_fill` into the caller's buffer whenever the target is writable; the library never waits | as above; a streaming parser is not planned (see [Reader](#reader)) |
 
 The one function pointer type stays the one from 0.1:
@@ -255,7 +257,9 @@ workspace). Every pointer below is a borrowed view into the blob or the caller's
     (`size == 0` when absent);
   - `layer_count`;
   - `composite_has_alpha`: the file's layer count is negative, so the composite's first extra
-    channel is transparency.
+    channel is transparency;
+  - `format`, `MINIPSD_PSD` or `MINIPSD_PSB`: how the views are laid out. The layer view
+    carries it too, so `minipsd_layer_next_block` walks a PSB's blocks with nothing else at hand.
 - **`minipsd_resource`** (`R2`, `R10`): `{ uint16_t id; minipsd_bytes data; }`. The reader
   decodes 1005 (into `dpi`) and 1039 (into `icc`) and still lists them. Every other resource,
   thumbnail 1036 included, is only a raw view. There is no find-by-id: resources are few, and the
@@ -355,7 +359,7 @@ typedef struct minipsd_decode_opts {
 
 ```c
 typedef struct minipsd_limits {
-    uint32_t max_side;           /* canvas: 0 is MINIPSD_MAX_SIDE; layers: 0 is no limit */
+    uint32_t max_side;           /* canvas: 0 is the format's (MINIPSD_MAX_SIDE, _PSB); layers: 0 is no limit */
     uint32_t max_layers;         /* 0: 32767, the format's own cap */
     uint64_t max_decoded_bytes;  /* per decode call, width * rows * planes; 0: no limit */
 } minipsd_limits;                /* nesting depth goes at the end with layer groups */
@@ -432,11 +436,18 @@ while ((rc = minipsd_reader_init(&r, buf, have, ws, ws_size, NULL, &info)) == MI
     `if (remaining < n) fail`, never as `p + n > end`.
   - Every size computation is overflow-checked.
   - A malformed file returns `MINIPSD_ERR_FORMAT`.
-  - **What is described, and what is decoded.** `init` and `next_layer` describe any PSD of
-    version 1, whatever its colour mode or depth, so a file manager can list a CMYK or 16-bit file
+  - **What is described, and what is decoded.** `init` and `next_layer` describe any PSD or
+    PSB, whatever its colour mode or depth, so a file manager can list a CMYK or 16-bit file
     (`R1`). Only the pixel decoding is limited to 8- and 16-bit RGB (`MINIPSD_ERR_UNSUPPORTED`,
-    from `decode_*`), as is any feature it does not decode yet, ZIP among them. A PSB (version 2)
-    is refused by `init`, since its lengths are wider.
+    from `decode_*`), as is any feature it does not decode yet, ZIP among them.
+  - **PSB is a layout, not a feature.** The reader keeps one flag, and every width that depends on
+    it comes from `detail/format.h`, which the writer shares: lengths (`mpsd__getlen`,
+    `mpsd__putlen`), RLE row counts (`mpsd__count`, `mpsd__putcount`), and a block's header, whose
+    length is eight bytes for the keys in `mpsd__long_key` (psd-tools' list, which Photoshop's
+    files bear out: Adobe's names 13 of the 21). Views keep the file's layout and say so (`format` in the info and the view). A section
+    length of 2^62 or more is malformed, so offsets built from lengths never wrap; one above
+    `SIZE_MAX` (a 32-bit platform) is `MINIPSD_ERR_UNSUPPORTED`, since views could not state their
+    sizes.
   - **Layers in `Lr16`.** Photoshop leaves the layer info of a 16- or 32-bit file empty and keeps
     the same structure in a global block, `Lr16` or `Lr32`. With an empty layer info, `init`
     walks the global blocks' headers (each padded to four bytes past its stated length) and,
@@ -631,7 +642,7 @@ feature is serialization: written and read as data. The composite composed as a 
 | **Layer groups (`lsct`)** | done: `kind` (`MINIPSD_KIND_*`); zero = layer | done: the `lsct` block, the group's mode in it; a kept one of the same kind as it is; nesting checked | done: `kind` in the view | — | the composed composite draws groups flat |
 | **Layer masks** | done: `mask` (`minipsd_mask`: rectangle, colour, flags, pixels or stored, kept real mask and rest) | done: mask data, channels -2 and -3 | done: the view's mask, `minipsd_decode_mask` | — | the composed composite ignores masks |
 | **16-bit channels** | done: `depth` on `minipsd_doc`; zero = 8 | done: 2-byte samples, big-endian, in the layer info | done: `depth` in `minipsd_decode_opts`, layers from `Lr16`, `minipsd_read` | done: `bytes` (`mpsd__at`, samples), `packbits` over a row's bytes, `composite` against 65535 | ZIP channels pass only as stored |
-| **PSB (version 2)** | `format` on `minipsd_doc`; zero = PSD | 8-byte lengths, 4-byte RLE counts | both versions | `bytes`: 64-bit fields | sides up to 300 000 px |
+| **PSB (version 2)** | done: `format` on `minipsd_doc` (`MINIPSD_PSD`, `MINIPSD_PSB`; zero = PSD): the layout of everything in the document, set by `minipsd_read`; the output format a write option, zero = the document's (decided over two document fields and over a converting copy: one field never describes a wish, and a translating writer stays zero-copy, as `tiffsave`'s `bigtiff` does) | done: 8-byte lengths, 4-byte RLE counts; `minipsd_write_opts.format` on the write calls, kept bytes translated while streaming (RLE count tables, long keys' lengths), by a policy per long key in `format.h` | done: both versions, `format` in the info and the view, `minipsd_read` sets the document's | `format`: widths, long keys, blocks | sides up to 300 000 px |
 
 ## Distribution of a multi-file library
 
@@ -678,6 +689,21 @@ Every stage follows these rules:
 - **The spec follows the code.** When a stage lands, its part of this file moves into
   [SPECIFICATION.md](SPECIFICATION.md), and this file keeps only what is still ahead.
 
+Work reaches `master` only through a pull request whose CI passes. Its branch is named
+`<prefix>/<short-name>` (lower case, words joined by `-`, an issue's number first when there is
+one: `fix/12-real-mask-table`), the prefix saying what kind of change it is:
+
+| Prefix | The change |
+|---|---|
+| `feature/` | a new function or addition, a ROADMAP step or a requested feature |
+| `fix/` | a repair of existing code, a reported issue |
+| `refactor/` | code changed without changing what it does: the same bytes, the same results |
+| `ci/` | the CI workflows |
+| `docs/` | files that are not source code |
+
+A branch holding several kinds is named by the main one, as its commits' types (`feat`, `fix`,
+`refactor`, `ci`, `docs`) say.
+
 ## Decisions
 
 Taken at review, 2026-10-14.
@@ -718,6 +744,6 @@ Taken at the S4.1 review, 2026-10-15 (the reader):
     code page.
 14. **Layer views carry R, G, B and A only**, with a count of the channels left out; masks join
     with the layer-mask feature.
-15. **`init` and `next_layer` describe any version-1 PSD**; `UNSUPPORTED` comes from the pixel
-    decoding (S4.4, S4.5) and, in `init`, for a PSB only. Found while implementing S4.2: listing
-    a CMYK file's layers is `R1`'s job.
+15. **`init` and `next_layer` describe any PSD**; `UNSUPPORTED` comes from the pixel
+    decoding (S4.4, S4.5). Found while implementing S4.2: listing a CMYK file's layers is `R1`'s
+    job. Since S6.6 the same holds for a PSB.

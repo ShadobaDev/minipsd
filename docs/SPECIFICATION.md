@@ -31,8 +31,8 @@ canvas templates.
 - **No hidden state:** the writer and the reader live in memory the caller lends them (a
   workspace) and hold nothing else; there is no global state and nothing to initialise or shut
   down. `minipsd_write` takes a complete document and produces a complete file in one call.
-- **Writes a subset, reads any PSD:** it writes 8- and 16-bit RGB documents
-  ([What goes into the file](#what-goes-into-the-file)); it describes every PSD of version 1 and
+- **Writes a subset, reads any PSD:** it writes 8- and 16-bit RGB documents as PSD or PSB
+  ([What goes into the file](#what-goes-into-the-file)); it describes every PSD and PSB and
   decodes the pixels of 8- and 16-bit RGB ones ([What is read](#what-is-read)).
 - **Lightweight first, extensible second:** a feature is added only when it can be added
   without making the simple case harder.
@@ -53,7 +53,9 @@ Channel pixel data is either raw or **PackBits RLE**: a per-row byte-count table
 the compressed rows; a 16-bit sample is two bytes, high first, and RLE packs a row's bytes.
 Photoshop compresses 16-bit layers with ZIP instead, and keeps their records in a global block
 `Lr16` after an empty layer info. Sides are capped at 30 000 px in PSD; PSB (version 2) lifts that to
-300 000 px and widens several length fields.
+300 000 px and widens several fields: the layer and mask section's length and the layer info's, each
+channel's length in a layer record and the length of blocks with certain keys take eight bytes, and
+RLE row counts take four. What every field means stays the same.
 
 Reference: Adobe's *Photoshop File Formats Specification*. When it and real readers disagree,
 real readers win (see [Verification](#verification)).
@@ -97,12 +99,12 @@ The declarations, with every parameter and return code, are in
 
 | Function | For |
 |---|---|
-| `minipsd_doc_check(doc)` | validating a document without writing it |
-| `minipsd_writer_workspace_size(doc, &size)` | the workspace the pull writer needs for this document |
-| `minipsd_writer_init(&w, doc, workspace, size)` | building the writer inside the workspace and running the sizing pass; nothing is allocated |
+| `minipsd_doc_check(doc, opts)` | validating a document without writing it |
+| `minipsd_writer_workspace_size(doc, opts, &size)` | the workspace the pull writer needs for this document |
+| `minipsd_writer_init(&w, doc, opts, workspace, size)` | building the writer inside the workspace and running the sizing pass; nothing is allocated |
 | `minipsd_writer_total(w)` | the file size, known before the first byte |
 | `minipsd_writer_fill(w, buf, cap, &produced)` | the next bytes, into the caller's buffer: `MINIPSD_MORE` until `MINIPSD_OK` |
-| `minipsd_write(doc, fn, user)` | the whole file through a callback, on a workspace from `MINIPSD_MALLOC`; absent under `MINIPSD_NO_MALLOC` |
+| `minipsd_write(doc, opts, fn, user)` | the whole file through a callback, on a workspace from `MINIPSD_MALLOC`; absent under `MINIPSD_NO_MALLOC` |
 | `minipsd_reader_workspace_size(&size)` | the reader's workspace: fixed, known before the file |
 | `minipsd_reader_init(&r, data, size, workspace, workspace_size, limits, &info)` | the file's description and its resources, from the whole file or a prefix of it |
 | `minipsd_reader_needed(r)` | after `MINIPSD_ERR_SHORT`: the least buffer size with which the call goes further |
@@ -140,9 +142,10 @@ of 8- and 16-bit RGB files, layers and composite.
 | `minipsd_workspace` | `void`: caller memory lent to the writer or the reader, sized by its `*_workspace_size` function |
 | `minipsd_writer` | opaque; built by `minipsd_writer_init` inside the workspace |
 | `minipsd_write_fn` | the callback of `minipsd_write`: non-zero to go on, 0 to abort |
+| `minipsd_write_opts` | how a document is written: `format`, the file's (PSD or PSB), 0 for the document's own; `NULL` writes it as it is |
 | `minipsd_reader` | opaque; built by `minipsd_reader_init` inside the workspace |
 | `minipsd_limits` | what the reader refuses: largest side (canvas, and layers when set), most layers, most bytes one decode call writes; zero fields keep the format's caps |
-| `minipsd_info` | what the file says about itself: size, depth, colour mode, dpi, ICC profile, layer count |
+| `minipsd_info` | what the file says about itself: size, depth, colour mode, dpi, ICC profile, layer count, format (PSD or PSB) |
 | `minipsd_bytes` | a read-only view into the caller's buffer |
 | `minipsd_resource`, `minipsd_layer_view`, `minipsd_block` | an image resource, a layer record, an additional-information block, as views |
 | `minipsd_target`, `minipsd_plane` | where decoded samples go: per channel R, G, B, A a pointer, a pixel step and a row step; any layout |
@@ -161,12 +164,12 @@ of 8- and 16-bit RGB files, layers and composite.
 | `MINIPSD_OK` | 0 | success |
 | `MINIPSD_MORE` | 1 | not an error: `minipsd_writer_fill` has more bytes, an iterator produced an item, or a name needs more room; call again |
 | `MINIPSD_ERR_ARG` | -1 | NULL document or callback, no layers, ICC size without data, or a dpi that 16.16 fixed point cannot hold (see below) |
-| `MINIPSD_ERR_SIZE` | -2 | a side is 0 or above `MINIPSD_MAX_SIDE`, or a section is longer than its 32-bit length field allows (see below) |
+| `MINIPSD_ERR_SIZE` | -2 | a side is 0 or above the format's (`MINIPSD_MAX_SIDE`, `MINIPSD_MAX_SIDE_PSB`), or a section is longer than its length field allows (see below) |
 | `MINIPSD_ERR_WRITE` | -3 | the callback returned 0 |
 | `MINIPSD_ERR_ALLOC` | -4 | `MINIPSD_MALLOC` returned NULL |
 | `MINIPSD_ERR_OPEN` | -5 | not returned by minipsd; reserved for the caller's file code (`examples/write_file.c`) |
 | `MINIPSD_ERR_FORMAT` | -6 | reader: not a well-formed PSD |
-| `MINIPSD_ERR_UNSUPPORTED` | -7 | reader: a valid PSD outside what minipsd reads: a PSB (version 2); for decoding, a file not 8- or 16-bit RGB, of another depth than `opts->depth`, or a ZIP-compressed channel |
+| `MINIPSD_ERR_UNSUPPORTED` | -7 | reader: a valid file outside what minipsd reads: for decoding, a file not 8- or 16-bit RGB, of another depth than `opts->depth`, or a ZIP-compressed channel; on a 32-bit platform, a PSB whose layer and mask section `size_t` cannot hold |
 | `MINIPSD_ERR_SHORT` | -8 | reader: the buffer ends inside data the call needs; read more, `minipsd_reader_needed` says how much |
 | `MINIPSD_ERR_LIMIT` | -9 | reader: over `minipsd_limits`: the canvas's or a layer's side, the layer count, or the bytes of a decode call; the file is not known to be bad |
 
@@ -206,13 +209,32 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
 
 ## What goes into the file
 
-- PSD version 1, RGB, 4 channels (R, G, B, transparency), 8 bits per channel or, with `depth`
-  16, 16: every sample (`rgba`, mask `pixels`, `composite`) is then a `uint16_t` in host order,
-  written big-endian. The layers go in the layer info at both depths, never in `Lr16`.
+- PSD (version 1) or, with `format` `MINIPSD_PSB`, PSB (version 2), RGB, 4 channels (R, G, B,
+  transparency), 8 bits per channel or, with `depth` 16, 16: every sample (`rgba`, mask
+  `pixels`, `composite`) is then a `uint16_t` in host order, written big-endian. The layers go
+  in the layer info at both depths, never in `Lr16`.
+- **The format is what the document is.** A PSB is written with its wide fields (eight-byte
+  section and channel lengths, four-byte RLE row counts), and everything kept from a file is
+  written as it is, so it must be in that format's layout: `minipsd_read` sets `format` to the
+  file's.
+- **Written in the other format** (`minipsd_write_opts.format`), what the document keeps is
+  translated: a stored RLE channel's row count table (layers, masks, real masks) re-written two
+  bytes a row wider or narrower, the rows copied; a kept block's length re-written for the 21
+  long keys, its data copied; everything else (resources, mask data, raw and ZIP channels, short
+  keys' blocks) is the same in both. Refused, before a byte is written:
+  - `MINIPSD_ERR_UNSUPPORTED` for a block whose data is itself a layer info of the format
+    (`Lr16`, `Lr32`, `Layr`; `minipsd_read` never keeps them), for a long key no file has
+    verified yet (`Alph`, `FELS`, `FEid`, `FXid`, `Mt16`, `Mtrn`, `PxSD`, `lnk3`), for a layer tail
+    that is not blocks to its end, and for an RLE real mask whose rectangle the mask data does
+    not hold. The verified long keys are those psd-tools' PSD and PSB twins hold: `FMsk`, `LMsk`,
+    `Mt32`, `pths`, `lnk2`, `lnkE` (whose inner lengths are eight bytes in both), `cinf`, `artd`,
+    `extd`, `extn`;
+  - `MINIPSD_ERR_SIZE` for a PSB going to PSD that does not fit one: a side above 30 000 px, a
+    stored row count above 65 535, a block or the layer section above 4 GiB.
 - **Layers:**
   - each at its rectangle (`top, left, bottom, right`; all zero is the full canvas), which may
-    reach past the canvas or lie wholly outside it; a side of at most 30 000 px, since RLE row
-    counts are 16 bits;
+    reach past the canvas or lie wholly outside it; a side of at most 30 000 px in a PSD, since
+    its RLE row counts are 16 bits, 300 000 in a PSB;
   - or empty: no pixels, a rectangle without area (by default 0x0), channels that hold no data;
   - name twice: a legacy Pascal string (ASCII, every non-ASCII character replaced by `?`) and a
     `luni` block in UTF-16 with surrogate pairs;
@@ -258,14 +280,16 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
   callback and never seeks back.
 - **Allocations:** see [Memory and ownership](#memory-and-ownership).
 - **Limits** (all checked before anything is written):
-  - each side 1 .. 30 000 px, otherwise `MINIPSD_ERR_SIZE`;
+  - each side 1 .. 30 000 px in a PSD, 1 .. 300 000 in a PSB, otherwise `MINIPSD_ERR_SIZE`;
   - 1 .. 32 767 layers, otherwise `MINIPSD_ERR_ARG`;
   - dpi must round to 1 .. 2^32 - 1 in 16.16 fixed point, i.e. from about 0.0000076 to just below
     65 536 (NaN and infinity excluded), otherwise `MINIPSD_ERR_ARG`;
-  - PSD version 1 stores section lengths in 32 bits, so the layer section (records and channel
-    data) and the image resources (resolution + ICC profile) must each stay under 4 GiB,
-    otherwise `MINIPSD_ERR_SIZE`. Example: two full 30 000 x 30 000 layers in RAW are about
-    7.2 GB and are refused; the same in RLE usually fits. The composite has no length field.
+  - a PSD stores section lengths in 32 bits, so the layer section (records and channel data)
+    and the image resources (resolution + ICC profile) must each stay under 4 GiB, otherwise
+    `MINIPSD_ERR_SIZE`. Example: two full 30 000 x 30 000 layers in RAW are about 7.2 GB and are
+    refused; the same in RLE usually fits, and as a PSB both fit. A PSB's layer section has a
+    64-bit length; its resources, and in both formats a layer's extra data, keep 32 bits. The
+    composite has no length field.
 
 ## What is read
 
@@ -274,15 +298,21 @@ them; nothing is copied or allocated. Results on real files from other programs:
 [COMPATIBILITY.md](COMPATIBILITY.md).
 
 - **Which files:**
-  - every PSD of version 1 is described, whatever its colour mode (bitmap, grey, indexed, RGB,
+  - every PSD and PSB is described, whatever its colour mode (bitmap, grey, indexed, RGB,
     CMYK, multichannel, duotone, Lab) or depth (1, 8, 16, 32 bits);
   - pixels are decoded from 8- and 16-bit RGB files only, raw or PackBits; any other file, and
     a ZIP-compressed channel (Photoshop's at 16 bits), gives `MINIPSD_ERR_UNSUPPORTED` from the
     decode call;
   - the layers of a file whose layer info is empty come from its global block `Lr16` or `Lr32`
     (Photoshop's 16- and 32-bit files);
-  - a PSB (version 2) is refused by `minipsd_reader_init` with `MINIPSD_ERR_UNSUPPORTED`; four
-    wrong bytes at the start are `MINIPSD_ERR_FORMAT`.
+  - a PSB (version 2) reads as a PSD does, through the same calls; `minipsd_info.format` and
+    `minipsd_layer_view.format` say which, so a caller reading the views knows how wide their
+    lengths and row counts are. The 21 keys whose block length takes eight bytes in a PSB are
+    psd-tools' list: Adobe's specification names 13 (`LMsk`, `Lr16`, `Lr32`, `Layr`, `Mt16`,
+    `Mt32`, `Mtrn`, `Alph`, `FMsk`, `lnk2`, `FEid`, `FXid`, `PxSD`), and Photoshop also writes
+    `lnk3`, `lnkE`, `FELS`, `pths`, `extd`, `extn`, `cinf` and `artd` so. `minipsd_read` gives
+    a document whose `format` is the file's, written back as a PSB;
+  - four wrong bytes at the start are `MINIPSD_ERR_FORMAT`.
 - **Header and resources:** size, channels, depth, colour mode; dpi from resource 1005
   (horizontal, 0 without it); the ICC profile from 1039. Every resource, these two included, is
   also returned as a raw view, with its name, in file order.

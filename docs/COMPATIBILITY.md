@@ -53,20 +53,20 @@ python tools/compat_report.py build/msvc/examples/Debug/read_file.exe build/msvc
 
 | Result | Files | Meaning |
 |---|---|---|
-| decoded | 221 | every layer and the composite decoded to pixels |
-| described | 56 | header, resources and layers read; pixels not decoded: outside 8- and 16-bit RGB, or ZIP |
-| refused | 37 | the reader does not open the file (see below) |
+| decoded | 248 | every layer and the composite decoded to pixels |
+| described | 66 | header, resources and layers read; pixels not decoded: outside 8- and 16-bit RGB, or ZIP |
+| refused | 0 | the reader does not open the file (see below) |
 | failed | 1 | malformed, or a reader bug (see below) |
 
 ### By colour mode and depth
 
 | Colour mode, depth | Files | Pixels |
 |---|---|---|
-| 8-bit RGB | 221 | decoded |
-| 8-bit grey | 14 | not yet: described only |
+| 8-bit RGB | 248 | decoded |
+| 32-bit RGB | 16 | not yet: described only |
+| 8-bit grey | 16 | not yet: described only |
 | 8-bit CMYK | 13 | not yet: described only |
-| 32-bit RGB | 9 | not yet: described only |
-| 16-bit RGB | 4 | decoded, but ZIP-compressed layers in 3 |
+| 16-bit RGB | 5 | decoded, but ZIP-compressed layers in 4 |
 | 8-bit Lab | 4 | not yet: described only |
 | 1-bit bitmap | 3 | not yet: described only |
 | 16-bit grey | 3 | not yet: described only |
@@ -76,12 +76,6 @@ python tools/compat_report.py build/msvc/examples/Debug/read_file.exe build/msvc
 | 32-bit grey | 1 | not yet: described only |
 | 8-bit duotone | 1 | not yet: described only |
 | 8-bit indexed | 1 | not yet: described only |
-
-### Refused
-
-| Reason | Files |
-|---|---|
-| PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 | 37 |
 
 ### Failed
 
@@ -96,15 +90,15 @@ minipsd decodes each layer's pixels as stored and hands these features over as r
 | Feature | Layers | Files |
 |---|---|---|
 | Blend modes other than normal | 272 | 47 |
-| Layer groups | 312 | 86 |
-| Layer masks | 442 | 132 |
+| Layer groups | 327 | 94 |
+| Layer masks | 488 | 147 |
 | Other channels, not read (alpha, spot, CMYK's black) | 316 | 12 |
 | Adjustment layers | 183 | 68 |
-| Fill layers (solid, gradient, pattern) | 517 | 123 |
-| Text layers | 33 | 13 |
-| Smart objects | 334 | 7 |
-| Layer effects | 372 | 42 |
-| Vector masks and shapes | 1057 | 113 |
+| Fill layers (solid, gradient, pattern) | 571 | 144 |
+| Text layers | 43 | 17 |
+| Smart objects | 340 | 9 |
+| Layer effects | 402 | 45 |
+| Vector masks and shapes | 1118 | 131 |
 
 Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`) 12, exclusion (`smud`) 11, color burn (`idiv`) 10, hard mix (`hMix`) 10, divide (`fdiv`) 10, screen (`scrn`) 10, hard light (`hLit`) 10, overlay (`over`) 9, lighten (`lite`) 9, color dodge (`div `) 9, soft light (`sLit`) 9, difference (`diff`) 9, subtract (`fsub`) 9, linear burn (`lbrn`) 9, vivid light (`vLit`) 9, linear light (`lLit`) 9, pin light (`pLit`) 9, lighter color (`lgCl`) 9, dissolve (`diss`) 9, hue (`hue `) 7, saturation (`sat `) 7, color (`colr`) 7, luminosity (`lum `) 7, darker color (`dkCl`) 7, pass through (`pass`) 5.
 
@@ -112,23 +106,23 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 
 | File | Result | Note |
 |---|---|---|
-| `0layers.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `0layers.psb` | decoded |  |
 | `0layers.psd` | decoded |  |
-| `0layers_tblocks.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `0layers_tblocks.psb` | decoded |  |
 | `0layers_tblocks.psd` | decoded |  |
-| `16bit5x5.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `16bit5x5.psb` | described | 16-bit RGB: ZIP-compressed layers, copied, not decoded |
 | `16bit5x5.psd` | described | 16-bit RGB: ZIP-compressed layers, copied, not decoded |
-| `1layer.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `1layer.psb` | decoded |  |
 | `1layer.psd` | decoded |  |
 | `1layer2.psd` | decoded |  |
 | `2layer_8ele_tblocks.psd` | decoded |  |
-| `2layers.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `2layers.psb` | decoded |  |
 | `2layers.psd` | decoded |  |
-| `300dpi.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `300dpi.psb` | described | 32-bit RGB: pixels not decoded yet |
 | `300dpi.psd` | described | 32-bit RGB: pixels not decoded yet |
-| `32bit.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `32bit.psb` | described | 32-bit RGB: pixels not decoded yet |
 | `32bit.psd` | described | 32-bit RGB: pixels not decoded yet |
-| `32bit5x5.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `32bit5x5.psb` | described | 32-bit RGB: pixels not decoded yet |
 | `32bit5x5.psd` | described | 32-bit RGB: pixels not decoded yet |
 | `adjustment-fillers.psd` | decoded |  |
 | `adjustment-mask.psd` | decoded |  |
@@ -208,10 +202,10 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 | `blend-modes/soft-light.psd` | decoded |  |
 | `blend-modes/subtract.psd` | decoded |  |
 | `blend-modes/vivid-light.psd` | decoded |  |
-| `broken-groups.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `broken-groups.psb` | decoded |  |
 | `broken-groups.psd` | decoded |  |
 | `clip-adjustment.psd` | decoded |  |
-| `clipping-mask.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `clipping-mask.psb` | decoded |  |
 | `clipping-mask.psd` | decoded |  |
 | `clipping-mask2.psd` | decoded |  |
 | `clipping-mask3.psd` | decoded |  |
@@ -269,10 +263,10 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 | `effects/stroke-effects.psd` | decoded |  |
 | `effects/stroke-without-vector-mask.psd` | decoded |  |
 | `empty-group.psd` | decoded |  |
-| `empty-layer.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `empty-layer.psb` | decoded |  |
 | `empty-layer.psd` | decoded |  |
 | `fill_adjustments.psd` | decoded |  |
-| `gradient-fill.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `gradient-fill.psb` | described | 32-bit RGB: pixels not decoded yet |
 | `gradient-fill.psd` | described | 32-bit RGB: pixels not decoded yet |
 | `gradient-sizes.psd` | decoded |  |
 | `gradient-styles.psd` | decoded |  |
@@ -280,27 +274,27 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 | `gradients/noise-gradient-grayscale.psd` | described | 8-bit grey: pixels not decoded yet |
 | `gradients/noise-gradient-lab.psd` | described | 8-bit Lab: pixels not decoded yet |
 | `gradients/noise-gradient-rgb.psd` | decoded |  |
-| `gray0.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `gray0.psb` | described | 8-bit grey: pixels not decoded yet |
 | `gray0.psd` | described | 8-bit grey: pixels not decoded yet |
-| `gray1.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `gray1.psb` | described | 8-bit grey: pixels not decoded yet |
 | `gray1.psd` | described | 8-bit grey: pixels not decoded yet |
 | `group-clipping/group-clipping.psd` | decoded |  |
-| `group.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `group.psb` | decoded |  |
 | `group.psd` | decoded |  |
-| `hidden-groups.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `hidden-groups.psb` | decoded |  |
 | `hidden-groups.psd` | decoded |  |
-| `hidden-layer.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `hidden-layer.psb` | decoded |  |
 | `hidden-layer.psd` | decoded |  |
-| `history.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `history.psb` | decoded |  |
 | `history.psd` | decoded |  |
 | `issues/issue397.psd` | decoded |  |
 | `layer-name-emoji.psd` | decoded |  |
-| `layer_comps.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `layer_comps.psb` | decoded |  |
 | `layer_comps.psd` | decoded |  |
 | `layer_effects.psd` | decoded |  |
-| `layer_mask_data.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `layer_mask_data.psb` | decoded |  |
 | `layer_mask_data.psd` | decoded |  |
-| `layer_params.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `layer_params.psb` | decoded |  |
 | `layer_params.psd` | decoded |  |
 | `layers/black-and-white.psd` | decoded |  |
 | `layers/brightness-contrast.psd` | decoded |  |
@@ -319,7 +313,7 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 | `layers/hue-saturation.psd` | decoded |  |
 | `layers/invert.psd` | decoded |  |
 | `layers/levels.psd` | decoded |  |
-| `layers/pattern-fill.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `layers/pattern-fill.psb` | decoded |  |
 | `layers/pattern-fill.psd` | decoded |  |
 | `layers/photo-filter.psd` | decoded |  |
 | `layers/pixel-layer.psd` | decoded |  |
@@ -345,19 +339,19 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 | `mask-index.psd` | decoded |  |
 | `mask-parameters-no-real-channel.psd` | decoded |  |
 | `mask-vector-density.psd` | decoded |  |
-| `mask.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `mask.psb` | decoded |  |
 | `mask.psd` | decoded |  |
 | `mask_parameters.psd` | decoded |  |
 | `masks/2.psd` | decoded |  |
-| `masks.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `masks.psb` | decoded |  |
 | `masks.psd` | decoded |  |
-| `masks2.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `masks2.psb` | decoded |  |
 | `masks2.psd` | decoded |  |
 | `masks3.psd` | decoded |  |
-| `metadata.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `metadata.psb` | decoded |  |
 | `metadata.psd` | decoded |  |
 | `multichannel-pattern-fill.psd` | decoded |  |
-| `note.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `note.psb` | decoded |  |
 | `note.psd` | decoded |  |
 | `opacity-fill.psd` | decoded |  |
 | `passthrough_blendmodes1.psd` | decoded |  |
@@ -382,22 +376,22 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 | `path-operations/subtract-group.psd` | decoded |  |
 | `path-operations/subtract-second.psd` | decoded |  |
 | `patterns.psd` | decoded |  |
-| `pen-text.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `pen-text.psb` | described | 32-bit RGB: pixels not decoded yet |
 | `pen-text.psd` | described | 32-bit RGB: pixels not decoded yet |
-| `placedLayer.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `placedLayer.psb` | decoded |  |
 | `placedLayer.psd` | decoded |  |
-| `semi-transparent-layers.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `semi-transparent-layers.psb` | decoded |  |
 | `semi-transparent-layers.psd` | decoded |  |
-| `slices.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `slices.psb` | decoded |  |
 | `slices.psd` | decoded |  |
-| `smart-object-slice.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `smart-object-slice.psb` | decoded |  |
 | `smart-object-slice.psd` | decoded |  |
 | `stroke-center-no-fill.psd` | decoded |  |
 | `stroke-center.psd` | decoded |  |
 | `stroke-outer-no-fill.psd` | decoded |  |
 | `stroke-outer.psd` | decoded |  |
 | `stroke.psd` | decoded |  |
-| `text.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `text.psb` | decoded |  |
 | `text.psd` | decoded |  |
 | `third-party-psds/cactus_top.psd` | decoded |  |
 | `transparency/clip-opacity.psd` | decoded |  |
@@ -416,14 +410,14 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 | `transparency/knockout-shallow-nested-pt.psd` | decoded |  |
 | `transparency/knockout-shallow-nested.psd` | decoded |  |
 | `transparency/transparency-group.psd` | decoded |  |
-| `transparentbg-gimp.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `transparentbg-gimp.psb` | decoded |  |
 | `transparentbg-gimp.psd` | decoded |  |
-| `transparentbg.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `transparentbg.psb` | described | 32-bit RGB: pixels not decoded yet |
 | `transparentbg.psd` | described | 32-bit RGB: pixels not decoded yet |
-| `unicode_pathname.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `unicode_pathname.psb` | decoded |  |
 | `unicode_pathname.psd` | decoded |  |
 | `vector-mask-disabled.psd` | described | 32-bit RGB: pixels not decoded yet |
-| `vector-mask.psb` | refused | PSB (version 2, the large-document format): not read yet, ROADMAP S6.6 |
+| `vector-mask.psb` | described | 32-bit RGB: pixels not decoded yet |
 | `vector-mask.psd` | described | 32-bit RGB: pixels not decoded yet |
 | `vector-mask2.psd` | decoded |  |
 | `vector-mask3.psd` | decoded |  |

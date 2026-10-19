@@ -127,8 +127,6 @@ def run(exe, path, root):
     lines = out.stdout.splitlines()
     if out.stderr.startswith("read_file: "):
         f.refused = out.stderr.strip()[len("read_file: "):]
-        if path.suffix.lower() == ".psb":   # minipsd_reader_init refuses version 2 only
-            f.refused = "PSB (version 2, the large-document format): not read yet, ROADMAP S6.6"
         return f
     header = HEADER.match(lines[0]) if lines else None
     f.mode = f"{header.group(3)}-bit {header.group(4)}" if header else "?"

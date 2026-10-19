@@ -33,7 +33,7 @@ int main(void)
     }
     memset(&doc, 0, sizeof doc);
     doc.width = 1; doc.height = 1; doc.dpi = 72.0; doc.layers = &layer; doc.layer_count = 1;
-    rc = minipsd_write(&doc, count, &size);
+    rc = minipsd_write(&doc, NULL, count, &size);
     printf("minipsd %s: %s, %u bytes\n", MINIPSD_VERSION_STRING, minipsd_error_string(rc), (unsigned)size);
     return rc == MINIPSD_OK && size > 0 ? 0 : 2;
 }

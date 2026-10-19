@@ -33,7 +33,7 @@ int main(void)
 
     f = fopen("hello.psd", "wb");
     if (!f) return 1;
-    rc = minipsd_write(&doc, to_file, f);
+    rc = minipsd_write(&doc, NULL, to_file, f);
     if (fclose(f) != 0 && rc == MINIPSD_OK) rc = MINIPSD_ERR_WRITE;
     if (rc != MINIPSD_OK) fprintf(stderr, "hello_write: %s\n", minipsd_error_string(rc));
     return rc != MINIPSD_OK;

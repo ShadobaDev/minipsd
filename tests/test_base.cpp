@@ -33,7 +33,7 @@ TEST(MinipsdBaseTest, OnlyErrorsAreNegative)
 TEST(MinipsdBaseTest, EveryReturnCodeHasItsOwnText)
 {
     EXPECT_STREQ(minipsd_error_string(MINIPSD_ERR_SIZE),
-                 "too large for PSD: a side outside 1..30000, or a section above 4 GiB");
+                 "too large: a side above the format's (30000 PSD, 300000 PSB), or a section above its length field");
     EXPECT_STREQ(minipsd_error_string(-100), "unknown error");
     for (int code : {MINIPSD_OK, MINIPSD_MORE, MINIPSD_ERR_ARG, MINIPSD_ERR_WRITE, MINIPSD_ERR_ALLOC, MINIPSD_ERR_OPEN,
                      MINIPSD_ERR_FORMAT, MINIPSD_ERR_UNSUPPORTED, MINIPSD_ERR_SHORT, MINIPSD_ERR_LIMIT})

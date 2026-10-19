@@ -78,6 +78,7 @@ set(_minipsd_test_sources
     test_base.cpp
     test_document.cpp
     test_bytes.cpp
+    test_format.cpp
     test_utf.cpp
     test_packbits.cpp
     test_composite.cpp

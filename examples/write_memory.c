@@ -27,11 +27,11 @@ static uint8_t *write_memory(const minipsd_doc *doc, size_t *size, int *rc)
     void           *workspace;
     uint8_t        *buf = NULL;
     size_t          need = 0, produced = 0;
-    *rc = minipsd_writer_workspace_size(doc, &need);
+    *rc = minipsd_writer_workspace_size(doc, NULL, &need);
     if (*rc != MINIPSD_OK) return NULL;
     workspace = malloc(need);
     if (!workspace) { *rc = MINIPSD_ERR_ALLOC; return NULL; }
-    *rc = minipsd_writer_init(&w, doc, workspace, need);
+    *rc = minipsd_writer_init(&w, doc, NULL, workspace, need);
     if (*rc == MINIPSD_OK) {
         const uint64_t total = minipsd_writer_total(w);
         buf = (size_t)total == total ? (uint8_t *)malloc((size_t)total) : NULL;   /* fits size_t */

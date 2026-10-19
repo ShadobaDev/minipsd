@@ -45,7 +45,7 @@ static int to_file(void *user, const void *data, size_t size)   /* or to memory,
     return fwrite(data, 1, size, (FILE *)user) == size;
 }
 
-int rc = minipsd_write(&doc, to_file, f);
+int rc = minipsd_write(&doc, NULL, to_file, f);
 if (rc != MINIPSD_OK) puts(minipsd_error_string(rc));
 ```
 
@@ -61,13 +61,14 @@ full canvas), or empty, with UTF-8 names, opacity and visibility; the merged com
 yours or composed as a best effort; the resolution; an optional ICC profile; groups, layer
 masks, blend modes, clipping, and blocks and resources kept from a file (text, effects), as
 they are.
-Channels are PackBits RLE or raw. Each side is limited to 30 000 px.
+Channels are PackBits RLE or raw. Each side is limited to 30 000 px, or 300 000 px written as a
+PSB (Photoshop's large document format).
 
-Not written (yet): 32-bit, other colour modes, PSB. The full contract is in [docs/SPECIFICATION.md](docs/SPECIFICATION.md).
+Not written (yet): 32-bit, other colour modes. The full contract is in [docs/SPECIFICATION.md](docs/SPECIFICATION.md).
 
 ## What it reads
 
-Any PSD (not PSB): its size, colour mode, depth, dpi, ICC profile, resources, and every layer
+Any PSD or PSB: its size, colour mode, depth, dpi, ICC profile, resources, and every layer
 with its name, rectangle, opacity, visibility, blend mode and raw additional data. Pixels of
 8- and 16-bit RGB files decode, layers and composite, into memory of any layout, or whole into a
 document that `minipsd_write` takes back. ZIP-compressed channels (Photoshop's 16-bit layers)

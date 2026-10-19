@@ -46,18 +46,18 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
     doc.width = 3; doc.height = 2; doc.dpi = 300.0; doc.layers = layers; doc.layer_count = 2;
 
     /* Every function, so a static build has none unused. */
-    if (!minipsd_error_string(MINIPSD_OK)[0] || minipsd_doc_check(&doc) != MINIPSD_OK)
+    if (!minipsd_error_string(MINIPSD_OK)[0] || minipsd_doc_check(&doc, NULL) != MINIPSD_OK)
         return -100;
 
     b.data = out; b.size = 0; b.capacity = capacity;
-    rc = minipsd_write(&doc, smoke_out, &b);
+    rc = minipsd_write(&doc, NULL, smoke_out, &b);
     *size = b.size;
     if (rc != MINIPSD_OK) return rc;
 
     /* The pull writer, from a stack workspace: it knows the size before writing, then gives the
        same bytes 7 at a time. */
-    if (minipsd_writer_workspace_size(&doc, &need) != MINIPSD_OK || need > sizeof workspace
-        || minipsd_writer_init(&w, &doc, workspace, need) != MINIPSD_OK
+    if (minipsd_writer_workspace_size(&doc, NULL, &need) != MINIPSD_OK || need > sizeof workspace
+        || minipsd_writer_init(&w, &doc, NULL, workspace, need) != MINIPSD_OK
         || minipsd_writer_total(w) != b.size || b.size > sizeof again)
         return -101;
     do {
@@ -115,7 +115,7 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
             return -109;
         memset(copy, 0, sizeof copy);
         c.data = back; c.size = 0; c.capacity = sizeof back;
-        rc = minipsd_write(rdoc, smoke_out, &c);
+        rc = minipsd_write(rdoc, NULL, smoke_out, &c);
         minipsd_doc_free(rdoc);
         if (rc != MINIPSD_OK || c.size != b.size || memcmp(back, b.data, b.size) != 0)
             return -110;
@@ -138,7 +138,7 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
         memset(&deep, 0, sizeof deep);
         deep.depth = 16;
         minipsd_target_rgba16(&t, got16, (size_t)3 * 8);
-        if (minipsd_write(&doc, smoke_out, &c) != MINIPSD_OK
+        if (minipsd_write(&doc, NULL, smoke_out, &c) != MINIPSD_OK
             || minipsd_reader_init(&rd, file, c.size, rws, sizeof rws, NULL, &info) != MINIPSD_OK || info.depth != 16
             || minipsd_reader_next_layer(rd, &lv) != MINIPSD_MORE
             || minipsd_decode_layer(rd, &lv, &t, &deep) != MINIPSD_OK || memcmp(got16, px16, sizeof px16) != 0)
