@@ -133,6 +133,7 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
         /* As stored: nothing decoded, every byte copied, the same file again. */
         {
             minipsd_read_opts keep;
+            memset(&keep, 0, sizeof keep);   /* fields grow at the end: zero is the old behaviour */
             keep.stored = 1;
             if (minipsd_read(b.data, b.size, NULL, &keep, &rdoc, &lost) != MINIPSD_OK || lost != 0)
                 return -113;

@@ -47,8 +47,15 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   `minipsd_decode_mask`.
 - 16-bit documents: `depth` on `minipsd_doc`, every sample a `uint16_t` in host order; the
   reader decodes 16-bit layers, masks and composites with `depth` in `minipsd_decode_opts` and
-  `minipsd_target_rgba16`, and finds the layers Photoshop keeps in its `Lr16` block. ZIP
-  channels are not decoded; read with `stored`, they are copied as they are.
+  `minipsd_target_rgba16`, and finds the layers Photoshop keeps in its `Lr16` block.
+- ZIP channels (compression 2, and 3 with prediction), Photoshop's 16-bit layers and masks,
+  decode through the caller's inflate: `minipsd_inflate_fn`, given with a scratch buffer of one
+  channel in `minipsd_decode_opts`, or in `minipsd_read_opts`, whose block then holds the scratch.
+  minipsd implements no deflate; zlib's `uncompress` fits in a line. Without one, decoding them
+  stays `MINIPSD_ERR_UNSUPPORTED`; read with `stored`, they are copied as they are.
+  `minipsd_read_opts` and `minipsd_decode_opts` grow by these fields: a caller that sets
+  `stored` or `depth` on an uninitialised struct now passes garbage as `inflate`. Zero the whole
+  struct first (`= {0}`, a designated initialiser, or `memset`), as every options struct asks.
 - PSB, Photoshop's large document format, up to 300 000 px a side (`MINIPSD_MAX_SIDE_PSB`):
   `format` (`MINIPSD_PSD`, `MINIPSD_PSB`) at the end of `minipsd_doc` writes one, and the reader
   reads one through the same calls, `format` in `minipsd_info` and the layer view saying how its

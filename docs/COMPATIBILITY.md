@@ -28,9 +28,10 @@ fetch them from a pinned psd-tools release, verified by its SHA-256.
 - **described:** another colour mode or depth, or ZIP-compressed layers (Photoshop's 16-bit
   ones). Everything but those pixels is read: size, colour mode, depth, dpi, ICC profile,
   resources, and every layer with its name, rectangle, opacity, visibility, blend mode and blocks.
-  Decoding the pixels returns `MINIPSD_ERR_UNSUPPORTED`; ZIP channels are still copied when the
-  file is read as a document with `stored` and written back. This is a choice of scope
-  ([ROADMAP.md](ROADMAP.md), stage 6), not a failure.
+  Decoding the pixels returns `MINIPSD_ERR_UNSUPPORTED`. ZIP channels decode through the caller's
+  inflate (`minipsd_decode_opts.inflate`), which `read_file` does not give, since minipsd
+  implements no deflate; they are also copied when the file is read as a document with `stored`
+  and written back. This is a choice of scope ([ROADMAP.md](ROADMAP.md), stage 6), not a failure.
 - **refused:** the reader does not open the file, with the reason.
 - **failed:** an error other than the above: a malformed file, or a bug. Each is listed. A
   malformed file that the tests know about is in `knownBad` in `tests/test_reader.cpp`, with the
@@ -54,7 +55,7 @@ python tools/compat_report.py build/msvc/examples/Debug/read_file.exe build/msvc
 | Result | Files | Meaning |
 |---|---|---|
 | decoded | 248 | every layer and the composite decoded to pixels |
-| described | 66 | header, resources and layers read; pixels not decoded: outside 8- and 16-bit RGB, or ZIP |
+| described | 66 | header, resources and layers read; pixels not decoded: outside 8- and 16-bit RGB, or ZIP without an inflate |
 | refused | 0 | the reader does not open the file (see below) |
 | failed | 1 | malformed, or a reader bug (see below) |
 
@@ -66,7 +67,7 @@ python tools/compat_report.py build/msvc/examples/Debug/read_file.exe build/msvc
 | 32-bit RGB | 16 | not yet: described only |
 | 8-bit grey | 16 | not yet: described only |
 | 8-bit CMYK | 13 | not yet: described only |
-| 16-bit RGB | 5 | decoded, but ZIP-compressed layers in 4 |
+| 16-bit RGB | 5 | decoded, ZIP-compressed layers through an inflate in 4 |
 | 8-bit Lab | 4 | not yet: described only |
 | 1-bit bitmap | 3 | not yet: described only |
 | 16-bit grey | 3 | not yet: described only |
@@ -110,8 +111,8 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 | `0layers.psd` | decoded |  |
 | `0layers_tblocks.psb` | decoded |  |
 | `0layers_tblocks.psd` | decoded |  |
-| `16bit5x5.psb` | described | 16-bit RGB: ZIP-compressed layers, copied, not decoded |
-| `16bit5x5.psd` | described | 16-bit RGB: ZIP-compressed layers, copied, not decoded |
+| `16bit5x5.psb` | described | 16-bit RGB: ZIP-compressed layers, decoded through an inflate |
+| `16bit5x5.psd` | described | 16-bit RGB: ZIP-compressed layers, decoded through an inflate |
 | `1layer.psb` | decoded |  |
 | `1layer.psd` | decoded |  |
 | `1layer2.psd` | decoded |  |
@@ -156,12 +157,12 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 | `adjustments/levels_rgb.psd` | decoded |  |
 | `adjustments/posterize_16bits_cmyk.psd` | described | 16-bit CMYK: pixels not decoded yet |
 | `adjustments/posterize_16bits_grayscale.psd` | described | 16-bit grey: pixels not decoded yet |
-| `adjustments/posterize_16bits_rgb.psd` | described | 16-bit RGB: ZIP-compressed layers, copied, not decoded |
+| `adjustments/posterize_16bits_rgb.psd` | described | 16-bit RGB: ZIP-compressed layers, decoded through an inflate |
 | `adjustments/posterize_cmyk.psd` | described | 8-bit CMYK: pixels not decoded yet |
 | `adjustments/posterize_grayscale.psd` | described | 8-bit grey: pixels not decoded yet |
 | `adjustments/posterize_rgb.psd` | decoded |  |
 | `adjustments/threshold_16bits_grayscale.psd` | described | 16-bit grey: pixels not decoded yet |
-| `adjustments/threshold_16bits_rgb.psd` | described | 16-bit RGB: ZIP-compressed layers, copied, not decoded |
+| `adjustments/threshold_16bits_rgb.psd` | described | 16-bit RGB: ZIP-compressed layers, decoded through an inflate |
 | `adjustments/threshold_cmyk.psd` | described | 8-bit CMYK: pixels not decoded yet |
 | `adjustments/threshold_grayscale.psd` | described | 8-bit grey: pixels not decoded yet |
 | `adjustments/threshold_rgb.psd` | decoded |  |

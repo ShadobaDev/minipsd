@@ -72,7 +72,8 @@ Any PSD or PSB: its size, colour mode, depth, dpi, ICC profile, resources, and e
 with its name, rectangle, opacity, visibility, blend mode and raw additional data. Pixels of
 8- and 16-bit RGB files decode, layers and composite, into memory of any layout, or whole into a
 document that `minipsd_write` takes back. ZIP-compressed channels (Photoshop's 16-bit layers)
-are not decoded, but copied as they are when such a file is read and written back. A file can be read from its start only, and untrusted
+decode through the caller's inflate (zlib's `uncompress`, libdeflate or miniz: minipsd implements
+no deflate), and are copied as they are when such a file is read and written back. A file can be read from its start only, and untrusted
 files are bounded by caller limits. How it does on 315 files from
 other programs: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 

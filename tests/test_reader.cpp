@@ -15,6 +15,7 @@
 #include "minipsd.h"
 
 #include "support.h"
+#include "zlib_stored.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -1051,6 +1052,60 @@ Chan rleChan(int id, const std::vector<Bytes> &rows, bool psb = false)
     return Chan{id, o.b};
 }
 
+// A ZIP channel of samples (two bytes each, big-endian, when wide): the marker 2, or 3 with each
+// sample stored as its difference from its left neighbour, then a zlib stream of stored blocks.
+Chan zipChan(int id, const std::vector<unsigned> &samples, std::uint32_t w, bool wide, bool predicted)
+{
+    Out raw;
+    for (std::size_t i = 0; i < samples.size(); ++i) {
+        const unsigned v = predicted && i % w ? samples[i] - samples[i - 1] : samples[i];
+        if (wide) raw.u16(v & 0xFFFF);
+        else      raw.u8(v & 0xFF);
+    }
+    Bytes z(zlib_stored_deflate(raw.b.data(), raw.b.size(), nullptr));
+    zlib_stored_deflate(raw.b.data(), raw.b.size(), z.data());
+    Out o;
+    o.u16(predicted ? 3 : 2).raw(z);
+    return Chan{id, o.b};
+}
+
+// A 3 x 2 layer, every channel ZIP, two of them predicted, and a ZIP mask the size of the layer
+// holding the red samples; values that wrap when predicted.  rgba is what it decodes to.
+struct ZipLayer {
+    static constexpr std::uint32_t w = 3, h = 2;
+    Rec   rec;
+    Bytes rgba, red;   // interleaved RGBA and the mask, samples in host order
+
+    explicit ZipLayer(int depth)
+    {
+        const bool     wide = depth == 16;
+        const unsigned top = wide ? 65535 : 255;
+        const std::vector<std::vector<unsigned>> s = {   // R, G, B, A
+            {top - 5, 3, 7, 0, top, 1}, {1, 2, 3, 4, 5, 6}, {9, 9, 9, 9, 9, 9}, {top, top, top, top / 2, top / 2, 0}};
+        rec.right = w; rec.bottom = h;
+        rec.channels = {zipChan(-1, s[3], w, wide, false), zipChan(0, s[0], w, wide, true),
+                        zipChan(1, s[1], w, wide, true), zipChan(2, s[2], w, wide, false), zipChan(-2, s[0], w, wide, true)};
+        rec.mask = Out().u32(0).u32(0).u32(h).u32(w).u8(0).u8(0).zeros(2).b;
+        auto put = [&](Bytes &out, unsigned v) {
+            const auto v16 = static_cast<std::uint16_t>(v);
+            const auto *p = reinterpret_cast<const std::uint8_t *>(&v16);
+            if (wide) out.insert(out.end(), p, p + 2);
+            else      out.push_back(static_cast<std::uint8_t>(v));
+        };
+        for (std::size_t i = 0; i < std::size_t(w) * h; ++i) {
+            for (const auto &c : s) put(rgba, c[i]);
+            put(red, s[0][i]);
+        }
+    }
+};
+
+// Counts the calls to the inflate it hands on to, through its user pointer.
+int countingInflate(void *user, const std::uint8_t *src, std::size_t size, std::uint8_t *dst, std::size_t dst_size)
+{
+    ++*static_cast<int *>(user);
+    return zlib_stored_inflate(nullptr, src, size, dst, dst_size);
+}
+
 // Decodes rows [y0, y0 + count) of a layer into tight RGBA, w pixels wide, over a buffer of `fill`.
 // Interleaved RGBA, 8 or 16 bits a sample.
 minipsd_target targetOf(Bytes &out, std::uint32_t w, int depth)
@@ -1238,9 +1293,62 @@ TEST(MinipsdReaderTest, OnlyEightBitRgbAndUncompressedOrPackBitsDecode)
         Rec r = simpleRec();
         r.channels[1].data[1] = static_cast<std::uint8_t>(zip);   // red, ZIP
         OneLayer l(r);
-        EXPECT_EQ(l.decode(out), MINIPSD_ERR_UNSUPPORTED) << zip;
+        EXPECT_EQ(l.decode(out), MINIPSD_ERR_UNSUPPORTED) << zip << ": without the caller's inflate";
     }
     EXPECT_EQ(out, Bytes(16, 0xEE)) << "untouched";
+}
+
+TEST(MinipsdReaderTest, ZipChannelsDecodeThroughTheCallersInflate)
+{
+    constexpr std::uint32_t w = ZipLayer::w, h = ZipLayer::h;
+    for (const int depth : {8, 16}) {
+        SCOPED_TRACE(depth);
+        const std::size_t bytes = depth / 8;
+        const ZipLayer z(depth);
+        OneLayer l(z.rec, static_cast<unsigned>(depth));
+        Bytes scratch(std::size_t(w) * h * bytes), out(z.rgba.size(), 0xEE);
+        int calls = 0;
+        minipsd_decode_opts opts{0, 0, 0, depth, countingInflate, &calls, scratch.data(), scratch.size()};
+        minipsd_target t = targetOf(out, w, depth);
+        ASSERT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, &opts), MINIPSD_OK);
+        EXPECT_EQ(out, z.rgba) << "prediction undone, 16-bit samples in host order";
+        EXPECT_EQ(calls, 4) << "one channel at a time, through the user pointer";
+
+        // A band: the whole channel is inflated, its rows taken from there.
+        Bytes band(std::size_t(w) * 4 * bytes, 0xEE);
+        t = targetOf(band, w, depth);
+        opts.y_first = opts.y_count = 1;
+        ASSERT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, &opts), MINIPSD_OK);
+        EXPECT_EQ(band, Bytes(z.rgba.begin() + std::ptrdiff_t(band.size()), z.rgba.end()));
+
+        Bytes mask(std::size_t(w) * h * bytes, 0xEE);
+        const minipsd_plane plane{mask.data(), static_cast<std::ptrdiff_t>(bytes), static_cast<std::ptrdiff_t>(w * bytes)};
+        opts.y_first = opts.y_count = 0;
+        ASSERT_EQ(minipsd_decode_mask(l.o.r, &l.v, &plane, &opts), MINIPSD_OK);
+        EXPECT_EQ(mask, z.red);
+
+        // Refused before a sample is written: no room to inflate into.
+        Bytes untouched(z.rgba.size(), 0xEE);
+        t = targetOf(untouched, w, depth);
+        opts.scratch_size = scratch.size() - 1;
+        EXPECT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, &opts), MINIPSD_ERR_ARG);
+        EXPECT_EQ(minipsd_decode_mask(l.o.r, &l.v, &plane, &opts), MINIPSD_ERR_ARG);
+        opts.scratch_size = scratch.size();
+        opts.scratch = nullptr;
+        EXPECT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, &opts), MINIPSD_ERR_ARG);
+        EXPECT_EQ(untouched, Bytes(z.rgba.size(), 0xEE));
+
+        // A stream that does not inflate, or not to the channel's size, is malformed.
+        opts.scratch = scratch.data();
+        opts.inflate = [](void *, const std::uint8_t *, std::size_t, std::uint8_t *, std::size_t) { return 1; };
+        EXPECT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, &opts), MINIPSD_ERR_FORMAT);
+        EXPECT_EQ(minipsd_decode_mask(l.o.r, &l.v, &plane, &opts), MINIPSD_ERR_FORMAT);
+        Rec shorter = z.rec;
+        shorter.channels[1] = zipChan(0, {1, 2, 3, 4, 5}, w, depth == 16, true);
+        OneLayer s(shorter, static_cast<unsigned>(depth));
+        opts.inflate = zlib_stored_inflate;
+        EXPECT_EQ(minipsd_decode_layer(s.o.r, &s.v, &t, &opts), MINIPSD_ERR_FORMAT);
+    }
 }
 
 TEST(MinipsdReaderTest, MalformedChannelsAreRefused)
@@ -1776,6 +1884,44 @@ TEST(MinipsdReadTest, AStoredLayerWithoutTransparencyIsWrittenWithoutOne)
         EXPECT_EQ(v.mask.stored.size, masked ? 4u : 0u);
         EXPECT_EQ(v.other_channels, 0);
     }
+}
+
+TEST(MinipsdReadTest, ZipLayersAndMasksDecodeThroughTheCallersInflate)
+{
+    const ZipLayer z(8);
+    Spec s;
+    s.layers = {z.rec};
+    s.count = -1;
+    s.width = ZipLayer::w; s.height = ZipLayer::h;
+    s.image = rawImage(4, ZipLayer::w, ZipLayer::h, 0x80);
+    const Bytes file = build(s).bytes;
+    readDoc(file, nullptr, MINIPSD_ERR_UNSUPPORTED);
+    const minipsd_read_opts zip{0, zlib_stored_inflate, nullptr};
+    const Doc d = readDoc(file, nullptr, MINIPSD_OK, nullptr, &zip);
+    ASSERT_TRUE(d);
+    EXPECT_EQ(Bytes(d->layers[0].rgba, d->layers[0].rgba + z.rgba.size()), z.rgba);
+    ASSERT_TRUE(d->layers[0].mask);
+    EXPECT_EQ(Bytes(d->layers[0].mask->pixels, d->layers[0].mask->pixels + z.red.size()), z.red);
+
+    // The block holds one channel more to inflate into; none when nothing is decoded.
+    const minipsd_read_opts keep{1}, keepZip{1, zlib_stored_inflate, nullptr};
+    std::size_t plain = 0, inflated = 0, stored = 0, storedZip = 0;
+    ASSERT_EQ(minipsd_read_size(file.data(), file.size(), nullptr, &zip, &inflated), MINIPSD_OK);
+    ASSERT_EQ(minipsd_read_size(file.data(), file.size(), nullptr, &keep, &stored), MINIPSD_OK);
+    ASSERT_EQ(minipsd_read_size(file.data(), file.size(), nullptr, &keepZip, &storedZip), MINIPSD_OK);
+    s.layers[0].channels = {chan(-1, 8, 1), chan(0, 8, 2), chan(1, 8, 3), chan(2, 8, 4), chan(-2, 8, 5)};
+    const Bytes raw = build(s).bytes;
+    ASSERT_EQ(minipsd_read_size(raw.data(), raw.size(), nullptr, &zip, &plain), MINIPSD_OK);
+    EXPECT_EQ(inflated, plain + std::size_t(ZipLayer::w) * ZipLayer::h);
+    EXPECT_EQ(storedZip, stored);
+
+    // Without the mask: the layer's channels alone ask for the scratch.
+    s.layers = {z.rec};
+    s.layers[0].channels.pop_back();
+    s.layers[0].mask.clear();
+    const Doc m = readDoc(build(s).bytes, nullptr, MINIPSD_OK, nullptr, &zip);
+    ASSERT_TRUE(m);
+    EXPECT_EQ(Bytes(m->layers[0].rgba, m->layers[0].rgba + z.rgba.size()), z.rgba);
 }
 
 // Photoshop's empty fill layer, its rectangle inverted, in a file that ends the layer and mask

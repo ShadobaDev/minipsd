@@ -6,7 +6,9 @@
  * with replay.c's main everywhere else, where the tests replay tests/fuzz/regressions/ through it.
  * Besides the sanitizers it checks what the API promises: MINIPSD_ERR_SHORT always asks for more
  * than the buffer holds, and a decode over the limit fails before it writes (its target is one
- * pixel, so a write past it is an overflow the sanitizer reports).
+ * pixel, so a write past it is an overflow the sanitizer reports).  ZIP channels are inflated by
+ * zlib_stored.h, which takes streams of stored blocks: enough for the fuzzer to reach every path
+ * around the caller's inflate, prediction included.
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
@@ -14,6 +16,8 @@
 
 #define MINIPSD_IMPLEMENTATION
 #include "minipsd.h"
+
+#include "../zlib_stored.h"
 
 #include <stdlib.h>
 
@@ -27,6 +31,14 @@ static void check_short(const minipsd_reader *r, int rc, size_t size)
     if (rc == MINIPSD_ERR_SHORT && minipsd_reader_needed(r) <= size) abort();
 }
 
+/* ZIP channels through the stored-block inflate, into a scratch of n bytes (none when NULL). */
+static void zip_opts(minipsd_decode_opts *opts, uint8_t *scratch, uint64_t n)
+{
+    opts->inflate      = zlib_stored_inflate;
+    opts->scratch      = scratch;
+    opts->scratch_size = scratch ? (size_t)n : 0;
+}
+
 /* Decodes a width x height image (a layer, or the composite when layer is NULL) whole, then its
    middle row with the matte kept; at 16 bits for a 16-bit file. */
 static void decode(minipsd_reader *r, const minipsd_layer_view *layer, uint64_t width, uint64_t height, int depth,
@@ -35,7 +47,7 @@ static void decode(minipsd_reader *r, const minipsd_layer_view *layer, uint64_t 
     minipsd_target      t;
     minipsd_decode_opts all = {0, 0, 0, 0}, band = {0, 1, 1, 0};
     uint16_t            pixel[4];
-    uint8_t            *rgba = (uint8_t *)pixel;
+    uint8_t            *rgba = (uint8_t *)pixel, *scratch;
     const unsigned      wide = depth == 16;
     uint64_t            bytes = width * height * 4 << wide;
     int                 rc;
@@ -47,6 +59,9 @@ static void decode(minipsd_reader *r, const minipsd_layer_view *layer, uint64_t 
         return;
     }
     if (bytes && !(rgba = (uint8_t *)malloc((size_t)bytes))) return;
+    scratch = bytes ? (uint8_t *)malloc((size_t)bytes / 4) : NULL;   /* one channel */
+    zip_opts(&all, scratch, bytes / 4);
+    zip_opts(&band, scratch, bytes / 4);
     if (wide) minipsd_target_rgba16(&t, (uint16_t *)rgba, (size_t)width * 8);
     else      minipsd_target_rgba(&t, rgba, (size_t)width * 4);
     rc = layer ? minipsd_decode_layer(r, layer, &t, &all) : minipsd_decode_composite(r, &t, &all);
@@ -55,6 +70,7 @@ static void decode(minipsd_reader *r, const minipsd_layer_view *layer, uint64_t 
     rc = layer ? minipsd_decode_layer(r, layer, &t, &band) : minipsd_decode_composite(r, &t, &band);
     check_short(r, rc, size);
     if (rgba != (uint8_t *)pixel) free(rgba);
+    free(scratch);
 }
 
 /* A layer's mask, as decode does for its pixels: whole, then a band; refused over the limit. */
@@ -65,6 +81,7 @@ static void decode_mask(minipsd_reader *r, const minipsd_layer_view *layer, int 
     const unsigned      wide = depth == 16;
     minipsd_decode_opts all = {0, 0, 0, 0}, band = {0, 1, 0, 0};
     minipsd_plane       plane;
+    uint8_t            *scratch;
     uint16_t            one;
     int                 rc;
     if (layer->mask.right < layer->mask.left || layer->mask.bottom < layer->mask.top) abort();   /* never inverted */
@@ -76,12 +93,16 @@ static void decode_mask(minipsd_reader *r, const minipsd_layer_view *layer, int 
     }
     if (width && height && !(plane.data = (uint8_t *)malloc((size_t)(width * height << wide)))) return;
     plane.row_step = (ptrdiff_t)(width << wide);
+    scratch = width && height ? (uint8_t *)malloc((size_t)(width * height << wide)) : NULL;
+    zip_opts(&all, scratch, width * height << wide);
+    zip_opts(&band, scratch, width * height << wide);
     rc = minipsd_decode_mask(r, layer, &plane, &all);
     check_short(r, rc, size);
     band.y_first = (uint32_t)(height / 2);
     rc = minipsd_decode_mask(r, layer, &plane, &band);
     check_short(r, rc, size);
     if (plane.data != (uint8_t *)&one) free(plane.data);
+    free(scratch);
 }
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)

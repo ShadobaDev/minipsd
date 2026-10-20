@@ -87,6 +87,7 @@ int main(int argc, char **argv)
     data  = read_all(argv[1], &size);
     if (!data) { fprintf(stderr, "resave: cannot read %s\n", argv[1]); return 1; }
 
+    memset(&opts, 0, sizeof opts);   /* fields grow at the end: zero is the old behaviour */
     opts.stored = 1;   /* nothing decoded: each layer keeps its channels as stored */
     rc = minipsd_read(data, size, NULL, &opts, &doc, &lost);
     if (rc != MINIPSD_OK) { fprintf(stderr, "resave: %s\n", minipsd_error_string(rc)); free(data); return 1; }

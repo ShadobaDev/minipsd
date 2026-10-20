@@ -465,9 +465,36 @@ minipsd_target_rgba16(&t, rgba16, (size_t)w * 8);
 rc = minipsd_decode_layer(r, &layer, &t, &deep);
 ```
 
-Photoshop compresses the layers of its 16-bit files with ZIP, which minipsd does not decode
-(`MINIPSD_ERR_UNSUPPORTED`): their names, rectangles and blocks are read, their composite decodes,
-and they round trip with `stored` (see [Round trip](#round-trip)).
+Photoshop compresses the layers of its 16-bit files with ZIP. minipsd implements no deflate:
+it decodes them through an inflate of yours, zlib's here, and a scratch buffer of one channel,
+where each ZIP channel is inflated whole. Without one, decoding them is `MINIPSD_ERR_UNSUPPORTED`;
+their names, rectangles and blocks are still read, and they round trip with `stored` (see
+[Round trip](#round-trip)).
+
+```c
+#include <zlib.h>
+
+static int inflate_zlib(void *user, const uint8_t *src, size_t src_size, uint8_t *dst, size_t dst_size)
+{
+    uLongf n = dst_size;
+    (void)user;
+    return uncompress(dst, &n, src, (uLong)src_size) != Z_OK || n != dst_size;
+}
+
+uint8_t *scratch = malloc((size_t)w * h * 2);   /* one channel of the layer, at 16 bits */
+deep.inflate      = inflate_zlib;
+deep.scratch      = scratch;
+deep.scratch_size = (size_t)w * h * 2;
+rc = minipsd_decode_layer(r, &layer, &t, &deep);
+```
+
+`minipsd_read` takes the same function in `minipsd_read_opts.inflate` and keeps the scratch in its
+own block.
+
+Every options struct (`minipsd_read_opts`, `minipsd_decode_opts`, `minipsd_write_opts`,
+`minipsd_limits`) grows at its end, and zero keeps the previous behaviour: start from zero
+(`= {0}`, designated initialisers as here, or `memset`) and set only what you need. A struct
+declared and then given one field leaves the others, newer ones included, as garbage that is read.
 
 ### The composite
 
@@ -552,7 +579,7 @@ flowchart TD
 layer, copies every other one, and frees the file's bytes before writing. The one layer of a file
 without layers comes decoded even with `stored`: there is nothing to copy for it. A layer without
 a transparency channel is copied, and written without one, as the file has it. `stored` is also how
-Photoshop's 16-bit files go through: their ZIP channels are copied byte for byte.
+Photoshop's 16-bit files go through without an inflate: their ZIP channels are copied byte for byte.
 
 **What is lost, and a request.** `lost` is 0 when the document carries everything. Otherwise its
 bits say what writing the document back would drop:

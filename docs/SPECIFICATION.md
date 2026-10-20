@@ -52,7 +52,9 @@ A PSD file is a sequence of five sections, all integers **big-endian**:
 Channel pixel data is either raw or **PackBits RLE**: a per-row byte-count table followed by
 the compressed rows; a 16-bit sample is two bytes, high first, and RLE packs a row's bytes.
 Photoshop compresses 16-bit layers with ZIP instead, and keeps their records in a global block
-`Lr16` after an empty layer info. Sides are capped at 30 000 px in PSD; PSB (version 2) lifts that to
+`Lr16` after an empty layer info. A ZIP channel (compression 2) is a zlib stream (RFC 1950, not a
+ZIP archive) of the raw rows; with prediction (3), each sample is stored as its difference from the
+one to its left in the row: bytes at 8 bits, big-endian sample sums at 16, a byte shuffle at 32. Sides are capped at 30 000 px in PSD; PSB (version 2) lifts that to
 300 000 px and widens several fields: the layer and mask section's length and the layer info's, each
 channel's length in a layer record and the length of blocks with certain keys take eight bytes, and
 RLE row counts take four. What every field means stays the same.
@@ -170,7 +172,7 @@ of 8- and 16-bit RGB files, layers and composite.
 | `MINIPSD_ERR_ALLOC` | -4 | `MINIPSD_MALLOC` returned NULL |
 | `MINIPSD_ERR_OPEN` | -5 | not returned by minipsd; reserved for the caller's file code (`examples/write_file.c`) |
 | `MINIPSD_ERR_FORMAT` | -6 | reader: not a well-formed PSD |
-| `MINIPSD_ERR_UNSUPPORTED` | -7 | reader: a valid file outside what minipsd reads: for decoding, a file not 8- or 16-bit RGB, of another depth than `opts->depth`, or a ZIP-compressed channel; on a 32-bit platform, a PSB whose layer and mask section `size_t` cannot hold |
+| `MINIPSD_ERR_UNSUPPORTED` | -7 | reader: a valid file outside what minipsd reads: for decoding, a file not 8- or 16-bit RGB, of another depth than `opts->depth`, or a ZIP-compressed channel without `opts->inflate`; on a 32-bit platform, a PSB whose layer and mask section `size_t` cannot hold |
 | `MINIPSD_ERR_SHORT` | -8 | reader: the buffer ends inside data the call needs; read more, `minipsd_reader_needed` says how much |
 | `MINIPSD_ERR_LIMIT` | -9 | reader: over `minipsd_limits`: the canvas's or a layer's side, the layer count, or the bytes of a decode call; the file is not known to be bad |
 
@@ -321,9 +323,15 @@ them; nothing is copied or allocated. Results on real files from other programs:
 - **Which files:**
   - every PSD and PSB is described, whatever its colour mode (bitmap, grey, indexed, RGB,
     CMYK, multichannel, duotone, Lab) or depth (1, 8, 16, 32 bits);
-  - pixels are decoded from 8- and 16-bit RGB files only, raw or PackBits; any other file, and
-    a ZIP-compressed channel (Photoshop's at 16 bits), gives `MINIPSD_ERR_UNSUPPORTED` from the
-    decode call;
+  - pixels are decoded from 8- and 16-bit RGB files only, raw or PackBits; any other file gives
+    `MINIPSD_ERR_UNSUPPORTED` from the decode call;
+  - a ZIP-compressed layer or mask channel (Photoshop's at 16 bits) decodes through the caller's
+    inflate, `minipsd_decode_opts.inflate`: minipsd implements no deflate, and hands it the
+    stream and the channel's size, the rectangle times the sample size, which it must fill
+    exactly (anything else is `MINIPSD_ERR_FORMAT`). It is inflated whole, even for a band, into
+    the caller's `scratch` of that size (`MINIPSD_ERR_ARG` when smaller), where minipsd undoes the
+    prediction and takes the rows as raw ones. Without an inflate it is
+    `MINIPSD_ERR_UNSUPPORTED`, as is a ZIP-compressed composite, which no file we have holds;
   - the layers of a file whose layer info is empty come from its global block `Lr16` or `Lr32`
     (Photoshop's 16- and 32-bit files);
   - a PSB (version 2) reads as a PSD does, through the same calls; `minipsd_info.format` and
@@ -511,8 +519,9 @@ Platemaker is the first consumer. Breaking any of these breaks it:
   (`encode(decode(x)) == x`).
 - **Files from other programs:** every `.psd` in `tests/data/` (committed, origin and licence in
   its README) and `tests/fixtures/` (local, never committed) is read whole and in parts, and every
-  layer and the composite of an 8- or 16-bit RGB one must decode, but for ZIP-compressed channels,
-  which must go through `minipsd_read` as stored and come back byte for byte; `examples/read_file.c`
+  layer and the composite of an 8- or 16-bit RGB one must decode, but for ZIP-compressed channels
+  (the C tests have no zlib), which must go through `minipsd_read` as stored and come back byte
+  for byte; `examples/read_file.c`
   runs on each.
   With `MINIPSD_PSD_TOOLS_FILES` the same test reads psd-tools' 279 test files, fetched at a
   pinned release; a file known to be malformed is listed with the error it must give.

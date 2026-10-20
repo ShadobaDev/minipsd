@@ -330,7 +330,7 @@ feature; a supplied composite needs nothing. See
       [round trip](SPECIFICATION.md#what-is-read): a layer's channel order (Procreate writes
       transparency last) is the writer's to choose, and the two bytes Procreate writes past the
       layer info are outside the format.
-- [ ] **S6.9** ZIP channels (compression 2, and 3 with prediction), Photoshop's 16- and 32-bit
+- [x] **S6.9** ZIP channels (compression 2, and 3 with prediction), Photoshop's 16- and 32-bit
       layers, decoded through the caller's inflate: minipsd implements no deflate. A function
       pointer and its `user` at the end of `minipsd_decode_opts` (and of `minipsd_read_opts`, so
       `minipsd_read` decodes them without `stored`), shaped as `inflate(user, src, src_size, dst,
@@ -346,6 +346,12 @@ feature; a supplied composite needs nothing. See
       Without the function, decoding them stays `MINIPSD_ERR_UNSUPPORTED`.
       *Done when:* psd-tools' 16-bit RGB files decode, layers and masks, to the samples psd-tools
       gives, through zlib in the tests; the fuzzer decodes ZIP channels through zlib.
+      As done: the scratch is always the caller's (no dense-plane path: one channel of memory
+      saved, a second path to test); 32 bits is not decoded at all, so no byte shuffle. zlib is
+      Python's, in `roundtrip.py` (CI: minipsd's own files re-encoded as ZIP by psd-tools;
+      locally, psd-tools' 16-bit files); the C tests and the fuzzer inflate streams of stored
+      blocks (`tests/zlib_stored.h`), which keeps every toolchain free of a fetched zlib.
+      `minipsd_read` keeps its scratch in its block.
 - [x] **S6.10** S6.7 against the round-trip rule: what it keeps that is layout the writer may
       choose, or outside the format, goes. Kept as content: blending ranges, a layer without
       transparency (Photoshop's background), the legacy name, a file without layers, the
