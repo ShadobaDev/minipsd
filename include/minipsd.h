@@ -362,8 +362,7 @@ typedef struct minipsd_doc {
                                               where the layers go, the layer info left empty,
                                               as Photoshop's 16-bit files have them.
                                               Empty: no global mask, no blocks (an empty global
-                                              mask is written), but with data set and size 0:
-                                              nothing at all, as some files end the section.  */
+                                              mask is written).                               */
     uint16_t             depth;          /*!< Bits per channel: 0 or 8, or 16, where every sample
                                               (rgba, mask pixels, composite) is a uint16_t in
                                               host order, 0 .. 65535.                         */

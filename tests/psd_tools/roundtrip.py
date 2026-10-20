@@ -553,7 +553,7 @@ def check_kept(name, before, after, stored=False):
 
     def mask(lmi):
         info = lmi.global_layer_mask_info
-        return info.tobytes() if info else b""   # none and an empty one alike
+        return info.tobytes() if info else b"\0\0\0\0"   # none and an empty one (its length 0) alike
 
     same("header", header(before), header(after))
     same("resources", resources(before), resources(after))

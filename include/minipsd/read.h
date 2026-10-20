@@ -121,7 +121,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     minipsd_layer      *layers;
     uint8_t            *pixels, *flat = NULL;
     minipsd_bytes       tail, composite = { NULL, 0 };
-    int                 keep_composite, tail_none = 0;
+    int                 keep_composite;
     const uint64_t      max = limits ? limits->max_decoded_bytes : 0;
     uint64_t            decoded, canvas;
     uint32_t            loss = 0;
@@ -252,9 +252,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         composite = mpsd__copy(a, composite);
     }
     pixels = keep_composite ? NULL : (uint8_t *)mpsd__take(a, canvas, (int)wide);
-    if (!count) {
-        if (!info.layer_tail.data) tail_none = 1;               /* no layer and mask section at all */
-    } else if (!info.layer_count) {
+    if (count && !info.layer_count) {
         flat     = (uint8_t *)mpsd__take(a, canvas, (int)wide);
         decoded += canvas;
         if (max && decoded > max) return MINIPSD_ERR_LIMIT;
@@ -262,7 +260,6 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     if (!keep_composite && info.channels > 3u + (info.composite_has_alpha ? 1u : 0u))
         loss |= MINIPSD_LOST_CHANNELS;                          /* decoded: R, G, B, transparency */
     tail = mpsd__copy_tail(a, r, info.layer_tail);
-    if ((info.layer_tail.data && !info.layer_tail.size) || tail_none) tail.data = (const uint8_t *)a->base;   /* nothing at all, as the file */
     if (info.icc.size) {
         uint8_t *icc = (uint8_t *)mpsd__take(a, info.icc.size, 0);
         if (icc) memcpy(icc, info.icc.data, info.icc.size);

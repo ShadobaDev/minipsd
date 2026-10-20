@@ -541,7 +541,7 @@ static int mpsd__tail_range(mpsd__sink *s, const minipsd_doc *d, size_t lo, size
     const minipsd_bytes t    = d->layer_tail;
     const unsigned      from = mpsd__doc_psb(d);
     size_t              at;
-    if (!t.size) { if (!t.data) mpsd__u32(s, 0); return MINIPSD_OK; }   /* data with no size: nothing at all */
+    if (!t.size) { mpsd__u32(s, 0); return MINIPSD_OK; }   /* an empty global layer mask */
     if (from == out || t.size < MPSD__LEN) { mpsd__put(s, t.data + lo, hi - lo); return MINIPSD_OK; }   /* too short to hold a length */
     if (mpsd__get32(t.data) > t.size - MPSD__LEN) return MINIPSD_ERR_UNSUPPORTED;
     at = MPSD__LEN + mpsd__get32(t.data);
@@ -574,16 +574,12 @@ static int mpsd__tail_out(mpsd__sink *s, const minipsd_doc *d, unsigned out)
     return rc != MINIPSD_OK || at == end ? rc : mpsd__tail_range(s, d, end, d->layer_tail.size, out);
 }
 
-/* Is there no layer and mask section at all?  No layers, and a tail of nothing, as a flat file has. */
-static int mpsd__no_section(const minipsd_doc *d) { return !d->layer_count && !d->layer_tail.size && d->layer_tail.data; }
-
 /* The layer and mask section's length: the layer info's length, the layer info (info bytes, here
    or in the layers' block), the tail; the block's header and padding with it. */
 static uint64_t mpsd__section_size(const minipsd_doc *d, uint64_t info, unsigned out)
 {
     mpsd__sink c = { NULL, NULL, 0, 0 };
     size_t     end;
-    if (mpsd__no_section(d)) return 0;
     (void)mpsd__tail_out(&c, d, out);
     if (mpsd__layers_block(d, &end) < d->layer_tail.size)
         c.count += MPSD__BLOCK_LEN + mpsd__len_size(out) + (mpsd__pad((size_t)info, 4) - info);   /* '8BIM', 'Lr16', length; padding */
@@ -774,7 +770,6 @@ static void mpsd__head(mpsd__sink *s, const minipsd_doc *d, uint64_t info, unsig
     size_t         end;
     const size_t   at = mpsd__layers_block(d, &end);
     mpsd__putlen(s, mpsd__section_size(d, info, out), out);   /* layer and mask information */
-    if (mpsd__no_section(d)) return;
     mpsd__putlen(s, at < d->layer_tail.size ? 0 : info, out);
     if (at < d->layer_tail.size) {
         (void)mpsd__tail_range(s, d, 0, at, out);

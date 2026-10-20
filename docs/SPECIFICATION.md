@@ -217,8 +217,8 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
   that block, where it is, with the layer info empty, as Photoshop's 16-bit files have them; what
   the block held goes, the document's layers win.
 - **No layers:** a document with a composite (supplied or stored) and `layer_count` 0 is written
-  flat: an empty layer info and the tail, or, with a tail of nothing at all, no layer and mask
-  section, as `minipsd_read` keeps a flat file with `opts->stored`.
+  flat: an empty layer info and the tail, as `minipsd_read` keeps a flat file with
+  `opts->stored`.
 - **The format is what the document is.** A PSB is written with its wide fields (eight-byte
   section and channel lengths, four-byte RLE row counts), and everything kept from a file is
   written as it is, so it must be in that format's layout: `minipsd_read` sets `format` to the
@@ -294,8 +294,8 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
 - **The layer info's padding:** its length padded to even, as the format has it, whatever the
   file read had (Photoshop pads to 4, some programs not at all).
 - **After the layer info:** the kept `layer_tail` (global layer mask, global blocks) as it is,
-  or an empty global layer mask; nothing at all for one with data and no size, as `minipsd_read`
-  keeps a file that ends the section with its layer info.
+  or an empty global layer mask, also for a file read that ends the section with its layer info
+  (GIMP's).
 - **Compression:** PackBits RLE (runs from 3 bytes, packets up to 128 bytes) or raw.
   Row byte counts are computed in a separate sizing pass, so output streams forward through the
   callback and never seeks back.

@@ -1779,9 +1779,9 @@ TEST(MinipsdReadTest, AStoredLayerWithoutTransparencyIsWrittenWithoutOne)
 }
 
 // Photoshop's empty fill layer, its rectangle inverted, in a file that ends the layer and mask
-// section with the layer info, as GIMP's do: the rectangle comes back empty, as the reader sees
-// it; as stored, the missing tail as it was.
-TEST(MinipsdReadTest, AStoredFileKeepsAnInvertedRectangleAndNoLayerTail)
+// section with the layer info, as GIMP's do: as stored, the rectangle comes back empty, and the
+// file is written with an empty global layer mask, as the format has it.
+TEST(MinipsdReadTest, AStoredFileGetsAnEmptyRectangleAndAGlobalLayerMask)
 {
     Rec fill;
     fill.bottom = -1;
@@ -1801,10 +1801,7 @@ TEST(MinipsdReadTest, AStoredFileKeepsAnInvertedRectangleAndNoLayerTail)
     const minipsd_layer &l = d->layers[0];
     EXPECT_EQ(std::tie(l.top, l.left, l.bottom, l.right), std::make_tuple(0, 0, 0, 0)) << "empty";
     EXPECT_EQ(d->layer_tail.size, 0u);
-    EXPECT_NE(d->layer_tail.data, nullptr) << "nothing at all, not an empty global mask";
-    EXPECT_EQ(write(*d).size(), file.size()) << "no tail, as the file";
-    d->layer_tail.data = nullptr;
-    EXPECT_EQ(write(*d).size(), file.size() + 4) << "cleared: an empty global layer mask";
+    EXPECT_EQ(write(*d).size(), file.size() + 4) << "an empty global layer mask";
 }
 
 // A composite with a fourth channel that is not transparency, or a fifth: decoded, the rest
@@ -1890,14 +1887,16 @@ TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
                                                                      0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255}));
     EXPECT_EQ(minipsd_doc_check(d.get(), nullptr), MINIPSD_OK) << "the writer takes it as it is";
 
-    // Stored: flat as the file is, no layer, its image the composite, copied; the same bytes back,
-    // with a layer and mask section or without one.
+    // Stored: flat as the file is, no layer, its image the composite, copied.  With a layer and
+    // mask section or without one (its length 0), it is written with minipsd's empty one.
     const minipsd_read_opts keep{1};
+    Spec f = s;
+    f.resources       = Spec().resources;                       // as Photoshop's: a resolution
+    f.hasRawSection   = true;
+    f.rawLayerSection = Out().u32(8).u32(0).u32(0).b;           // an empty layer info, an empty global mask
+    const Bytes withSection = build(f).bytes;
     for (const bool section : {true, false}) {
         SCOPED_TRACE(section);
-        Spec f = s;
-        f.resources     = Spec().resources;                     // as Photoshop's: a resolution
-        f.hasRawSection = true;                                 // an empty layer info, an empty global mask; or nothing
         f.rawLayerSection = section ? Out().u32(8).u32(0).u32(0).b : Out().u32(0).b;
         const Bytes file = build(f).bytes;
         const Doc k = readDoc(file, &lost, MINIPSD_OK, nullptr, &keep);
@@ -1905,8 +1904,8 @@ TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
         EXPECT_EQ(k->layer_count, 0u);
         EXPECT_EQ(k->composite, nullptr);
         EXPECT_EQ(k->composite_channels, 3);
-        EXPECT_EQ(write(*k), file);
-        EXPECT_EQ(pull(*k, 7), file);
+        EXPECT_EQ(write(*k), withSection);
+        EXPECT_EQ(pull(*k, 7), withSection);
         k->composite_stored = {};
         EXPECT_EQ(minipsd_doc_check(k.get(), nullptr), MINIPSD_ERR_ARG) << "no layer, no composite";
     }

@@ -346,11 +346,14 @@ feature; a supplied composite needs nothing. See
       Without the function, decoding them stays `MINIPSD_ERR_UNSUPPORTED`.
       *Done when:* psd-tools' 16-bit RGB files decode, layers and masks, to the samples psd-tools
       gives, through zlib in the tests; the fuzzer decodes ZIP channels through zlib.
-- [ ] **S6.10** S6.7 against the round-trip rule: what it keeps that is layout the writer may
-      choose, or outside the format, goes. First candidate: `layer_info_align` 1 (a layer info
-      of odd length, which the format rounds to even); Photoshop's 4 stays a choice to discuss.
-      *Done when:* each field S6.7 added is listed as content (kept) or layout (written the
-      writer's way), and the layout ones are gone or justified.
+- [x] **S6.10** S6.7 against the round-trip rule: what it keeps that is layout the writer may
+      choose, or outside the format, goes. Kept as content: blending ranges, a layer without
+      transparency (Photoshop's background), the legacy name, a file without layers, the
+      composite's channels; `composite_stored` for E1, `Lr16` until someone checks Photoshop
+      reads 16-bit layers from the layer info. Gone: the order of resources and `luni`, the
+      layer info's padding (`layer_info_align`; always even), empty layers' channels and
+      inverted rectangles, a missing global layer mask, a section of length 0.
+      `roundtrip.py` checks content and a second pass instead of bytes.
 
 ## 7. Interoperability
 
