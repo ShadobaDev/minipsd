@@ -121,13 +121,14 @@ TEST(MinipsdWriterTest, ALayerIsWrittenAtItsRectangle)
         EXPECT_EQ(p.composite.size(), 8u * 4 * 4) << "the composite stays the canvas";
     }
 
-    // Inverted: an empty layer's, as a file stores it, is written as it is; a layer with pixels
-    // cannot have one.
+    // Inverted: refused, an empty layer's too (minipsd_read gives an empty one, not inverted).
     minipsd_layer inverted[2] = {layers[0], {.name = "Fill", .opacity = 255, .bottom = -1}};
     minipsd_doc d = docOf(8, 4, inverted, 2);
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "an empty layer's";
+    inverted[1].bottom = 0;
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK);
     inverted[0].bottom = 0;
-    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "a layer with pixels";
 }
 
 TEST(MinipsdWriterTest, ASuppliedCompositeIsMattedAndWrittenWithoutComposing)
@@ -286,23 +287,6 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE && res.id != 1005) {}
     ASSERT_EQ(res.id, 1005);
     EXPECT_EQ(res.data.data[7], 1) << "shown in inches";
-
-    // The layer info's padding: none, even (the default) or Photoshop's 4; minipsd_read finds it
-    // again, so the file comes back as it was.
-    const minipsd_read_opts keep{1};
-    for (const std::uint8_t align : {std::uint8_t(1), std::uint8_t(2), std::uint8_t(4)}) {
-        SCOPED_TRACE(align);
-        d.layer_info_align = align;
-        const Bytes padded = write(d);
-        EXPECT_EQ(pull(d, 7), padded);
-        minipsd_doc *again = nullptr;
-        ASSERT_EQ(minipsd_read(padded.data(), padded.size(), nullptr, &keep, &again, nullptr), MINIPSD_OK);
-        EXPECT_EQ(write(*again), padded);
-        minipsd_doc_free(again);
-    }
-    d.layer_info_align = 3;
-    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG);
-    d.layer_info_align = 0;
 
     // An 'Lr32' block says where the layers go too; a tail that is not blocks after its mask
     // holds none, its bytes written as they are.

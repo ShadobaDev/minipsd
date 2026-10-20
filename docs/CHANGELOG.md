@@ -81,19 +81,15 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   still wins.
 - A stored layer without a transparency channel is written without one, as its file has it,
   instead of with an opaque one.
-- `minipsd_read` with `opts->stored` keeps an empty layer's channels too (their compression
-  markers), and `layer_info_align` at the end of `minipsd_doc` keeps how the file pads its layer
-  info (Photoshop to 4 bytes, others to 2 or not at all); the writer pads as it says, even by
-  default. A layer's all-zero rectangle means the full canvas only with `rgba`: stored channels
-  take the rectangle as it is.
+- A layer's all-zero rectangle means the full canvas only with `rgba`: stored channels take the
+  rectangle as it is.
 - A layer's names kept from a file: `name_pascal` at the end of `minipsd_layer` holds its legacy
   name as stored, and while `name` still says what the file's names say, the legacy name and the
   kept `luni` are written as they are (another program's code page, a counted NUL); a renamed
   layer gets the writer's own.
-- With `opts->stored`, `minipsd_read` keeps an empty layer's rectangle as stored, inverted too
-  (Photoshop's fill layers), and a file whose layer and mask section ends with its layer info
-  (GIMP's) as such: `layer_tail` with data and no size, which the writer writes as nothing at
-  all. An inverted rectangle is refused only for a layer with `rgba`.
+- With `opts->stored`, `minipsd_read` keeps a file whose layer and mask section ends with its
+  layer info (GIMP's) as such: `layer_tail` with data and no size, which the writer writes as
+  nothing at all.
 - Photoshop's 16-bit files keep their layers in `Lr16`: `minipsd_read` leaves the block in
   `layer_tail`, empty, and the writer writes the layers there (the layer info empty), also into
   the other format. With `opts->stored`, a file without layers stays without: `layer_count` 0,

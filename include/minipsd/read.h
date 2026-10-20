@@ -122,7 +122,6 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     uint8_t            *pixels, *flat = NULL;
     minipsd_bytes       tail, composite = { NULL, 0 };
     int                 keep_composite, tail_none = 0;
-    uint8_t             align = 0;
     const uint64_t      max = limits ? limits->max_decoded_bytes : 0;
     uint64_t            decoded, canvas;
     uint32_t            loss = 0;
@@ -157,7 +156,6 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     if (rc != MINIPSD_OK) return rc;
 
     for (i = 0; i < info.layer_count; ++i) {
-        const uint64_t at = r->record_next;                     /* the record, its rectangle first */
         uint64_t       w, h;
         char          *name;
         minipsd_bytes  extra, pascal, copies[MPSD__RGBA], *stored = NULL;
@@ -174,9 +172,9 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         if (w > side || h > side) return MINIPSD_ERR_UNSUPPORTED;   /* the writer's limit */
         (void)minipsd_layer_name(&v, NULL, 0, &n);
         name   = (char *)mpsd__take(a, n, 0);
-        /* Stored: every channel copied as it is, never decoded, an empty layer's markers too; one
-           without transparency is written without one, as the file has it. */
-        keep = opts && opts->stored;
+        /* Stored: every channel copied as it is, never decoded; one without transparency is
+           written without one, as the file has it.  An empty layer has nothing to copy. */
+        keep = opts && opts->stored && w && h;
         for (k = 0; k < MINIPSD_CH_A; ++k) keep = keep && v.channel[k].size;   /* R, G, B */
         if (keep) {
             stored = (minipsd_bytes *)mpsd__take(a, MPSD__RGBA * sizeof *stored, 1);
@@ -219,12 +217,6 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         layers[i].hidden  = v.hidden;
         layers[i].top     = v.top;    layers[i].left  = v.left;
         layers[i].bottom  = v.bottom; layers[i].right = v.right;
-        if (stored && (v.bottom == v.top || v.right == v.left)) {   /* an empty one as stored, inverted too */
-            layers[i].top    = (int32_t)mpsd__get32(r->data + (size_t)at);
-            layers[i].left   = (int32_t)mpsd__get32(r->data + (size_t)at + 4);
-            layers[i].bottom = (int32_t)mpsd__get32(r->data + (size_t)at + 8);
-            layers[i].right  = (int32_t)mpsd__get32(r->data + (size_t)at + 12);
-        }
         memcpy(layers[i].blend, v.blend, 4);
         layers[i].clipping = v.clipping;
         layers[i].flags    = (uint8_t)(v.flags & ~MPSD__FLAG_HIDDEN);
@@ -247,13 +239,6 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
             for (k = 0; k < MPSD__RGBA; ++k) stored[k] = copies[k];
             layers[i].stored = stored;
         }
-    }
-
-    /* The layer info's padding, as the file has it: the strictest its length fits (Photoshop's 4,
-       others' 2, or none). */
-    if (info.layer_count) {
-        const uint64_t length = r->li_end - (r->li_start - MPSD__LAYER_COUNT);
-        align = (uint8_t)(length % 4 == 0 ? 4 : length % 2 ? 1 : 2);
     }
 
     /* The composite as stored: its bytes, or its pixels matted, so it is written back exactly; a
@@ -313,7 +298,6 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     d->composite_stored = composite;
     d->composite_channels = keep_composite ? (uint16_t)info.channels : 0;
     d->composite_alpha    = (uint8_t)(keep_composite && info.composite_has_alpha && info.channels >= MPSD__RGBA);
-    d->layer_info_align   = align;
     d->layer_tail       = tail;
     d->depth            = info.depth;
     d->format           = info.format;

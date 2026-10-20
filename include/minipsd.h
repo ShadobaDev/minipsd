@@ -286,8 +286,7 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
     int32_t        top, left, bottom, right; /*!< The layer's rectangle on the canvas, as in
                                     minipsd_layer_view; all four zero, with rgba and no stored: the
                                     full canvas.  It may reach past the canvas, or lie wholly
-                                    outside it.  An empty layer's has no area, or is inverted as
-                                    a file stored it (Photoshop's fill layers: 0, 0, -1, 0).      */
+                                    outside it.  An empty layer's has no area.                     */
     char           blend[4];    /*!< The blend mode's four-character key, such as "mul "; all zero:
                                     "norm".  Written as given; the composed composite draws every
                                     mode as normal.                                                */
@@ -386,10 +385,6 @@ typedef struct minipsd_doc {
                                               (composite_alpha) and alpha or spot channels, in
                                               the file's order.  Ignored without
                                               composite_stored.                               */
-    uint8_t              layer_info_align; /*!< The layer info's length is padded to a multiple
-                                              of this: 0 or 2, even (the default); 4, as
-                                              Photoshop pads it; 1, not padded.  minipsd_read
-                                              sets the file's.                                 */
     uint8_t              composite_alpha; /*!< Non-zero: composite_stored's fourth channel is
                                               transparency, and the layer count is written
                                               negative; zero: any fourth channel is an alpha
@@ -429,7 +424,7 @@ typedef struct minipsd_write_opts {
  * \retval MINIPSD_ERR_ARG  doc is NULL, a format is neither 0, MINIPSD_PSD nor MINIPSD_PSB (the
  *                          document's or opts'), there are no layers and no composite (or more than 32767 layers), dpi is outside
  *                          (0, 65536), depth is not 0, 8 or 16, a size is set without its data (icc, a resource, a name,
- *                          extra, layer_tail), a layer with rgba has an inverted rectangle, an empty layer's
+ *                          extra, layer_tail), a layer's rectangle is inverted, an empty layer's
  *                          has an area, extra is not a run of well-formed blocks, a stored
  *                          channel does not match its rectangle, a layer has only stored
  *                          channels while the composite is to be composed, groups do not nest

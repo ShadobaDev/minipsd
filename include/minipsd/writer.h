@@ -698,8 +698,7 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *d, const minipsd_write_opts 
     /* The dpi is stored as 16.16 fixed point: it must round to 1 .. 2^32 - 1.  NaN fails both. */
     res = d->dpi * MPSD__FIXED_ONE + 0.5;
     if ((d->layer_count && !d->layers) || (!d->layer_count && !d->composite && !d->composite_stored.size) || d->layer_count > MPSD__MAX_LAYERS || !(res >= 1.0 && res < 4294967296.0)
-        || (d->depth != 0 && d->depth != 8 && d->depth != 16) || d->format > MINIPSD_PSB
-        || (d->layer_info_align > 2 && d->layer_info_align != 4))
+        || (d->depth != 0 && d->depth != 8 && d->depth != 16) || d->format > MINIPSD_PSB)
         return MINIPSD_ERR_ARG;
     rc = mpsd__kept_ok(d, out);
     if (rc != MINIPSD_OK) return rc;
@@ -713,7 +712,7 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *d, const minipsd_write_opts 
         const minipsd_layer *l = &d->layers[i];
         const int64_t w = (int64_t)l->right - l->left, h = (int64_t)l->bottom - l->top;
         int k;
-        if (((w < 0 || h < 0) && l->rgba && !l->stored) || (!l->rgba && !l->stored && w > 0 && h > 0)) return MINIPSD_ERR_ARG;
+        if (w < 0 || h < 0 || (!l->rgba && !l->stored && w && h)) return MINIPSD_ERR_ARG;
         if (w > mpsd__max_side(out) || h > mpsd__max_side(out)) return MINIPSD_ERR_SIZE;
         rc = l->mask ? mpsd__mask_ok(d, l->mask, out) : MINIPSD_OK;
         for (k = MPSD__CH_MASK; rc == MINIPSD_OK && k < mpsd__channel_count(l); ++k) rc = mpsd__retable_ok(d, l, k, out);
@@ -749,10 +748,7 @@ static int mpsd__measure_layers(const minipsd_doc *d, unsigned psb, uint64_t *si
         for (k = (size_t)first; k < (size_t)n; ++k)
             *content += sizes[i * MPSD__CHANNELS + k] = mpsd__layer_channel_size(d, &d->layers[i], (int)k, psb);
     }
-    {
-        const uint64_t align = d->layer_info_align ? d->layer_info_align : 2;   /* even by default */
-        *info = (*content + align - 1) / align * align;
-    }
+    *info = mpsd__pad((size_t)*content, 2);   /* even, as the format has it */
     return mpsd__section_size(d, *info, psb) > mpsd__max_layers_section(psb) ? MINIPSD_ERR_SIZE : MINIPSD_OK;
 }
 
