@@ -286,8 +286,7 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
     int32_t        top, left, bottom, right; /*!< The layer's rectangle on the canvas, as in
                                     minipsd_layer_view; all four zero, with rgba and no stored: the
                                     full canvas.  It may reach past the canvas, or lie wholly
-                                    outside it.  An empty layer's has no area, or is inverted as
-                                    a file stored it (Photoshop's fill layers: 0, 0, -1, 0).      */
+                                    outside it.  An empty layer's has no area.                     */
     char           blend[4];    /*!< The blend mode's four-character key, such as "mul "; all zero:
                                     "norm".  Written as given; the composed composite draws every
                                     mode as normal.                                                */
@@ -363,8 +362,7 @@ typedef struct minipsd_doc {
                                               where the layers go, the layer info left empty,
                                               as Photoshop's 16-bit files have them.
                                               Empty: no global mask, no blocks (an empty global
-                                              mask is written), but with data set and size 0:
-                                              nothing at all, as some files end the section.  */
+                                              mask is written).                               */
     uint16_t             depth;          /*!< Bits per channel: 0 or 8, or 16, where every sample
                                               (rgba, mask pixels, composite) is a uint16_t in
                                               host order, 0 .. 65535.                         */
@@ -381,13 +379,17 @@ typedef struct minipsd_doc {
                                               count, channel by channel, then the rows, laid
                                               out as format lays it out.  minipsd_read sets it
                                               with minipsd_read_opts.stored.  Size 0: none.   */
-    uint16_t             composite_channels; /*!< The channels composite_stored holds: 3 (red,
-                                              green, blue), or 4, the fourth transparency (the
-                                              layer count is then written negative).  Ignored
-                                              without composite_stored.                       */
-    uint8_t              layer_info_align; /*!< The layer info's length is padded to a multiple
-                                              of this: 0 or 2, even (the default); 4, as
-                                              Photoshop pads it; 1, not padded.  minipsd_read
+    uint16_t             composite_channels; /*!< The channels composite_stored holds, 3 to
+                                              56: red, green, blue, then transparency
+                                              (composite_alpha) and alpha or spot channels, in
+                                              the file's order.  Ignored without
+                                              composite_stored.                               */
+    uint8_t              composite_alpha; /*!< Non-zero: composite_stored's fourth channel is
+                                              transparency, and the layer count is written
+                                              negative; zero: any fourth channel is an alpha
+                                              channel, the count positive.  Ignored without
+                                              composite_stored: a supplied or composed
+                                              composite always has transparency.  minipsd_read
                                               sets the file's.                                 */
 } minipsd_doc;
 
@@ -421,7 +423,7 @@ typedef struct minipsd_write_opts {
  * \retval MINIPSD_ERR_ARG  doc is NULL, a format is neither 0, MINIPSD_PSD nor MINIPSD_PSB (the
  *                          document's or opts'), there are no layers and no composite (or more than 32767 layers), dpi is outside
  *                          (0, 65536), depth is not 0, 8 or 16, a size is set without its data (icc, a resource, a name,
- *                          extra, layer_tail), a layer with rgba has an inverted rectangle, an empty layer's
+ *                          extra, layer_tail), a layer's rectangle is inverted, an empty layer's
  *                          has an area, extra is not a run of well-formed blocks, a stored
  *                          channel does not match its rectangle, a layer has only stored
  *                          channels while the composite is to be composed, groups do not nest
@@ -926,7 +928,8 @@ enum {
     MINIPSD_LOST_BLENDING_RANGES = 2, /*!< No longer set: blending ranges are kept
                                            (minipsd_layer.blending_ranges).                     */
     MINIPSD_LOST_CHANNELS        = 4  /*!< Channels beyond R, G, B, transparency and the masks':
-                                           alpha and spot channels, of a layer or of the composite. */
+                                           alpha and spot channels, of a layer, or of the
+                                           composite when it is decoded (without opts->stored). */
 };
 
 /**
@@ -938,9 +941,8 @@ typedef struct minipsd_read_opts {
     int stored; /*!< Non-zero: each layer keeps its channels as stored (minipsd_layer.stored), not
                      decoded, so writing it back copies them: a fraction of the memory, and no
                      encoding, and ZIP-compressed channels pass.  A layer without a transparency
-                     channel is written without one.  The composite too
-                     (minipsd_doc.composite_stored, composite NULL), when it holds red, green,
-                     blue and at most transparency.                                              */
+                     channel is written without one.  The composite too, every channel of it
+                     (minipsd_doc.composite_stored, composite NULL).                             */
 } minipsd_read_opts;
 
 /**

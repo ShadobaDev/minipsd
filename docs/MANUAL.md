@@ -559,7 +559,7 @@ bits say what writing the document back would drop:
 
 | Bit | What |
 |---|---|
-| `MINIPSD_LOST_CHANNELS` | alpha and spot channels, of a layer or of the composite |
+| `MINIPSD_LOST_CHANNELS` | alpha and spot channels, of a layer, or of the composite without `opts->stored` |
 
 Each is planned work. If a file of yours sets one, please
 [open an issue](https://github.com/ShadobaDev/minipsd/issues) with the file, or with what

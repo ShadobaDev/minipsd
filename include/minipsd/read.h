@@ -121,8 +121,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     minipsd_layer      *layers;
     uint8_t            *pixels, *flat = NULL;
     minipsd_bytes       tail, composite = { NULL, 0 };
-    int                 keep_composite, tail_none = 0;
-    uint8_t             align = 0;
+    int                 keep_composite;
     const uint64_t      max = limits ? limits->max_decoded_bytes : 0;
     uint64_t            decoded, canvas;
     uint32_t            loss = 0;
@@ -142,9 +141,8 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     as_stored = all;
     as_stored.keep_matte = 1;
     canvas  = (uint64_t)info.width * info.height * MPSD__RGBA << wide;
-    /* Stored: the composite copied as it is, never decoded, when it holds R, G, B and at most
-       transparency; anything more is decoded, the rest reported lost. */
-    keep_composite = opts && opts->stored && (info.channels == 3 || (info.channels == MPSD__RGBA && info.composite_has_alpha));
+    /* Stored: the composite copied as it is, every channel, never decoded. */
+    keep_composite = opts && opts->stored && info.channels >= 3;
     decoded = keep_composite ? 0 : canvas;                      /* the composite */
     /* A flat file: its image as one layer; stored, as it is, no layer, the composite copied. */
     count   = info.layer_count ? info.layer_count : keep_composite ? 0 : 1;
@@ -158,7 +156,6 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     if (rc != MINIPSD_OK) return rc;
 
     for (i = 0; i < info.layer_count; ++i) {
-        const uint64_t at = r->record_next;                     /* the record, its rectangle first */
         uint64_t       w, h;
         char          *name;
         minipsd_bytes  extra, pascal, copies[MPSD__RGBA], *stored = NULL;
@@ -175,9 +172,9 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         if (w > side || h > side) return MINIPSD_ERR_UNSUPPORTED;   /* the writer's limit */
         (void)minipsd_layer_name(&v, NULL, 0, &n);
         name   = (char *)mpsd__take(a, n, 0);
-        /* Stored: every channel copied as it is, never decoded, an empty layer's markers too; one
-           without transparency is written without one, as the file has it. */
-        keep = opts && opts->stored;
+        /* Stored: every channel copied as it is, never decoded; one without transparency is
+           written without one, as the file has it.  An empty layer has nothing to copy. */
+        keep = opts && opts->stored && w && h;
         for (k = 0; k < MINIPSD_CH_A; ++k) keep = keep && v.channel[k].size;   /* R, G, B */
         if (keep) {
             stored = (minipsd_bytes *)mpsd__take(a, MPSD__RGBA * sizeof *stored, 1);
@@ -220,12 +217,6 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         layers[i].hidden  = v.hidden;
         layers[i].top     = v.top;    layers[i].left  = v.left;
         layers[i].bottom  = v.bottom; layers[i].right = v.right;
-        if (stored && (v.bottom == v.top || v.right == v.left)) {   /* an empty one as stored, inverted too */
-            layers[i].top    = (int32_t)mpsd__get32(r->data + (size_t)at);
-            layers[i].left   = (int32_t)mpsd__get32(r->data + (size_t)at + 4);
-            layers[i].bottom = (int32_t)mpsd__get32(r->data + (size_t)at + 8);
-            layers[i].right  = (int32_t)mpsd__get32(r->data + (size_t)at + 12);
-        }
         memcpy(layers[i].blend, v.blend, 4);
         layers[i].clipping = v.clipping;
         layers[i].flags    = (uint8_t)(v.flags & ~MPSD__FLAG_HIDDEN);
@@ -250,13 +241,6 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         }
     }
 
-    /* The layer info's padding, as the file has it: the strictest its length fits (Photoshop's 4,
-       others' 2, or none). */
-    if (info.layer_count) {
-        const uint64_t length = r->li_end - (r->li_start - MPSD__LAYER_COUNT);
-        align = (uint8_t)(length % 4 == 0 ? 4 : length % 2 ? 1 : 2);
-    }
-
     /* The composite as stored: its bytes, or its pixels matted, so it is written back exactly; a
        flat file's image also becomes its one layer, un-matted. */
     if (keep_composite) {
@@ -268,17 +252,14 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         composite = mpsd__copy(a, composite);
     }
     pixels = keep_composite ? NULL : (uint8_t *)mpsd__take(a, canvas, (int)wide);
-    if (!count) {
-        if (!info.layer_tail.data) tail_none = 1;               /* no layer and mask section at all */
-    } else if (!info.layer_count) {
+    if (count && !info.layer_count) {
         flat     = (uint8_t *)mpsd__take(a, canvas, (int)wide);
         decoded += canvas;
         if (max && decoded > max) return MINIPSD_ERR_LIMIT;
     }
-    if (info.channels > 3u + (info.composite_has_alpha ? 1u : 0u))
-        loss |= MINIPSD_LOST_CHANNELS;                          /* TODO(S6.8): alpha and spot channels */
+    if (!keep_composite && info.channels > 3u + (info.composite_has_alpha ? 1u : 0u))
+        loss |= MINIPSD_LOST_CHANNELS;                          /* decoded: R, G, B, transparency */
     tail = mpsd__copy_tail(a, r, info.layer_tail);
-    if ((info.layer_tail.data && !info.layer_tail.size) || tail_none) tail.data = (const uint8_t *)a->base;   /* nothing at all, as the file */
     if (info.icc.size) {
         uint8_t *icc = (uint8_t *)mpsd__take(a, info.icc.size, 0);
         if (icc) memcpy(icc, info.icc.data, info.icc.size);
@@ -313,7 +294,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     d->composite_matted = 1;
     d->composite_stored = composite;
     d->composite_channels = keep_composite ? (uint16_t)info.channels : 0;
-    d->layer_info_align   = align;
+    d->composite_alpha    = (uint8_t)(keep_composite && info.composite_has_alpha && info.channels >= MPSD__RGBA);
     d->layer_tail       = tail;
     d->depth            = info.depth;
     d->format           = info.format;

@@ -163,6 +163,10 @@ static unsigned mpsd__composite_channels(const minipsd_doc *d)
     return mpsd__copies_composite(d) ? d->composite_channels : MPSD__RGBA;
 }
 
+/* Is the composite's fourth channel transparency, the layer count negative?  Always for a
+   supplied or composed one. */
+static int mpsd__composite_alpha(const minipsd_doc *d) { return !mpsd__copies_composite(d) || d->composite_alpha; }
+
 /* No source: the pieces outside a layer channel and the composite. */
 static mpsd__source mpsd__no_source(void)
 {
@@ -209,12 +213,27 @@ static int mpsd__kept_kind(minipsd_bytes extra, unsigned kind, unsigned psb)
     return 0;
 }
 
-/* The writer's own blocks: the name in 'luni' (unless the kept names say it), then the group
-   marker unless a kept one says it. */
+/* Is there a kept 'luni'?  The first one's data in *data. */
+static int mpsd__kept_luni(minipsd_bytes extra, unsigned psb, minipsd_bytes *data)
+{
+    minipsd_block block;
+    size_t        pos = 0, next;
+    for (; pos < extra.size && mpsd__block(extra, pos, psb, &block, &next) == MINIPSD_OK; pos = next)
+        if (mpsd__tag((const uint8_t *)block.key, "luni")) { *data = block.data; return 1; }
+    return 0;
+}
+
+/* The writer's own blocks, first: the name in 'luni' (the kept one, as it is, when the kept names
+   say it), then the group marker unless a kept one says it. */
 static void mpsd__own_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned from, int named)
 {
-    const char *name = l->name;
-    if (!named) {
+    const char   *name = l->name;
+    minipsd_bytes kept;
+    if (named && mpsd__kept_luni(l->extra, from, &kept)) {
+        mpsd__put(s, "8BIMluni", 8);
+        mpsd__u32(s, (uint32_t)kept.size);
+        mpsd__put(s, kept.data, kept.size);
+    } else if (!named) {
         const size_t units = mpsd__utf16(name, NULL, NULL);
         const size_t luni  = MPSD__LEN + units * 2;   /* the count of UTF-16 units, the units */
         mpsd__put(s, "8BIMluni", 8);
@@ -232,17 +251,6 @@ static void mpsd__own_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned fro
     }
 }
 
-/* Is there a kept 'luni'?  The first one's data in *data.  The writer's own blocks then take its
-   place, so the blocks keep their order. */
-static int mpsd__kept_luni(minipsd_bytes extra, unsigned psb, minipsd_bytes *data)
-{
-    minipsd_block block;
-    size_t        pos = 0, next;
-    for (; pos < extra.size && mpsd__block(extra, pos, psb, &block, &next) == MINIPSD_OK; pos = next)
-        if (mpsd__tag((const uint8_t *)block.key, "luni")) { *data = block.data; return 1; }
-    return 0;
-}
-
 /* Do the names kept from a file (a 'luni' in extra, else name_pascal read as Latin-1) say the
    layer's name, as minipsd_read made it?  Then they are written as they are. */
 static int mpsd__kept_names(const minipsd_layer *l, unsigned psb)
@@ -257,25 +265,20 @@ static int mpsd__kept_names(const minipsd_layer *l, unsigned psb)
 }
 
 /* Blocks kept from a file, laid out as the from format lays them out, written in the out format,
-   but where the layer's own fields win: the first 'luni' becomes the writer's own blocks (itself
-   when it says the layer's name, and the group marker unless kept), a later one goes, and so does
-   an 'lsct' of another kind than the layer's.  minipsd_doc_check has walked them, and checked
-   they can change format. */
-static void mpsd__kept_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned from, unsigned out, int named)
+   after the writer's own, but where the layer's own fields win: 'luni' (mpsd__own_blocks wrote the
+   name) and an 'lsct' of another kind than the layer's go.  minipsd_doc_check has walked them, and
+   checked they can change format. */
+static void mpsd__kept_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned from, unsigned out)
 {
     const minipsd_bytes extra = l->extra;
     minipsd_block block;
     size_t        pos = 0, next;
-    int           first = 1;
     while (pos < extra.size && mpsd__block(extra, pos, from, &block, &next) == MINIPSD_OK) {
         const int type = mpsd__lsct_type(&block);
-        const int luni = mpsd__tag((const uint8_t *)block.key, "luni");
-        if ((luni && first && named) || (!luni && (type < 0 || type == (int)l->kind))) {
+        if (!mpsd__tag((const uint8_t *)block.key, "luni") && (type < 0 || type == (int)l->kind)) {
             if (from == out) mpsd__put(s, extra.data + pos, next - pos);
             else mpsd__put_block(s, extra.data + pos, (size_t)(block.data.data - (extra.data + pos)), block.data.size, block.data.size, out);
         }
-        if (luni && first) mpsd__own_blocks(s, l, from, named);   /* after the kept name, or in its place */
-        first = first && !luni;
         pos = next;
     }
 }
@@ -307,15 +310,13 @@ static void mpsd__blending_ranges(mpsd__sink *s, const minipsd_layer *l)
 }
 
 /* The extra-data block of a layer record: the mask, the blending ranges, the legacy name, then
-   the blocks: the kept ones in their order (laid out as the from format lays them out, written in
-   the out format), the writer's own ('luni', the group marker) where the kept 'luni' was, or
-   first. */
+   the blocks: the writer's own ('luni', the group marker), then the kept ones in their order (laid
+   out as the from format lays them out, written in the out format). */
 static void mpsd__layer_extra(mpsd__sink *s, const minipsd_layer *l, unsigned from, unsigned out)
 {
     const char          *name = l->name;
     const unsigned char *p = (const unsigned char *)(name ? name : "");
     const int            named = mpsd__kept_names(l, from);
-    minipsd_bytes        luni;
     size_t ascii = 0;
     uint8_t pascal[256];
     if (named) {                              /* the kept legacy name, as it is */
@@ -332,8 +333,8 @@ static void mpsd__layer_extra(mpsd__sink *s, const minipsd_layer *l, unsigned fr
     mpsd__blending_ranges(s, l);
     mpsd__put(s, pascal, ascii + 1);
     mpsd__zeros(s, mpsd__pad(ascii + 1, 4) - (ascii + 1));
-    if (!mpsd__kept_luni(l->extra, from, &luni)) mpsd__own_blocks(s, l, from, named);   /* first, or where the kept one was */
-    mpsd__kept_blocks(s, l, from, out, named);
+    mpsd__own_blocks(s, l, from, named);
+    mpsd__kept_blocks(s, l, from, out);
 }
 
 
@@ -420,7 +421,7 @@ static const uint8_t *mpsd__kept_resolution(const minipsd_doc *d)
     return NULL;
 }
 
-/* The first kept resource with this id; NULL when there is none. */
+/* The first kept resource with this id; NULL when there is none: its name goes on the writer's own. */
 static const minipsd_resource *mpsd__find_resource(const minipsd_doc *d, unsigned id)
 {
     size_t i;
@@ -455,22 +456,18 @@ static void mpsd__resolution(mpsd__sink *s, const minipsd_doc *d, minipsd_bytes 
     mpsd__put_resource(s, MPSD__RES_RESOLUTION, name, kept ? kept : own, MPSD__RESOLUTION_SIZE);
 }
 
-/* The image resources: the writer's own (the resolution, the ICC profile if any) where the first
-   kept one of the same id was, so a file's order comes back, or first when there is none; then
-   the kept ones.  A later kept resolution or profile goes: the document's field says it. */
+/* The image resources: the writer's own first (the resolution, the ICC profile if any), then the
+   kept ones.  A kept resolution or profile goes: the document's field says it. */
 static void mpsd__resources(mpsd__sink *s, const minipsd_doc *d)
 {
     const minipsd_resource *res = mpsd__find_resource(d, MPSD__RES_RESOLUTION), *icc = mpsd__find_resource(d, MPSD__RES_ICC);
     const minipsd_bytes     none = { NULL, 0 };
     size_t                  i;
-    if (!res) mpsd__resolution(s, d, none);
-    if (!icc && d->icc) mpsd__put_resource(s, MPSD__RES_ICC, none, d->icc, d->icc_size);
-    for (i = 0; i < d->resource_count; ++i) {
-        const minipsd_resource *r = &d->resources[i];
-        if (r == res)                mpsd__resolution(s, d, r->name);
-        else if (r == icc && d->icc) mpsd__put_resource(s, MPSD__RES_ICC, r->name, d->icc, d->icc_size);
-        else if (mpsd__kept_resource(r)) mpsd__put_resource(s, r->id, r->name, r->data.data, r->data.size);
-    }
+    mpsd__resolution(s, d, res ? res->name : none);
+    if (d->icc) mpsd__put_resource(s, MPSD__RES_ICC, icc ? icc->name : none, d->icc, d->icc_size);
+    for (i = 0; i < d->resource_count; ++i)
+        if (mpsd__kept_resource(&d->resources[i]))
+            mpsd__put_resource(s, d->resources[i].id, d->resources[i].name, d->resources[i].data.data, d->resources[i].data.size);
 }
 
 static uint64_t mpsd__resources_size(const minipsd_doc *d)
@@ -544,7 +541,7 @@ static int mpsd__tail_range(mpsd__sink *s, const minipsd_doc *d, size_t lo, size
     const minipsd_bytes t    = d->layer_tail;
     const unsigned      from = mpsd__doc_psb(d);
     size_t              at;
-    if (!t.size) { if (!t.data) mpsd__u32(s, 0); return MINIPSD_OK; }   /* data with no size: nothing at all */
+    if (!t.size) { mpsd__u32(s, 0); return MINIPSD_OK; }   /* an empty global layer mask */
     if (from == out || t.size < MPSD__LEN) { mpsd__put(s, t.data + lo, hi - lo); return MINIPSD_OK; }   /* too short to hold a length */
     if (mpsd__get32(t.data) > t.size - MPSD__LEN) return MINIPSD_ERR_UNSUPPORTED;
     at = MPSD__LEN + mpsd__get32(t.data);
@@ -577,16 +574,12 @@ static int mpsd__tail_out(mpsd__sink *s, const minipsd_doc *d, unsigned out)
     return rc != MINIPSD_OK || at == end ? rc : mpsd__tail_range(s, d, end, d->layer_tail.size, out);
 }
 
-/* Is there no layer and mask section at all?  No layers, and a tail of nothing, as a flat file has. */
-static int mpsd__no_section(const minipsd_doc *d) { return !d->layer_count && !d->layer_tail.size && d->layer_tail.data; }
-
 /* The layer and mask section's length: the layer info's length, the layer info (info bytes, here
    or in the layers' block), the tail; the block's header and padding with it. */
 static uint64_t mpsd__section_size(const minipsd_doc *d, uint64_t info, unsigned out)
 {
     mpsd__sink c = { NULL, NULL, 0, 0 };
     size_t     end;
-    if (mpsd__no_section(d)) return 0;
     (void)mpsd__tail_out(&c, d, out);
     if (mpsd__layers_block(d, &end) < d->layer_tail.size)
         c.count += MPSD__BLOCK_LEN + mpsd__len_size(out) + (mpsd__pad((size_t)info, 4) - info);   /* '8BIM', 'Lr16', length; padding */
@@ -648,13 +641,13 @@ static int mpsd__retable_ok(const minipsd_doc *d, const minipsd_layer *l, int k,
     return mpsd__table_ok(&src, mpsd__doc_psb(d), out);
 }
 
-/* A stored composite: R, G, B and at most transparency, fitting the canvas, its table the out
-   format's (or one that can become it). */
+/* A stored composite: R, G, B and up to the format's limit, the fourth transparency only when
+   there is one, fitting the canvas, its table the out format's (or one that can become it). */
 static int mpsd__composite_ok(const minipsd_doc *d, unsigned out)
 {
     const mpsd__source src = mpsd__composite_source(d);
     if (!mpsd__copies_composite(d)) return MINIPSD_OK;
-    if ((d->composite_channels != 3 && d->composite_channels != MPSD__RGBA)
+    if (d->composite_channels < 3 || d->composite_channels > MPSD__MAX_CHANNELS || (d->composite_alpha && d->composite_channels < MPSD__RGBA)
         || !mpsd__stored_ok(d->composite_stored, d->width, src.height, mpsd__doc_wide(d), mpsd__doc_psb(d)))
         return MINIPSD_ERR_ARG;
     return mpsd__table_ok(&src, mpsd__doc_psb(d), out);
@@ -701,8 +694,7 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *d, const minipsd_write_opts 
     /* The dpi is stored as 16.16 fixed point: it must round to 1 .. 2^32 - 1.  NaN fails both. */
     res = d->dpi * MPSD__FIXED_ONE + 0.5;
     if ((d->layer_count && !d->layers) || (!d->layer_count && !d->composite && !d->composite_stored.size) || d->layer_count > MPSD__MAX_LAYERS || !(res >= 1.0 && res < 4294967296.0)
-        || (d->depth != 0 && d->depth != 8 && d->depth != 16) || d->format > MINIPSD_PSB
-        || (d->layer_info_align > 2 && d->layer_info_align != 4))
+        || (d->depth != 0 && d->depth != 8 && d->depth != 16) || d->format > MINIPSD_PSB)
         return MINIPSD_ERR_ARG;
     rc = mpsd__kept_ok(d, out);
     if (rc != MINIPSD_OK) return rc;
@@ -716,7 +708,7 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *d, const minipsd_write_opts 
         const minipsd_layer *l = &d->layers[i];
         const int64_t w = (int64_t)l->right - l->left, h = (int64_t)l->bottom - l->top;
         int k;
-        if (((w < 0 || h < 0) && l->rgba && !l->stored) || (!l->rgba && !l->stored && w > 0 && h > 0)) return MINIPSD_ERR_ARG;
+        if (w < 0 || h < 0 || (!l->rgba && !l->stored && w && h)) return MINIPSD_ERR_ARG;
         if (w > mpsd__max_side(out) || h > mpsd__max_side(out)) return MINIPSD_ERR_SIZE;
         rc = l->mask ? mpsd__mask_ok(d, l->mask, out) : MINIPSD_OK;
         for (k = MPSD__CH_MASK; rc == MINIPSD_OK && k < mpsd__channel_count(l); ++k) rc = mpsd__retable_ok(d, l, k, out);
@@ -752,10 +744,7 @@ static int mpsd__measure_layers(const minipsd_doc *d, unsigned psb, uint64_t *si
         for (k = (size_t)first; k < (size_t)n; ++k)
             *content += sizes[i * MPSD__CHANNELS + k] = mpsd__layer_channel_size(d, &d->layers[i], (int)k, psb);
     }
-    {
-        const uint64_t align = d->layer_info_align ? d->layer_info_align : 2;   /* even by default */
-        *info = (*content + align - 1) / align * align;
-    }
+    *info = mpsd__pad((size_t)*content, 2);   /* even, as the format has it */
     return mpsd__section_size(d, *info, psb) > mpsd__max_layers_section(psb) ? MINIPSD_ERR_SIZE : MINIPSD_OK;
 }
 
@@ -767,7 +756,7 @@ static void mpsd__head(mpsd__sink *s, const minipsd_doc *d, uint64_t info, unsig
     mpsd__put(s, "8BPS", 4);
     mpsd__u16(s, out ? MINIPSD_PSB : MINIPSD_PSD);   /* the version */
     mpsd__zeros(s, 6);                        /* reserved            */
-    mpsd__u16(s, mpsd__composite_channels(d));   /* R, G, B, alpha      */
+    mpsd__u16(s, mpsd__composite_channels(d));   /* R, G, B, alpha, ... */
     mpsd__u32(s, d->height);
     mpsd__u32(s, d->width);
     mpsd__u16(s, mpsd__doc_wide(d) ? 16 : 8); /* bits per channel    */
@@ -781,7 +770,6 @@ static void mpsd__head(mpsd__sink *s, const minipsd_doc *d, uint64_t info, unsig
     size_t         end;
     const size_t   at = mpsd__layers_block(d, &end);
     mpsd__putlen(s, mpsd__section_size(d, info, out), out);   /* layer and mask information */
-    if (mpsd__no_section(d)) return;
     mpsd__putlen(s, at < d->layer_tail.size ? 0 : info, out);
     if (at < d->layer_tail.size) {
         (void)mpsd__tail_range(s, d, 0, at, out);
@@ -789,7 +777,7 @@ static void mpsd__head(mpsd__sink *s, const minipsd_doc *d, uint64_t info, unsig
         mpsd__putlen(s, info, out);
     }
     if (d->layer_count)
-        mpsd__u16(s, (unsigned)(uint16_t)(mpsd__composite_channels(d) == MPSD__RGBA ? -(int16_t)d->layer_count : (int16_t)d->layer_count));   /* negative: composite has alpha */
+        mpsd__u16(s, (unsigned)(uint16_t)(mpsd__composite_alpha(d) ? -(int16_t)d->layer_count : (int16_t)d->layer_count));   /* negative: composite has alpha */
 }
 
 /* After the last layer channel: the layer info's padding, the kept tail or an empty global layer

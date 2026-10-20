@@ -121,13 +121,14 @@ TEST(MinipsdWriterTest, ALayerIsWrittenAtItsRectangle)
         EXPECT_EQ(p.composite.size(), 8u * 4 * 4) << "the composite stays the canvas";
     }
 
-    // Inverted: an empty layer's, as a file stores it, is written as it is; a layer with pixels
-    // cannot have one.
+    // Inverted: refused, an empty layer's too (minipsd_read gives an empty one, not inverted).
     minipsd_layer inverted[2] = {layers[0], {.name = "Fill", .opacity = 255, .bottom = -1}};
     minipsd_doc d = docOf(8, 4, inverted, 2);
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "an empty layer's";
+    inverted[1].bottom = 0;
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK);
     inverted[0].bottom = 0;
-    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "a layer with pixels";
 }
 
 TEST(MinipsdWriterTest, ASuppliedCompositeIsMattedAndWrittenWithoutComposing)
@@ -183,9 +184,16 @@ TEST(MinipsdWriterTest, ASuppliedCompositeIsMattedAndWrittenWithoutComposing)
         for (std::size_t i = 0; i < std::size_t(37) * 5 * 4; ++i)
             if (i % 4 != 3) { ASSERT_EQ(back.composite[i], other[i]) << i; }
 
-        // Refused: a channel count other than 3 or 4, or bytes that do not hold the rows.
-        d.composite_channels = 5;
-        EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG);
+        // Refused: fewer than 3 channels or more than 56, transparency without a fourth, or bytes
+        // that do not hold the rows.
+        for (const std::uint16_t n : {std::uint16_t(2), std::uint16_t(57)}) {
+            d.composite_channels = n;
+            EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << n;
+        }
+        d.composite_channels = 3;
+        d.composite_alpha    = 1;
+        EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "transparency, no fourth channel";
+        d.composite_alpha    = 0;
         d.composite_channels = 4;
         EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "three channels' rows for four";
         d.composite_stored = {nullptr, planes.size()};
@@ -255,7 +263,7 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
         }
         if (res.id == 1036) { EXPECT_EQ(Bytes(res.name.data, res.name.data + res.name.size), nm); }
     }
-    EXPECT_EQ(ids, (std::vector<int>{1036, 1005, 1039})) << "the writer's own resources where the kept ones were";
+    EXPECT_EQ(ids, (std::vector<int>{1005, 1039, 1036})) << "the writer's own resources first";
     minipsd_layer_view v;
     ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
     EXPECT_STREQ(v.blend, "mul ");
@@ -267,11 +275,9 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     EXPECT_EQ(Bytes(v.blending_ranges.data, v.blending_ranges.data + v.blending_ranges.size),
               (Bytes{0, 0, 255, 255, 59, 60, 210, 220, 10, 10, 200, 200, 0, 0, 255, 255})) << "the ranges, as given";
     const Bytes blocks(v.extra.data, v.extra.data + v.extra.size);
-    EXPECT_EQ(Bytes(blocks.begin(), blocks.begin() + static_cast<std::ptrdiff_t>(vmsk.size())), vmsk) << "a kept block first";
-    EXPECT_EQ(std::string(blocks.begin() + static_cast<std::ptrdiff_t>(vmsk.size()) + 4, blocks.begin() + static_cast<std::ptrdiff_t>(vmsk.size()) + 8), "luni")
-        << "the writer's 'luni' where the kept one was";
-    EXPECT_EQ(Bytes(blocks.end() - static_cast<std::ptrdiff_t>(lsct.size() + tysh.size()), blocks.end()), lsct + tysh)
-        << "kept blocks follow it, in order, without the second 'luni'";
+    EXPECT_EQ(std::string(blocks.begin() + 4, blocks.begin() + 8), "luni") << "the writer's 'luni' first";
+    EXPECT_EQ(Bytes(blocks.end() - static_cast<std::ptrdiff_t>(vmsk.size() + lsct.size() + tysh.size()), blocks.end()), vmsk + lsct + tysh)
+        << "kept blocks follow it, in order, without the kept 'luni's";
 
     // Another dpi: the writer's own resolution, in inches.
     d.dpi = 72;
@@ -281,23 +287,6 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE && res.id != 1005) {}
     ASSERT_EQ(res.id, 1005);
     EXPECT_EQ(res.data.data[7], 1) << "shown in inches";
-
-    // The layer info's padding: none, even (the default) or Photoshop's 4; minipsd_read finds it
-    // again, so the file comes back as it was.
-    const minipsd_read_opts keep{1};
-    for (const std::uint8_t align : {std::uint8_t(1), std::uint8_t(2), std::uint8_t(4)}) {
-        SCOPED_TRACE(align);
-        d.layer_info_align = align;
-        const Bytes padded = write(d);
-        EXPECT_EQ(pull(d, 7), padded);
-        minipsd_doc *again = nullptr;
-        ASSERT_EQ(minipsd_read(padded.data(), padded.size(), nullptr, &keep, &again, nullptr), MINIPSD_OK);
-        EXPECT_EQ(write(*again), padded);
-        minipsd_doc_free(again);
-    }
-    d.layer_info_align = 3;
-    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG);
-    d.layer_info_align = 0;
 
     // An 'Lr32' block says where the layers go too; a tail that is not blocks after its mask
     // holds none, its bytes written as they are.
@@ -322,7 +311,7 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     EXPECT_EQ(info.icc.size, 0u);
     ids.clear();
     while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE) ids.push_back(res.id);
-    EXPECT_EQ(ids, (std::vector<int>{1036, 1005}));
+    EXPECT_EQ(ids, (std::vector<int>{1005, 1036}));
 }
 
 TEST(MinipsdWriterTest, GroupsAndMasksAreWritten)

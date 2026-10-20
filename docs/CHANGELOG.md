@@ -73,36 +73,29 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   layers when set), the most layers, the most bytes one decode call writes.
 
 ### Changed
-- A document read from a file is written back closer to that file, byte for byte: the
-  resolution and ICC profile resources where the file had them, a layer's `luni` where its
-  blocks had it (kept resources and blocks were already in their order).
 - `minipsd_read` with `opts->stored` keeps the composite as the file stores it, in
   `composite_stored` and `composite_channels` at the end of `minipsd_doc` (`composite` is then
-  `NULL`), and the writer copies it: no decoding, no encoding, three channels written as
-  three. A supplied `composite` still wins.
+  `NULL`), and the writer copies it: no decoding, no encoding, every channel written as
+  the file has it, alpha and spot channels too (`MINIPSD_LOST_CHANNELS` no longer set for
+  them), and `composite_alpha` says whether the fourth is transparency. A supplied `composite`
+  still wins.
 - A stored layer without a transparency channel is written without one, as its file has it,
   instead of with an opaque one.
-- `minipsd_read` with `opts->stored` keeps an empty layer's channels too (their compression
-  markers), and `layer_info_align` at the end of `minipsd_doc` keeps how the file pads its layer
-  info (Photoshop to 4 bytes, others to 2 or not at all); the writer pads as it says, even by
-  default. A layer's all-zero rectangle means the full canvas only with `rgba`: stored channels
-  take the rectangle as it is.
+- A layer's all-zero rectangle means the full canvas only with `rgba`: stored channels take the
+  rectangle as it is.
 - A layer's names kept from a file: `name_pascal` at the end of `minipsd_layer` holds its legacy
   name as stored, and while `name` still says what the file's names say, the legacy name and the
   kept `luni` are written as they are (another program's code page, a counted NUL); a renamed
   layer gets the writer's own.
-- With `opts->stored`, `minipsd_read` keeps an empty layer's rectangle as stored, inverted too
-  (Photoshop's fill layers), and a file whose layer and mask section ends with its layer info
-  (GIMP's) as such: `layer_tail` with data and no size, which the writer writes as nothing at
-  all. An inverted rectangle is refused only for a layer with `rgba`.
 - Photoshop's 16-bit files keep their layers in `Lr16`: `minipsd_read` leaves the block in
   `layer_tail`, empty, and the writer writes the layers there (the layer info empty), also into
   the other format. With `opts->stored`, a file without layers stays without: `layer_count` 0,
-  which `minipsd_doc_check` takes with a composite; it is written flat, without a layer and mask
-  section when the file had none.
-- 250 of the 254 files of psd-tools' set and our own that `minipsd_read` takes come back
-  identical through `minipsd_read` (with `opts->stored`) and `minipsd_write`;
-  `tests/psd_tools/roundtrip.py` checks every one.
+  which `minipsd_doc_check` takes with a composite; it is written flat.
+- A file read and written back keeps all its content; layout the format leaves to the writer
+  is minipsd's own, and bytes outside the format are not reproduced (the spec's round trip
+  rule): the writer's own resources and `luni` come first. `tests/psd_tools/roundtrip.py`
+  checks every file of psd-tools' set that `minipsd_read` takes: its content, compared through
+  psd-tools, and a second pass, which changes no byte.
 
 ## [0.2.0] — 2026-10-15
 

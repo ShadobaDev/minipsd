@@ -325,9 +325,11 @@ feature; a supplied composite needs nothing. See
         4, others 2 or none).
   - [x] **S6.7g** An empty layer's inverted rectangle, a layer tail the file does not have.
   - [x] **S6.7h** Layers in `Lr16`, files without layers.
-- [ ] **S6.8** Channels beyond RGBA (alpha and spot channels, of layers and of the composite)
-      kept, in the file's order (GIMP writes transparency last); until then
-      `MINIPSD_LOST_CHANNELS`.
+- [x] **S6.8** The composite's channels beyond RGBA (alpha and spot channels) kept, and whether
+      its fourth is transparency (`composite_alpha`). Not kept, by the rule in the spec's
+      [round trip](SPECIFICATION.md#what-is-read): a layer's channel order (Procreate writes
+      transparency last) is the writer's to choose, and the two bytes Procreate writes past the
+      layer info are outside the format.
 - [ ] **S6.9** ZIP channels (compression 2, and 3 with prediction), Photoshop's 16- and 32-bit
       layers, decoded through the caller's inflate: minipsd implements no deflate. A function
       pointer and its `user` at the end of `minipsd_decode_opts` (and of `minipsd_read_opts`, so
@@ -344,6 +346,14 @@ feature; a supplied composite needs nothing. See
       Without the function, decoding them stays `MINIPSD_ERR_UNSUPPORTED`.
       *Done when:* psd-tools' 16-bit RGB files decode, layers and masks, to the samples psd-tools
       gives, through zlib in the tests; the fuzzer decodes ZIP channels through zlib.
+- [x] **S6.10** S6.7 against the round-trip rule: what it keeps that is layout the writer may
+      choose, or outside the format, goes. Kept as content: blending ranges, a layer without
+      transparency (Photoshop's background), the legacy name, a file without layers, the
+      composite's channels; `composite_stored` for E1, `Lr16` until someone checks Photoshop
+      reads 16-bit layers from the layer info. Gone: the order of resources and `luni`, the
+      layer info's padding (`layer_info_align`; always even), empty layers' channels and
+      inverted rectangles, a missing global layer mask, a section of length 0.
+      `roundtrip.py` checks content and a second pass instead of bytes.
 
 ## 7. Interoperability
 
@@ -383,3 +393,6 @@ Large cases. Each would start with a *design* step, and only when a real consume
 - In-place patching of fixed-size fields.
 - Making `packbits` or `composite` public.
 - The C++ facade.
+- A layer's own alpha and spot channels (ids other than R, G, B, transparency and the masks):
+  no file we have holds one, and Photoshop does not write them. Until a file shows one, such a
+  layer sets `MINIPSD_LOST_CHANNELS`.

@@ -513,7 +513,7 @@ int            composite_matted;   /* non-zero: composite is already matted, wri
   its one row in the workspace, as now.
 - **Kept (`composite_stored`, when `composite == NULL`): a file's own, copied.** The composite as
   the file stores it, one compression marker and one count table over all its channels' rows,
-  with `composite_channels` (3, or 4 with transparency). The writer copies it like a stored layer
+  with `composite_channels` (3 to 56) and `composite_alpha` (the fourth is transparency). The writer copies it like a stored layer
   channel (its count table re-written when the format changes), and the header's channel count
   and the layer count's sign follow it. Re-encoding would give the same pixels in other bytes:
   every program packs PackBits its own way. `minipsd_read` sets it with `opts->stored`.
@@ -536,7 +536,7 @@ int            composite_matted;   /* non-zero: composite is already matted, wri
 
 | Field | Zero means | Notes |
 |---|---|---|
-| `const minipsd_resource *resources`, `size_t resource_count` | no other resources | written in order, the writer's own 1005 and 1039 in place of the first kept ones (first without them); the reader's `minipsd_resource` type, which carries the resource's name (`name`, a Pascal string's bytes, at most 255) |
+| `const minipsd_resource *resources`, `size_t resource_count` | no other resources | written in order after the writer's own 1005 and 1039, which take the kept ones' names; the reader's `minipsd_resource` type, which carries the resource's name (`name`, a Pascal string's bytes, at most 255) |
 | `minipsd_bytes layer_tail` | an empty global layer mask (four zero bytes) | the rest of the layer and mask section after the layer info: the global layer mask information and the global additional blocks (`Txt2`, `Patt`, `Lr16`, ...), written back as they are |
 
 The reader gives the matching fields: `minipsd_layer_view.clipping` and `.flags`,
@@ -603,7 +603,7 @@ typedef struct minipsd_read_opts {
   pixels' size. The caller decodes the one layer it edits through the reader, from the same
   file, sets that layer's `rgba` and clears its `stored`, then writes. Untouched layers are never
   decoded nor encoded again, and the file's own composite is copied, neither rendered nor
-  decoded (`E1`), when it holds R, G, B and at most transparency (more is decoded, and lost). ZIP
+  decoded (`E1`), alpha and spot channels with it (the resources naming them are kept). ZIP
   channels, which minipsd cannot decode, pass this way; a layer without a transparency channel
   is written without one.
 - **Limits:** `minipsd_limits` as in the reader; `max_decoded_bytes` bounds the sum of the call's
@@ -621,7 +621,7 @@ typedef struct minipsd_read_opts {
 | Flag | What is lost |
 |---|---|
 | `MINIPSD_LOST_BLENDING_RANGES` | no longer set: the ranges are kept (`minipsd_layer.blending_ranges`) |
-| `MINIPSD_LOST_CHANNELS` | channels other than R, G, B, transparency and masks, of a layer or of the composite (a positive layer count makes a fourth composite channel an alpha channel), and a mask channel without mask data |
+| `MINIPSD_LOST_CHANNELS` | channels other than R, G, B, transparency and masks, of a layer, or of a decoded composite (a positive layer count makes a fourth composite channel an alpha channel), and a mask channel without mask data |
 
 - **Every known loss is tracked.** The code that sets a bit carries a `TODO` naming the ROADMAP
   step that will carry the content, so the list of bits is the list of open work.

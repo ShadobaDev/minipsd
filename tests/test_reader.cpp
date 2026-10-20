@@ -1779,8 +1779,9 @@ TEST(MinipsdReadTest, AStoredLayerWithoutTransparencyIsWrittenWithoutOne)
 }
 
 // Photoshop's empty fill layer, its rectangle inverted, in a file that ends the layer and mask
-// section with the layer info, as GIMP's do: as stored, both come back as they were.
-TEST(MinipsdReadTest, AStoredFileKeepsAnInvertedRectangleAndNoLayerTail)
+// section with the layer info, as GIMP's do: as stored, the rectangle comes back empty, and the
+// file is written with an empty global layer mask, as the format has it.
+TEST(MinipsdReadTest, AStoredFileGetsAnEmptyRectangleAndAGlobalLayerMask)
 {
     Rec fill;
     fill.bottom = -1;
@@ -1798,22 +1799,15 @@ TEST(MinipsdReadTest, AStoredFileKeepsAnInvertedRectangleAndNoLayerTail)
     const Doc d = readDoc(file, nullptr, MINIPSD_OK, nullptr, &keep);
     ASSERT_TRUE(d);
     const minipsd_layer &l = d->layers[0];
-    EXPECT_EQ(std::tie(l.top, l.left, l.bottom, l.right), std::make_tuple(0, 0, -1, 0)) << "as stored";
+    EXPECT_EQ(std::tie(l.top, l.left, l.bottom, l.right), std::make_tuple(0, 0, 0, 0)) << "empty";
     EXPECT_EQ(d->layer_tail.size, 0u);
-    EXPECT_NE(d->layer_tail.data, nullptr) << "nothing at all, not an empty global mask";
-    EXPECT_EQ(write(*d), file) << "the same bytes";
-    d->layer_tail.data = nullptr;
-    EXPECT_EQ(write(*d).size(), file.size() + 4) << "cleared: an empty global layer mask";
-
-    const Doc decoded = readDoc(file, nullptr);
-    ASSERT_TRUE(decoded);
-    EXPECT_EQ(decoded->layers[0].bottom, 0) << "decoded: the reader's empty rectangle";
+    EXPECT_EQ(write(*d).size(), file.size() + 4) << "an empty global layer mask";
 }
 
-// What stored does not copy: a composite with a fourth channel that is not transparency, or a
-// fifth, is decoded (and the rest lost); a layer without all of R, G, B is not copied (and
-// refused, as decoding refuses it); an empty
-// layer's rectangle with no width is kept as stored; a layer info of odd length is not padded.
+// A composite with a fourth channel that is not transparency, or a fifth: decoded, the rest
+// lost; stored, copied whole and written back as it was.  What stored does not copy: a layer
+// without all of R, G, B is not copied (and refused, as decoding refuses it); an empty layer's
+// rectangle with no width is kept as stored; a layer info of odd length is not padded.
 TEST(MinipsdReadTest, StoredCopiesOnlyWhatItCanWriteBack)
 {
     const minipsd_read_opts keep{1};
@@ -1824,12 +1818,24 @@ TEST(MinipsdReadTest, StoredCopiesOnlyWhatItCanWriteBack)
         s.layers   = {simpleRec()};
         s.count    = channels == 4 ? 1 : -1;                    // four: the fourth is not transparency
         s.image    = rawImage(channels, 2, 2, 0x80);
+        const Bytes file = build(s).bytes;
         std::uint32_t lost = 0;
-        const Doc d = readDoc(build(s).bytes, &lost, MINIPSD_OK, nullptr, &keep);
+        const Doc d = readDoc(file, &lost, MINIPSD_OK);
         ASSERT_TRUE(d);
         EXPECT_NE(d->composite, nullptr) << "decoded";
         EXPECT_EQ(d->composite_stored.size, 0u);
         EXPECT_EQ(lost, static_cast<std::uint32_t>(MINIPSD_LOST_CHANNELS));
+        const Doc k = readDoc(file, &lost, MINIPSD_OK, nullptr, &keep);
+        ASSERT_TRUE(k);
+        EXPECT_EQ(lost, 0u) << "copied whole";
+        EXPECT_EQ(k->composite, nullptr);
+        EXPECT_EQ(k->composite_channels, channels);
+        EXPECT_EQ(k->composite_alpha, channels == 5 ? 1 : 0);
+        EXPECT_EQ(write(*k), file);
+        k->composite_alpha = !k->composite_alpha;
+        const Open other(write(*k));
+        ASSERT_EQ(other.rc, MINIPSD_OK);
+        EXPECT_EQ(other.info.composite_has_alpha, channels == 4) << "the count's sign follows it";
     }
 
     Rec noBlue = simpleRec();
@@ -1848,7 +1854,7 @@ TEST(MinipsdReadTest, StoredCopiesOnlyWhatItCanWriteBack)
     EXPECT_EQ(std::tie(e->layers[0].top, e->layers[0].left, e->layers[0].bottom, e->layers[0].right),
               std::make_tuple(0, 0, 2, 0)) << "as stored";
 
-    // A layer info whose length is odd: not padded, as the file has it.
+    // A layer info whose length is odd, outside the format: padded to even.
     Rec odd = simpleRec();
     odd.pascal = "Od";                                          // 1 + 2 bytes, padded to 4 in the record
     Out info;
@@ -1860,7 +1866,7 @@ TEST(MinipsdReadTest, StoredCopiesOnlyWhatItCanWriteBack)
     ASSERT_EQ(info.b.size() % 2, 1u);
     const Doc od = readDoc(build(o).bytes, nullptr, MINIPSD_OK, nullptr, &keep);
     ASSERT_TRUE(od);
-    EXPECT_EQ(od->layer_info_align, 1);
+    EXPECT_NO_THROW(read(write(*od))) << "the test reader refuses an odd length";
 }
 
 TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
@@ -1881,14 +1887,16 @@ TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
                                                                      0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255}));
     EXPECT_EQ(minipsd_doc_check(d.get(), nullptr), MINIPSD_OK) << "the writer takes it as it is";
 
-    // Stored: flat as the file is, no layer, its image the composite, copied; the same bytes back,
-    // with a layer and mask section or without one.
+    // Stored: flat as the file is, no layer, its image the composite, copied.  With a layer and
+    // mask section or without one (its length 0), it is written with minipsd's empty one.
     const minipsd_read_opts keep{1};
+    Spec f = s;
+    f.resources       = Spec().resources;                       // as Photoshop's: a resolution
+    f.hasRawSection   = true;
+    f.rawLayerSection = Out().u32(8).u32(0).u32(0).b;           // an empty layer info, an empty global mask
+    const Bytes withSection = build(f).bytes;
     for (const bool section : {true, false}) {
         SCOPED_TRACE(section);
-        Spec f = s;
-        f.resources     = Spec().resources;                     // as Photoshop's: a resolution
-        f.hasRawSection = true;                                 // an empty layer info, an empty global mask; or nothing
         f.rawLayerSection = section ? Out().u32(8).u32(0).u32(0).b : Out().u32(0).b;
         const Bytes file = build(f).bytes;
         const Doc k = readDoc(file, &lost, MINIPSD_OK, nullptr, &keep);
@@ -1896,8 +1904,8 @@ TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
         EXPECT_EQ(k->layer_count, 0u);
         EXPECT_EQ(k->composite, nullptr);
         EXPECT_EQ(k->composite_channels, 3);
-        EXPECT_EQ(write(*k), file);
-        EXPECT_EQ(pull(*k, 7), file);
+        EXPECT_EQ(write(*k), withSection);
+        EXPECT_EQ(pull(*k, 7), withSection);
         k->composite_stored = {};
         EXPECT_EQ(minipsd_doc_check(k.get(), nullptr), MINIPSD_ERR_ARG) << "no layer, no composite";
     }
@@ -2355,7 +2363,6 @@ void expectConvertsBack(const minipsd_doc &d)
     const Doc c = readDoc(converted, nullptr, MINIPSD_OK, nullptr, &keep);
     ASSERT_TRUE(c);
     EXPECT_EQ(c->format, other.format);
-    c->layer_info_align = d.layer_info_align;   // a length the other format padded may fit either rule
     EXPECT_EQ(write(*c, MINIPSD_OK, &back), as) << "into the other format and back: the same bytes";
 }
 
@@ -2365,7 +2372,7 @@ void expectStoredComposite(const minipsd_doc &s, const Bytes &file, std::size_t 
 {
     if (s.composite_stored.size) {
         EXPECT_EQ(s.composite, nullptr) << "copied, not decoded";
-        EXPECT_TRUE(s.composite_channels == 3 || s.composite_channels == 4);
+        EXPECT_GE(s.composite_channels, 3);
         EXPECT_EQ(Bytes(s.composite_stored.data, s.composite_stored.data + s.composite_stored.size),
                   Bytes(file.end() - static_cast<std::ptrdiff_t>(s.composite_stored.size), file.end()));
     } else {
