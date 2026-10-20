@@ -59,7 +59,8 @@ static uint8_t *read_all(const char *path, size_t *size)
 
 /* Decodes width x height pixels of depth bits through decode (a layer or the composite) and prints
    what is visible: how many pixels are not fully transparent, and the box around them.  ZIP, which
-   minipsd does not decode, is no failure: the pixels are only described. */
+   needs an inflate this example does not give (minipsd_decode_opts.inflate), is no failure: the
+   pixels are only described. */
 static int show_pixels(minipsd_reader *r, const minipsd_layer_view *layer, uint32_t width, uint32_t height, int depth)
 {
     minipsd_target      t;
@@ -160,13 +161,14 @@ int main(int argc, char **argv)
     else if (show_pixels(r, NULL, info.width, info.height, info.depth) != MINIPSD_OK) failed = 1;
 
     /* The same file as a document, which minipsd_write takes back: anything lost is worth an issue.
-       ZIP channels cannot be decoded; read as stored, they are copied. */
+       ZIP channels are not decoded without an inflate; read as stored, they are copied. */
     if (rgb) {
         minipsd_doc      *doc;
         minipsd_read_opts stored;
         uint32_t          lost = 0;
         rc = minipsd_read(data, size, NULL, NULL, &doc, &lost);
         if (rc == MINIPSD_ERR_UNSUPPORTED) {
+            memset(&stored, 0, sizeof stored);
             stored.stored = 1;
             rc = minipsd_read(data, size, NULL, &stored, &doc, &lost);
             if (rc == MINIPSD_OK) printf("as a document, ZIP channels as stored:\n");

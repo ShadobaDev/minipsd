@@ -249,6 +249,27 @@ rc = minipsd_write(doc, &as_psb, to_file, f);   /* a PSD read from disk, written
 Going the other way, a PSB that a PSD cannot hold is `MINIPSD_ERR_SIZE`, and the few blocks whose
 translation is not verified yet are `MINIPSD_ERR_UNSUPPORTED`, both before a byte is written.
 
+Channels are PackBits RLE by default, or raw. ZIP, as Photoshop writes its 16-bit layers, needs a
+deflate of yours, zlib's here, since minipsd implements none; the composite stays RLE:
+
+```c
+static int deflate_zlib(void *user, const uint8_t *src, size_t src_size, uint8_t *dst, size_t *dst_size)
+{
+    uLongf n = *dst_size;
+    int    rc = compress2(dst, &n, src, (uLong)src_size, 6);
+    (void)user;
+    *dst_size = n;
+    return rc != Z_OK;
+}
+
+const minipsd_write_opts zip = { .deflate = deflate_zlib };
+doc.compression = MINIPSD_ZIP_PREDICTED;   /* or MINIPSD_ZIP, without prediction */
+rc = minipsd_write(&doc, &zip, to_file, f);
+```
+
+Each channel is deflated twice, once to size it and once to write it, so the same input must give
+the same bytes, as zlib's do.
+
 The composite, the flattened image that viewers and thumbnails show, is yours to render when
 the layers use anything beyond plain "over" (libvips does most of it, see
 [Working with libvips](SPECIFICATION.md#working-with-libvips)). Give it in straight alpha, the
@@ -465,9 +486,36 @@ minipsd_target_rgba16(&t, rgba16, (size_t)w * 8);
 rc = minipsd_decode_layer(r, &layer, &t, &deep);
 ```
 
-Photoshop compresses the layers of its 16-bit files with ZIP, which minipsd does not decode
-(`MINIPSD_ERR_UNSUPPORTED`): their names, rectangles and blocks are read, their composite decodes,
-and they round trip with `stored` (see [Round trip](#round-trip)).
+Photoshop compresses the layers of its 16-bit files with ZIP. minipsd implements no deflate:
+it decodes them through an inflate of yours, zlib's here, and a scratch buffer of one channel,
+where each ZIP channel is inflated whole. Without one, decoding them is `MINIPSD_ERR_UNSUPPORTED`;
+their names, rectangles and blocks are still read, and they round trip with `stored` (see
+[Round trip](#round-trip)).
+
+```c
+#include <zlib.h>
+
+static int inflate_zlib(void *user, const uint8_t *src, size_t src_size, uint8_t *dst, size_t dst_size)
+{
+    uLongf n = dst_size;
+    (void)user;
+    return uncompress(dst, &n, src, (uLong)src_size) != Z_OK || n != dst_size;
+}
+
+uint8_t *scratch = malloc((size_t)w * h * 2);   /* one channel of the layer, at 16 bits */
+deep.inflate      = inflate_zlib;
+deep.scratch      = scratch;
+deep.scratch_size = (size_t)w * h * 2;
+rc = minipsd_decode_layer(r, &layer, &t, &deep);
+```
+
+`minipsd_read` takes the same function in `minipsd_read_opts.inflate` and keeps the scratch in its
+own block.
+
+Every options struct (`minipsd_read_opts`, `minipsd_decode_opts`, `minipsd_write_opts`,
+`minipsd_limits`) grows at its end, and zero keeps the previous behaviour: start from zero
+(`= {0}`, designated initialisers as here, or `memset`) and set only what you need. A struct
+declared and then given one field leaves the others, newer ones included, as garbage that is read.
 
 ### The composite
 
@@ -552,7 +600,7 @@ flowchart TD
 layer, copies every other one, and frees the file's bytes before writing. The one layer of a file
 without layers comes decoded even with `stored`: there is nothing to copy for it. A layer without
 a transparency channel is copied, and written without one, as the file has it. `stored` is also how
-Photoshop's 16-bit files go through: their ZIP channels are copied byte for byte.
+Photoshop's 16-bit files go through without an inflate: their ZIP channels are copied byte for byte.
 
 **What is lost, and a request.** `lost` is 0 when the document carries everything. Otherwise its
 bits say what writing the document back would drop:

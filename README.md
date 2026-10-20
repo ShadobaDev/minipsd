@@ -61,7 +61,8 @@ full canvas), or empty, with UTF-8 names, opacity and visibility; the merged com
 yours or composed as a best effort; the resolution; an optional ICC profile; groups, layer
 masks, blend modes, clipping, and blocks and resources kept from a file (text, effects), as
 they are.
-Channels are PackBits RLE or raw. Each side is limited to 30 000 px, or 300 000 px written as a
+Channels are PackBits RLE or raw, or ZIP through your deflate (zlib's `compress2`: minipsd
+implements none). Each side is limited to 30 000 px, or 300 000 px written as a
 PSB (Photoshop's large document format).
 
 Not written (yet): 32-bit, other colour modes. The full contract is in [docs/SPECIFICATION.md](docs/SPECIFICATION.md).
@@ -72,7 +73,8 @@ Any PSD or PSB: its size, colour mode, depth, dpi, ICC profile, resources, and e
 with its name, rectangle, opacity, visibility, blend mode and raw additional data. Pixels of
 8- and 16-bit RGB files decode, layers and composite, into memory of any layout, or whole into a
 document that `minipsd_write` takes back. ZIP-compressed channels (Photoshop's 16-bit layers)
-are not decoded, but copied as they are when such a file is read and written back. A file can be read from its start only, and untrusted
+decode through the caller's inflate (zlib's `uncompress`, libdeflate or miniz: minipsd implements
+no deflate), and are copied as they are when such a file is read and written back. A file can be read from its start only, and untrusted
 files are bounded by caller limits. How it does on 315 files from
 other programs: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 

@@ -124,25 +124,27 @@
  * MINIPSD_MORE.
  */
 enum {
-    MINIPSD_OK          =  0, /*!< Success.                                                   */
-    MINIPSD_MORE        =  1, /*!< Not an error: the work is not finished, call again.         */
-    MINIPSD_ERR_ARG     = -1, /*!< A NULL document, no layers nor composite, or a dpi outside
-                                   (0, 65536).                                                  */
-    MINIPSD_ERR_SIZE    = -2, /*!< A side is 0 or above the format's (MINIPSD_MAX_SIDE, or
-                                   MINIPSD_MAX_SIDE_PSB), or the document is too large for
-                                   PSD's 32-bit section lengths (about 4 GiB).                */
-    MINIPSD_ERR_WRITE   = -3, /*!< The write callback reported a failure.                      */
-    MINIPSD_ERR_ALLOC   = -4, /*!< MINIPSD_MALLOC returned NULL.                               */
-    MINIPSD_ERR_OPEN    = -5, /*!< Not returned by minipsd; kept for the caller's own file
-                                   code (examples/): a file not opened or closed.             */
-    MINIPSD_ERR_FORMAT  = -6, /*!< Reader: the bytes are not a well-formed PSD.                */
-    MINIPSD_ERR_UNSUPPORTED = -7, /*!< Valid, but outside what minipsd handles yet: reading,
-                                       pixels other than 8- or 16-bit RGB, or ZIP-compressed;
-                                       writing in the other format, kept content that cannot
-                                       change format yet.                                         */
-    MINIPSD_ERR_SHORT   = -8, /*!< Reader: the buffer ends inside data the call needs; the
-                                   file may be fine.  minipsd_reader_needed says how much more.  */
-    MINIPSD_ERR_LIMIT   = -9  /*!< Reader: a value is over a limit (minipsd_limits).           */
+    MINIPSD_OK          =  0,       /*!< Success.                                               */
+    MINIPSD_MORE        =  1,       /*!< Not an error: the work is not finished, call again.    */
+    MINIPSD_ERR_ARG     = -1,       /*!< A NULL document, no layers nor composite, or a dpi 
+                                        outside (0, 65536).                                     */
+    MINIPSD_ERR_SIZE    = -2,       /*!< A side is 0 or above the format's (MINIPSD_MAX_SIDE, or
+                                        MINIPSD_MAX_SIDE_PSB), or the document is too large for
+                                        PSD's 32-bit section lengths (about 4 GiB).             */
+    MINIPSD_ERR_WRITE   = -3,       /*!< The write callback reported a failure.                 */
+    MINIPSD_ERR_ALLOC   = -4,       /*!< MINIPSD_MALLOC returned NULL.                          */
+    MINIPSD_ERR_OPEN    = -5,       /*!< Not returned by minipsd; kept for the caller's own file
+                                        code (examples/): a file not opened or closed.          */
+    MINIPSD_ERR_FORMAT  = -6,       /*!< Reader: the bytes are not a well-formed PSD.           */
+    MINIPSD_ERR_UNSUPPORTED = -7,   /*!< Valid, but outside what minipsd handles yet: reading,
+                                        pixels other than 8- or 16-bit RGB, or ZIP-compressed
+                                        without the caller's inflate;
+                                        writing in the other format, kept content that cannot
+                                        change format yet.                                      */
+    MINIPSD_ERR_SHORT   = -8,       /*!< Reader: the buffer ends inside data the call needs;
+                                        the file may be fine.  minipsd_reader_needed says 
+                                        how much more.                                          */
+    MINIPSD_ERR_LIMIT   = -9        /*!< Reader: a value is over a limit (minipsd_limits).      */
 };
 
 /**
@@ -183,10 +185,18 @@ enum {
                           counts of four; sides up to MINIPSD_MAX_SIDE_PSB.                   */
 };
 
-/** \brief Channel compression.  Zero is RLE, so a zero-initialised document gets the compact one. */
+/**
+ * \brief Channel compression.  Zero is RLE, so a zero-initialised document gets the compact one.
+ *
+ * ZIP is for the layers' and masks' channels, through the caller's deflate
+ * (minipsd_write_opts.deflate); the composite is then RLE, as Photoshop writes it.
+ */
 enum {
-    MINIPSD_RLE = 0, /*!< PackBits run-length encoding. */
-    MINIPSD_RAW = 1  /*!< Uncompressed.                 */
+    MINIPSD_RLE = 0,          /*!< PackBits run-length encoding.                               */
+    MINIPSD_RAW = 1,          /*!< Uncompressed.                                               */
+    MINIPSD_ZIP = 2,          /*!< zlib, through the caller's deflate.                         */
+    MINIPSD_ZIP_PREDICTED = 3 /*!< zlib of each sample's difference from its left neighbour,
+                                   as Photoshop writes its 16-bit layers.                      */
 };
 
 /**
@@ -339,7 +349,8 @@ typedef struct minipsd_doc {
                                               a flat file, its image the composite.           */
     const uint8_t       *icc;            /*!< Optional ICC profile; NULL means none (sRGB).  */
     size_t               icc_size;       /*!< Size of icc in bytes; 0 when icc is NULL.      */
-    int                  compression;    /*!< MINIPSD_RLE or MINIPSD_RAW.                    */
+    int                  compression;    /*!< MINIPSD_RLE, MINIPSD_RAW, or MINIPSD_ZIP(_PREDICTED)
+                                              with minipsd_write_opts.deflate.                */
     const uint8_t       *composite;      /*!< The composite (merged) image: width * height * 4
                                               samples, rows top down, straight alpha, written
                                               whatever the layers hold.  NULL: composite_stored
@@ -394,9 +405,25 @@ typedef struct minipsd_doc {
 } minipsd_doc;
 
 /**
+ * \brief The caller's deflate, for writing ZIP channels: minipsd implements no deflate.
+ *
+ * Compresses src into a zlib stream (RFC 1950) at dst, which has *dst_size bytes of room on entry
+ * (src_size + src_size / 2048 + 16, more than zlib's compressBound); *dst_size receives the
+ * stream's size.  The same input must give the same bytes: a channel is compressed once to learn
+ * its size, which the layer record holds before the data, and once more to write it.  With zlib:
+ * `uLongf n = *dst_size; int rc = compress2(dst, &n, src, src_size, 6); *dst_size = n; return rc != Z_OK;`
+ *
+ * \param user The pointer given beside the function.
+ * \return 0 on success; anything else fails the write (MINIPSD_ERR_WRITE).
+ */
+typedef int (*minipsd_deflate_fn)(void *user, const uint8_t *src, size_t src_size, uint8_t *dst, size_t *dst_size);
+
+/**
  * \brief How a document is written.  NULL options write it as it is.
  *
- * Fields are only ever added at the end, and zero keeps the previous behaviour.
+ * Fields are only ever added at the end, and zero keeps the previous behaviour, so zero the whole
+ * struct before setting any of it (= {0}, a designated initialiser, or memset): every field is
+ * read, a newer one too.
  */
 typedef struct minipsd_write_opts {
     uint16_t format; /*!< The file written: MINIPSD_PSD or MINIPSD_PSB; 0 is the document's own
@@ -407,6 +434,11 @@ typedef struct minipsd_write_opts {
                           keys not yet verified ('Alph', 'FELS', 'FEid', 'FXid',
                           'Mt16', 'Mtrn', 'PxSD', 'lnk3') are refused (MINIPSD_ERR_UNSUPPORTED);
                           a PSB that does not fit a PSD is MINIPSD_ERR_SIZE.                  */
+    minipsd_deflate_fn deflate; /*!< Compresses the channels of a document whose compression is
+                          MINIPSD_ZIP or MINIPSD_ZIP_PREDICTED, which needs it
+                          (MINIPSD_ERR_ARG without); the workspace then holds the largest
+                          such channel twice, raw and compressed.                              */
+    void *deflate_user; /*!< Passed to deflate.                                               */
 } minipsd_write_opts;
 
 /**
@@ -428,7 +460,9 @@ typedef struct minipsd_write_opts {
  *                          channel does not match its rectangle, a layer has only stored
  *                          channels while the composite is to be composed, groups do not nest
  *                          (every group's top record needs its divider below it), or a mask's
- *                          rectangle is inverted or has an area without pixels.
+ *                          rectangle is inverted or has an area without pixels, compression is
+ *                          none of MINIPSD_RLE, _RAW, _ZIP, _ZIP_PREDICTED, or ZIP has no
+ *                          opts->deflate.
  * \retval MINIPSD_ERR_SIZE A side of the canvas, a layer or a mask is 0 or above the format's
  *                          (MINIPSD_MAX_SIDE, MINIPSD_MAX_SIDE_PSB; a layer's may be 0), a
  *                          resource name is longer than 255 bytes, or the resources or a layer's
@@ -558,7 +592,9 @@ MINIPSDDEF int minipsd_writer_fill(minipsd_writer *w, void *buf, size_t cap, siz
 /**
  * \brief What the reader refuses to look at.  Zero fields keep the format's own limits.
  *
- * Fields are only ever added at the end, and zero keeps the previous behaviour.
+ * Fields are only ever added at the end, and zero keeps the previous behaviour, so zero the whole
+ * struct before setting any of it (= {0}, a designated initialiser, or memset): every field is
+ * read, a newer one too.
  */
 typedef struct minipsd_limits {
     uint32_t max_side;          /*!< Largest width or height of the canvas, checked by init, and of
@@ -807,9 +843,25 @@ typedef struct minipsd_target {
 } minipsd_target;
 
 /**
+ * \brief The caller's inflate, for ZIP-compressed channels: minipsd implements no deflate.
+ *
+ * Inflates src, a zlib stream (RFC 1950, not a ZIP archive), into dst, which it must fill exactly.
+ * With zlib: `uLongf n = dst_size; return uncompress(dst, &n, src, src_size) != Z_OK || n != dst_size;`
+ * libdeflate's zlib_decompress or miniz's mz_uncompress fit the same way.
+ *
+ * \param user     The pointer given beside the function.
+ * 
+eturn 0 when the stream inflated to exactly dst_size bytes; anything else is a malformed
+ *         channel (MINIPSD_ERR_FORMAT).
+ */
+typedef int (*minipsd_inflate_fn)(void *user, const uint8_t *src, size_t src_size, uint8_t *dst, size_t dst_size);
+
+/**
  * \brief Which rows to decode, and how.  NULL options decode the whole image into 8-bit samples.
  *
- * Fields are only ever added at the end, and zero keeps the previous behaviour.
+ * Fields are only ever added at the end, and zero keeps the previous behaviour, so zero the whole
+ * struct before setting any of it (= {0}, a designated initialiser, or memset): every field is
+ * read, a newer one too.
  */
 typedef struct minipsd_decode_opts {
     uint32_t y_first;    /*!< The first row, counted from the layer's top.                     */
@@ -817,6 +869,12 @@ typedef struct minipsd_decode_opts {
     int      keep_matte; /*!< Composite only: non-zero keeps the white matte, as stored.        */
     int      depth;      /*!< The target's bits a sample: 0 or 8, or 16 (a uint16_t in host
                               order).  It must be the file's (minipsd_info.depth).               */
+    minipsd_inflate_fn inflate; /*!< Layers and masks: decodes ZIP channels (compression 2, and
+                              3 with prediction); NULL leaves them MINIPSD_ERR_UNSUPPORTED.      */
+    void    *inflate_user; /*!< Passed to inflate.                                               */
+    uint8_t *scratch;    /*!< With inflate: where a ZIP channel is inflated whole, even for a
+                              band; at least width * height samples of the layer (or mask).    */
+    size_t   scratch_size; /*!< Bytes at scratch.                                                */
 } minipsd_decode_opts;
 
 /**
@@ -846,7 +904,8 @@ MINIPSDDEF void minipsd_target_rgba16(minipsd_target *t, uint16_t *rgba, size_t 
  * with its opacity and hidden flag left in the view, not applied.  A layer without a transparency
  * channel decodes as opaque (255 in the A plane).  Everything that can fail before decoding is
  * checked first, so after MINIPSD_ERR_ARG, MINIPSD_ERR_UNSUPPORTED or MINIPSD_ERR_SHORT the target
- * is untouched; after MINIPSD_ERR_FORMAT found inside a row it holds the rows decoded so far.
+ * is untouched; after MINIPSD_ERR_FORMAT found inside a row, or a ZIP channel that does not
+ * inflate, it holds what was decoded so far.
  * An empty layer, or a band of no rows, writes nothing.
  *
  * \param r      The reader the layer came from.
@@ -856,10 +915,11 @@ MINIPSDDEF void minipsd_target_rgba16(minipsd_target *t, uint16_t *rgba, size_t 
  * \return MINIPSD_OK or an error code.
  *
  * \retval MINIPSD_ERR_ARG         r (never initialised), layer or target is NULL, the band lies
- *                                 outside the layer, or opts->depth is not 0, 8 or 16.
+ *                                 outside the layer, opts->depth is not 0, 8 or 16, or a ZIP
+ *                                 channel is to be inflated with opts->scratch too small.
  * \retval MINIPSD_ERR_LIMIT       The call would write more than max_decoded_bytes.
  * \retval MINIPSD_ERR_UNSUPPORTED The file is not 8- or 16-bit RGB, its depth is not opts->depth,
- *                                 or a channel is ZIP-compressed.
+ *                                 or a channel is ZIP-compressed and opts->inflate is NULL.
  * \retval MINIPSD_ERR_SHORT       A channel the target asks for is not all in the buffer;
  *                                 minipsd_reader_needed says how far it must reach.
  * \retval MINIPSD_ERR_FORMAT      A channel the target asks for is missing or malformed.
@@ -889,7 +949,7 @@ MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view 
  *                                 opts->depth is not 0, 8 or 16.
  * \retval MINIPSD_ERR_LIMIT       The call would write more than max_decoded_bytes.
  * \retval MINIPSD_ERR_UNSUPPORTED The file is not 8- or 16-bit RGB, its depth is not opts->depth,
- *                                 or the image is ZIP-compressed.
+ *                                 or the image is ZIP-compressed (opts->inflate is for layers).
  * \retval MINIPSD_ERR_SHORT       The rows of a channel the target asks for are not all in the
  *                                 buffer; minipsd_reader_needed says how far it must reach.
  * \retval MINIPSD_ERR_FORMAT      The image is malformed.
@@ -935,7 +995,9 @@ enum {
 /**
  * \brief How minipsd_read builds the document.  NULL options decode every layer.
  *
- * Fields are only ever added at the end, and zero keeps the previous behaviour.
+ * Fields are only ever added at the end, and zero keeps the previous behaviour, so zero the whole
+ * struct before setting any of it (= {0}, a designated initialiser, or memset): every field is
+ * read, a newer one too.
  */
 typedef struct minipsd_read_opts {
     int stored; /*!< Non-zero: each layer keeps its channels as stored (minipsd_layer.stored), not
@@ -943,6 +1005,11 @@ typedef struct minipsd_read_opts {
                      encoding, and ZIP-compressed channels pass.  A layer without a transparency
                      channel is written without one.  The composite too, every channel of it
                      (minipsd_doc.composite_stored, composite NULL).                             */
+    minipsd_inflate_fn inflate; /*!< Decodes ZIP-compressed layers and masks, as
+                     minipsd_decode_opts.inflate; the block then holds one channel more, the
+                     largest ZIP one, to inflate into.  NULL: they are MINIPSD_ERR_UNSUPPORTED
+                     unless stored.                                                              */
+    void *inflate_user; /*!< Passed to inflate.                                                 */
 } minipsd_read_opts;
 
 /**
@@ -985,8 +1052,9 @@ MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_li
  * \return MINIPSD_OK or an error code.
  *
  * \retval MINIPSD_ERR_ARG         doc or block is NULL, or block_size is too small.
- * \retval MINIPSD_ERR_UNSUPPORTED Not 8- or 16-bit RGB, ZIP-compressed pixels to decode (with
- *                                 opts->stored they are copied), or a layer wider or taller than
+ * \retval MINIPSD_ERR_UNSUPPORTED Not 8- or 16-bit RGB, ZIP-compressed pixels to decode without
+ *                                 opts->inflate (with opts->stored they are copied), a
+ *                                 ZIP-compressed composite to decode, or a layer wider or taller than
  *                                 the format allows the writer (MINIPSD_MAX_SIDE, _PSB).
  * \retval MINIPSD_ERR_SIZE        The document does not fit in memory (a block above SIZE_MAX).
  * \retval MINIPSD_ERR_FORMAT, MINIPSD_ERR_SHORT, MINIPSD_ERR_LIMIT  As the reader.

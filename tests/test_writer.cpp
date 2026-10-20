@@ -24,6 +24,7 @@ static std::set<std::string> encodedLayers;
 #include "minipsd.h"
 
 #include "support.h"
+#include "zlib_stored.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -512,14 +513,17 @@ TEST(MinipsdWriterTest, SixteenBitDocumentsAreWrittenAndReadBack)
     const minipsd_layer layers[2] = {
         {.name = "Deep", .rgba = bytes(px), .opacity = 200, .top = 1, .left = 1, .bottom = 4, .right = 6, .mask = &mask},
         {.name = "Empty", .opacity = 255}};
-    for (int compression : {MINIPSD_RLE, MINIPSD_RAW}) {
+    // ZIP through the stored-block deflate and inflate: each written as given, decoded back.
+    const minipsd_write_opts zipped{0, zlib_stored_compress, nullptr};
+    for (int compression : {MINIPSD_RLE, MINIPSD_RAW, MINIPSD_ZIP, MINIPSD_ZIP_PREDICTED}) {
         SCOPED_TRACE(compression);
         minipsd_doc d = docOf(w, h, layers, 2);
         d.compression = compression;
         d.depth = 16;
-        const Bytes file = write(d);
-        EXPECT_EQ(pull(d, 7), file);
-        EXPECT_EQ(pullTotal(d), file.size());
+        const Bytes file = write(d, MINIPSD_OK, &zipped);
+        EXPECT_EQ(pull(d, 7, &zipped), file);
+        EXPECT_EQ(pullTotal(d, 0, &zipped), file.size());
+        Bytes scratch(std::size_t(5) * 3 * 2);   // the layer's channel, the largest
 
         // Through the reader: the samples as given, at depth 16 only.
         auto check = [&](const Bytes &f) {
@@ -531,10 +535,14 @@ TEST(MinipsdWriterTest, SixteenBitDocumentsAreWrittenAndReadBack)
             ASSERT_EQ(info.layer_count, 2u);
             minipsd_layer_view v;
             ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
+            if (f == file && compression >= MINIPSD_ZIP) {   // RLE and RAW markers are 1 and 0
+                EXPECT_EQ(v.channel[0].data[1], compression) << "the layer's marker";
+                EXPECT_EQ(v.mask.stored.data[1], compression) << "the mask's";
+            }
             std::vector<std::uint16_t> got(px.size()), gotMask(ramp.size());
             minipsd_target t;
             minipsd_target_rgba16(&t, got.data(), std::size_t(5) * 8);
-            minipsd_decode_opts deep{0, 0, 0, 16};
+            minipsd_decode_opts deep{0, 0, 0, 16, zlib_stored_inflate, nullptr, scratch.data(), scratch.size()};
             EXPECT_EQ(minipsd_decode_layer(r, &v, &t, &deep), MINIPSD_OK);
             EXPECT_EQ(got, px);
             const minipsd_plane plane{reinterpret_cast<std::uint8_t *>(gotMask.data()), 2, 8};
@@ -546,7 +554,8 @@ TEST(MinipsdWriterTest, SixteenBitDocumentsAreWrittenAndReadBack)
             EXPECT_EQ(minipsd_decode_layer(r, &v, &t, &deep), MINIPSD_ERR_ARG);
             EXPECT_EQ(minipsd_decode_mask(r, &v, &plane, &deep), MINIPSD_ERR_ARG);
             EXPECT_EQ(minipsd_decode_composite(r, &t, &deep), MINIPSD_ERR_ARG);
-            // The composite: the layer at opacity 200 over nothing, un-matted within the bound.
+            // The composite, RLE whatever the layers are: the layer at opacity 200 over nothing,
+            // un-matted within the bound.
             std::vector<std::uint16_t> canvas(std::size_t(w) * h * 4);
             minipsd_target_rgba16(&t, canvas.data(), std::size_t(w) * 8);
             deep.depth = 16;
@@ -559,14 +568,17 @@ TEST(MinipsdWriterTest, SixteenBitDocumentsAreWrittenAndReadBack)
 
         // As a document, decoded or stored: the same bytes.  A stored layer without transparency
         // gets an opaque one.
+        const minipsd_read_opts inflating{0, zlib_stored_inflate, nullptr};
         for (int keep : {0, 1}) {
-            const minipsd_read_opts opts{keep};
+            const minipsd_read_opts opts{keep, zlib_stored_inflate, nullptr};
             minipsd_doc *back = nullptr;
             std::uint32_t lost = 99;
             ASSERT_EQ(minipsd_read(file.data(), file.size(), nullptr, &opts, &back, &lost), MINIPSD_OK);
             EXPECT_EQ(lost, 0u);
             EXPECT_EQ(back->depth, 16);
-            EXPECT_EQ(write(*back), file) << "stored " << keep;
+            EXPECT_EQ(back->compression, compression == MINIPSD_RAW ? MINIPSD_RAW : MINIPSD_RLE) << "the composite's";
+            back->compression = compression;
+            EXPECT_EQ(write(*back, MINIPSD_OK, &zipped), file) << "stored " << keep << ": deflated again, or copied";
             if (keep) {
                 std::vector<minipsd_bytes> channels(back->layers[0].stored, back->layers[0].stored + 4);
                 channels[MINIPSD_CH_A] = {};
@@ -575,8 +587,8 @@ TEST(MinipsdWriterTest, SixteenBitDocumentsAreWrittenAndReadBack)
                 minipsd_doc e = *back;
                 e.layers = edited.data();
                 minipsd_doc *opaque = nullptr;
-                const Bytes f = write(e);
-                ASSERT_EQ(minipsd_read(f.data(), f.size(), nullptr, nullptr, &opaque, nullptr), MINIPSD_OK);
+                const Bytes f = write(e, MINIPSD_OK, &zipped);
+                ASSERT_EQ(minipsd_read(f.data(), f.size(), nullptr, &inflating, &opaque, nullptr), MINIPSD_OK);
                 const auto *got = reinterpret_cast<const std::uint16_t *>(opaque->layers[0].rgba);
                 for (std::size_t i = 0; i < px.size(); ++i) ASSERT_EQ(got[i], i % 4 == 3 ? 65535 : px[i]) << i;
                 minipsd_doc_free(opaque);
@@ -589,10 +601,11 @@ TEST(MinipsdWriterTest, SixteenBitDocumentsAreWrittenAndReadBack)
         const Bytes photoshop = asPhotoshop16(file);
         check(photoshop);
         minipsd_doc *back = nullptr;
-        ASSERT_EQ(minipsd_read(photoshop.data(), photoshop.size(), nullptr, nullptr, &back, nullptr), MINIPSD_OK);
+        ASSERT_EQ(minipsd_read(photoshop.data(), photoshop.size(), nullptr, &inflating, &back, nullptr), MINIPSD_OK);
         EXPECT_EQ(Bytes(back->layer_tail.data, back->layer_tail.data + back->layer_tail.size),
                   be32(0) + tagged("Lr16", {}) + tagged("Patt", {}));
-        const Bytes again = write(*back);
+        back->compression = compression;
+        const Bytes again = write(*back, MINIPSD_OK, &zipped);
         check(again);
         Bytes workspace(256);
         minipsd_reader *r = nullptr;
@@ -602,7 +615,7 @@ TEST(MinipsdWriterTest, SixteenBitDocumentsAreWrittenAndReadBack)
         EXPECT_EQ(Bytes(info.layer_tail.data + 4, info.layer_tail.data + 12), (Bytes{'8', 'B', 'I', 'M', 'L', 'r', '1', '6'}))
             << "the layers back in 'Lr16'";
         back->layer_tail = {};
-        EXPECT_EQ(write(*back), file) << "without the kept block: minipsd's file again";
+        EXPECT_EQ(write(*back, MINIPSD_OK, &zipped), file) << "without the kept block: minipsd's file again";
         minipsd_doc_free(back);
     }
 
@@ -1198,6 +1211,68 @@ TEST(MinipsdWriterTest, WriteFailureIsReported)
         EXPECT_EQ(minipsd_write(&d, nullptr, failing, &c), MINIPSD_ERR_WRITE) << "failing call " << failAt;
         EXPECT_EQ(c.made, failAt) << "the writer stops calling back after the first failure";
     }
+}
+
+// ZIP: the caller's deflate, called twice a channel (sizing, then writing), however small the
+// pieces the file is pulled in; one that fails, or gives other bytes the second time, fails the
+// write.  8 bits, predicted, here; 16 bits in SixteenBitDocumentsAreWrittenAndReadBack.
+TEST(MinipsdWriterTest, ZipChannelsGoThroughTheCallersDeflate)
+{
+    const std::uint32_t w = 9, h = 3;
+    const Bytes px = testImage(w, h);
+    const minipsd_layer layer{"L", px.data(), 255, 0};
+    minipsd_doc d = docOf(w, h, &layer, 1);
+    d.compression = MINIPSD_ZIP_PREDICTED;
+    struct Calls { int made = 0, failAt = 0; std::size_t grow = 0; };
+    const auto deflate = [](void *user, const std::uint8_t *src, std::size_t n, std::uint8_t *dst, std::size_t *size) {
+        auto *c = static_cast<Calls *>(user);
+        if (++c->made == c->failAt) return 1;
+        const int rc = zlib_stored_compress(nullptr, src, n, dst, size);
+        if (c->failAt < 0 && c->made > 4) *size += c->grow;   // other bytes the second time
+        return rc;
+    };
+    Calls calls;
+    const minipsd_write_opts opts{0, deflate, &calls};
+    const Bytes file = pull(d, 1, &opts);
+    EXPECT_EQ(calls.made, 8) << "four channels, each deflated twice";
+
+    // Decoded through the inflate: the pixels as given.
+    Bytes workspace(256), scratch(std::size_t(w) * h), out(px.size());
+    minipsd_reader *r = nullptr;
+    minipsd_info info{};
+    ASSERT_EQ(minipsd_reader_init(&r, file.data(), file.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
+    minipsd_layer_view v;
+    ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
+    EXPECT_EQ(v.channel[MINIPSD_CH_R].data[1], MINIPSD_ZIP_PREDICTED);
+    minipsd_target t;
+    minipsd_target_rgba(&t, out.data(), std::size_t(w) * 4);
+    const minipsd_decode_opts zip{0, 0, 0, 8, zlib_stored_inflate, nullptr, scratch.data(), scratch.size()};
+    ASSERT_EQ(minipsd_decode_layer(r, &v, &t, &zip), MINIPSD_OK);
+    EXPECT_EQ(out, px);
+
+    // Refused: no deflate, a compression that is none of the four.
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG);
+    for (int bad : {-1, 4}) {
+        minipsd_doc b = d;
+        b.compression = bad;
+        EXPECT_EQ(minipsd_doc_check(&b, &opts), MINIPSD_ERR_ARG) << bad;
+    }
+
+    // A failing deflate, while sizing or while writing; one whose second stream is longer.
+    Bytes sink;
+    for (int failAt : {1, 5}) {
+        Calls c;
+        c.failAt = failAt;
+        const minipsd_write_opts o{0, deflate, &c};
+        sink.clear();
+        EXPECT_EQ(minipsd_write(&d, &o, collect, &sink), MINIPSD_ERR_WRITE) << failAt;
+        if (failAt == 1) { EXPECT_TRUE(sink.empty()) << "refused while sizing: nothing written"; }
+    }
+    Calls longer;
+    longer.failAt = -1;
+    longer.grow = 1;
+    const minipsd_write_opts o{0, deflate, &longer};
+    EXPECT_EQ(minipsd_write(&d, &o, collect, &sink), MINIPSD_ERR_WRITE);
 }
 
 TEST(MinipsdWriterTest, CompiledAsCItWritesTheSameBytes)

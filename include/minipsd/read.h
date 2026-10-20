@@ -20,11 +20,20 @@
 
 #include <string.h>
 
-/* The block being laid out: base NULL measures, otherwise the parts are placed from base. */
+/* The block being laid out: base NULL measures, otherwise the parts are placed from base.  After
+   them, outside the document, the scratch a ZIP channel is inflated into: the largest one. */
 typedef struct mpsd__arena {
     uint8_t *base;
     uint64_t used;
+    uint8_t *scratch;
+    uint64_t zip;
 } mpsd__arena;
+
+/* A channel to decode, n bytes inflated: when it is ZIP-compressed, the scratch must hold it. */
+static void mpsd__zip_room(mpsd__arena *a, minipsd_bytes c, uint64_t n)
+{
+    if (c.size >= MPSD__MARKER_SIZE && c.data && mpsd__get16(c.data) >= MPSD__COMP_ZIP && n > a->zip) a->zip = n;
+}
 
 /* The next size bytes of the block, aligned for a struct when asked; NULL while measuring. */
 static void *mpsd__take(mpsd__arena *a, uint64_t size, int aligned)
@@ -135,9 +144,12 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     if (!r->rgb) return MINIPSD_ERR_UNSUPPORTED;
     wide = r->wide;                                            /* 16-bit samples, aligned for a uint16_t */
     side = mpsd__max_side(r->psb);
-    all.y_first = all.y_count = 0;
-    all.keep_matte = 0;
+    memset(&all, 0, sizeof all);                               /* every row, un-matted; new fields zero */
     all.depth      = wide ? 16 : 8;
+    all.inflate      = opts ? opts->inflate : NULL;            /* ZIP channels: without it, unsupported */
+    all.inflate_user = opts ? opts->inflate_user : NULL;
+    all.scratch      = a->scratch;
+    all.scratch_size = (size_t)a->zip;                         /* measured: the block holds it */
     as_stored = all;
     as_stored.keep_matte = 1;
     canvas  = (uint64_t)info.width * info.height * MPSD__RGBA << wide;
@@ -185,6 +197,8 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         pascal = mpsd__copy(a, v.name_pascal);
         ranges = (minipsd_blending_range *)mpsd__take(a, (uint64_t)v.blending_range_count * sizeof *ranges, 1);
         if (pixels) decoded += w * h * MPSD__RGBA << wide;
+        for (k = 0; w && h && !keep && k < MPSD__RGBA; ++k)    /* decoded: pixels, NULL while measuring */
+            mpsd__zip_room(a, v.channel[k], w * h << wide);
         if (v.has_mask) {                                       /* the mask: decoded, or stored with the layer */
             const uint64_t mw = (uint64_t)((int64_t)v.mask.right - v.mask.left), mh = (uint64_t)((int64_t)v.mask.bottom - v.mask.top);
             const int      copy = opts && opts->stored && v.mask.stored.size;
@@ -198,6 +212,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
             if (!copy && mw && mh) {
                 mask_pixels = (uint8_t *)mpsd__take(a, mw * mh << wide, (int)wide);   /* NULL while measuring */
                 decoded    += mw * mh << wide;
+                mpsd__zip_room(a, v.mask.stored, mw * mh << wide);
             }
             kept.pixels = mask_pixels;
             if (m) *m = kept;
@@ -265,7 +280,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         if (icc) memcpy(icc, info.icc.data, info.icc.size);
         if (d) { d->icc = icc; d->icc_size = info.icc.size; }
     }
-    if (a->used > (uint64_t)(size_t)-1 - MPSD__ALIGN) return MINIPSD_ERR_SIZE;
+    if (a->zip > (uint64_t)(size_t)-1 - MPSD__ALIGN || a->used > (uint64_t)(size_t)-1 - MPSD__ALIGN - a->zip) return MINIPSD_ERR_SIZE;
     if (!d) return MINIPSD_OK;
 
     if (pixels) {
@@ -303,6 +318,17 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     return MINIPSD_OK;
 }
 
+/* The document measured: a->used its bytes, a->zip the scratch after them. */
+static int mpsd__measure(const void *data, size_t size, const minipsd_limits *limits, const minipsd_read_opts *opts,
+                         mpsd__arena *a)
+{
+    a->base    = NULL;
+    a->used    = 0;
+    a->scratch = NULL;
+    a->zip     = 0;
+    return mpsd__read(data, size, limits, opts, a, NULL, NULL);
+}
+
 MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_limits *limits,
                                  const minipsd_read_opts *opts, size_t *block_size)
 {
@@ -310,10 +336,8 @@ MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_li
     int         rc;
     if (!block_size) return MINIPSD_ERR_ARG;
     *block_size = 0;
-    a.base = NULL;
-    a.used = 0;
-    rc = mpsd__read(data, size, limits, opts, &a, NULL, NULL);
-    if (rc == MINIPSD_OK) *block_size = (size_t)a.used + MPSD__ALIGN - 1;   /* any alignment will do */
+    rc = mpsd__measure(data, size, limits, opts, &a);
+    if (rc == MINIPSD_OK) *block_size = (size_t)(a.used + a.zip) + MPSD__ALIGN - 1;   /* any alignment will do */
     return rc;
 }
 
@@ -322,17 +346,17 @@ MINIPSDDEF int minipsd_read_into(const void *data, size_t size, const minipsd_li
                                  minipsd_doc **doc, uint32_t *lost)
 {
     mpsd__arena a;
-    size_t      need = 0;
     int         rc;
     if (!doc) return MINIPSD_ERR_ARG;
     *doc = NULL;
     if (lost) *lost = 0;
     if (!block) return MINIPSD_ERR_ARG;
-    rc = minipsd_read_size(data, size, limits, opts, &need);
+    rc = mpsd__measure(data, size, limits, opts, &a);
     if (rc != MINIPSD_OK) return rc;
-    if (block_size < need) return MINIPSD_ERR_ARG;
-    a.base = (uint8_t *)block + (MPSD__ALIGN - (uintptr_t)block % MPSD__ALIGN) % MPSD__ALIGN;
-    a.used = 0;
+    if (block_size < (size_t)(a.used + a.zip) + MPSD__ALIGN - 1) return MINIPSD_ERR_ARG;
+    a.base    = (uint8_t *)block + (MPSD__ALIGN - (uintptr_t)block % MPSD__ALIGN) % MPSD__ALIGN;
+    a.scratch = a.zip ? a.base + (size_t)a.used : NULL;        /* after the document */
+    a.used    = 0;
     rc = mpsd__read(data, size, limits, opts, &a, doc, lost);
     if (rc != MINIPSD_OK) *doc = NULL;
     return rc;

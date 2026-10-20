@@ -646,16 +646,21 @@ MINIPSDDEF void minipsd_target_rgba16(minipsd_target *t, uint16_t *rgba, size_t 
 }
 
 /* One channel's stored data, checked whole before a sample is written: the compression marker,
-   then raw rows, or (RLE) a byte count per row (two bytes, four in a PSB) and the packed rows.  A
-   row is width samples of the file's depth, big-endian. */
+   then raw rows, or (RLE) a byte count per row (two bytes, four in a PSB) and the packed rows, or
+   (ZIP) a zlib stream of the raw rows, inflated by the caller when its turn comes.  A row is width
+   samples of the file's depth, big-endian. */
 typedef struct mpsd__chan {
-    const uint8_t *table;   /* RLE: the row byte counts; NULL for raw */
-    const uint8_t *rows;    /* the first row's data                   */
-    unsigned       wide;    /* two bytes a sample                     */
-    unsigned       psb;     /* row counts of four bytes               */
+    const uint8_t *table;   /* RLE: the row byte counts; NULL for raw   */
+    const uint8_t *rows;    /* the first row's data                     */
+    const uint8_t *stream;  /* ZIP: the zlib stream; NULL once inflated */
+    size_t         stream_size;
+    unsigned       predicted; /* ZIP: each sample stored as its difference from the left one */
+    unsigned       wide;    /* two bytes a sample                       */
+    unsigned       psb;     /* row counts of four bytes                 */
 } mpsd__chan;
 
-static int mpsd__chan_open(const minipsd_reader *r, minipsd_bytes c, uint32_t width, uint32_t height, mpsd__chan *ch)
+static int mpsd__chan_open(const minipsd_reader *r, minipsd_bytes c, uint32_t width, uint32_t height,
+                           const minipsd_decode_opts *opts, mpsd__chan *ch)
 {
     const uint64_t counts = (uint64_t)height * mpsd__count_size(r->psb);   /* the table's bytes */
     uint64_t       left, sum = 0;
@@ -663,6 +668,7 @@ static int mpsd__chan_open(const minipsd_reader *r, minipsd_bytes c, uint32_t wi
     left     = c.size - MPSD__MARKER_SIZE;                     /* next_layer saw the marker */
     ch->wide = r->wide;
     ch->psb  = r->psb;
+    ch->stream = NULL;
     switch (mpsd__get16(c.data)) {
     case MPSD__COMP_RAW:
         if (((uint64_t)width * height << ch->wide) > left) return MINIPSD_ERR_FORMAT;
@@ -676,10 +682,42 @@ static int mpsd__chan_open(const minipsd_reader *r, minipsd_bytes c, uint32_t wi
         for (y = 0; y < height; ++y) sum += mpsd__count(ch->table, y, ch->psb);
         return sum > left - counts ? MINIPSD_ERR_FORMAT : MINIPSD_OK;
     case MPSD__COMP_ZIP: case MPSD__COMP_ZIP_PREDICTED:
-        return MINIPSD_ERR_UNSUPPORTED;
+        if (!opts || !opts->inflate) return MINIPSD_ERR_UNSUPPORTED;
+        if (!opts->scratch || opts->scratch_size < ((uint64_t)width * height << ch->wide)) return MINIPSD_ERR_ARG;
+        ch->table       = NULL;
+        ch->stream      = c.data + MPSD__MARKER_SIZE;
+        ch->stream_size = (size_t)left;
+        ch->predicted   = mpsd__get16(c.data) == MPSD__COMP_ZIP_PREDICTED;
+        return MINIPSD_OK;
     default:
         return MINIPSD_ERR_FORMAT;
     }
+}
+
+/* A ZIP channel inflated whole into opts->scratch, its prediction undone (byte sums at 8 bits,
+   big-endian sample sums at 16), so its rows are raw ones from there on. */
+static int mpsd__chan_inflate(mpsd__chan *ch, uint32_t width, uint32_t height, const minipsd_decode_opts *opts)
+{
+    const size_t size = (size_t)width * height << ch->wide;   /* chan_open checked the scratch holds it */
+    uint8_t     *row;
+    uint32_t     x, y;
+    if (!ch->stream) return MINIPSD_OK;                        /* not ZIP: opts may be NULL */
+    row = opts->scratch;
+    if (opts->inflate(opts->inflate_user, ch->stream, ch->stream_size, opts->scratch, size)) return MINIPSD_ERR_FORMAT;
+    for (y = 0; ch->predicted && y < height; ++y, row += (size_t)width << ch->wide)
+        for (x = 1; x < width; ++x) {
+            uint8_t *s = row + ((size_t)x << ch->wide);
+            if (ch->wide) {                                    /* big-endian, as the raw rows are */
+                const uint32_t v = mpsd__get16(s) + mpsd__get16(s - 2);
+                s[0] = (uint8_t)(v >> 8);
+                s[1] = (uint8_t)v;
+            } else {
+                s[0] = (uint8_t)(s[0] + s[-1]);
+            }
+        }
+    ch->rows   = opts->scratch;
+    ch->stream = NULL;
+    return MINIPSD_OK;
 }
 
 /* Rows [y0, y0 + rows) of a checked channel into a plane. */
@@ -737,7 +775,7 @@ MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view 
     }
     for (k = 0; k < MPSD__RGBA; ++k) {
         if (!target->channel[k].data || layer->channel[k].size == 0) continue;
-        rc = mpsd__chan_open(r, layer->channel[k], width, height, &ch[k]);
+        rc = mpsd__chan_open(r, layer->channel[k], width, height, opts, &ch[k]);
         if (rc != MINIPSD_OK) return rc;
     }
 
@@ -748,7 +786,8 @@ MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view 
             mpsd__opaque(pl, width, rows, r->wide);
             continue;
         }
-        rc = mpsd__chan_rows(&ch[k], width, y0, rows, pl);
+        rc = mpsd__chan_inflate(&ch[k], width, height, opts);
+        if (rc == MINIPSD_OK) rc = mpsd__chan_rows(&ch[k], width, y0, rows, pl);
         if (rc != MINIPSD_OK) return rc;
     }
     return MINIPSD_OK;
@@ -781,7 +820,8 @@ MINIPSDDEF int minipsd_decode_mask(minipsd_reader *r, const minipsd_layer_view *
         r->needed = layer->mask_offset + c.size;
         return MINIPSD_ERR_SHORT;
     }
-    rc = mpsd__chan_open(r, c, width, height, &ch);
+    rc = mpsd__chan_open(r, c, width, height, opts, &ch);
+    if (rc == MINIPSD_OK) rc = mpsd__chan_inflate(&ch, width, height, opts);
     return rc != MINIPSD_OK ? rc : mpsd__chan_rows(&ch, width, y0, rows, plane);
 }
 

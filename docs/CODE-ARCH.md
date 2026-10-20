@@ -347,6 +347,10 @@ typedef struct minipsd_decode_opts {
     uint32_t y_first, y_count;  /* rows to decode; y_count 0: from y_first to the end */
     int      keep_matte;        /* composite only: do not remove the white matte */
     int      depth;             /* the target's samples: 0 or 8, or 16; the file's */
+    minipsd_inflate_fn inflate; /* ZIP channels: the caller's inflate, NULL: unsupported */
+    void    *inflate_user;
+    uint8_t *scratch;           /* where a ZIP channel is inflated whole: one channel */
+    size_t   scratch_size;
 } minipsd_decode_opts;           /* NULL opts: the whole image, 8-bit, un-matted */
 ```
 
@@ -443,7 +447,9 @@ while ((rc = minipsd_reader_init(&r, buf, have, ws, ws_size, NULL, &info)) == MI
   - **What is described, and what is decoded.** `init` and `next_layer` describe any PSD or
     PSB, whatever its colour mode or depth, so a file manager can list a CMYK or 16-bit file
     (`R1`). Only the pixel decoding is limited to 8- and 16-bit RGB (`MINIPSD_ERR_UNSUPPORTED`,
-    from `decode_*`), as is any feature it does not decode yet, ZIP among them.
+    from `decode_*`), as is any feature it does not decode yet. ZIP is decoded through the
+    caller's inflate (`minipsd_inflate_fn`), into the caller's scratch of one channel, so the
+    reader still allocates nothing and implements no deflate; without one it is unsupported.
   - **PSB is a layout, not a feature.** The reader keeps one flag, and every width that depends on
     it comes from `detail/format.h`, which the writer shares: lengths (`mpsd__getlen`,
     `mpsd__putlen`), RLE row counts (`mpsd__count`, `mpsd__putcount`), and a block's header, whose
@@ -571,6 +577,8 @@ void minipsd_doc_free(minipsd_doc *doc);   /* MINIPSD_FREE, so a replaced alloca
 
 typedef struct minipsd_read_opts {
     int stored;   /* non-zero: each layer keeps its stored channels (stored) instead of pixels */
+    minipsd_inflate_fn inflate;   /* ZIP channels decoded; the block holds the scratch */
+    void *inflate_user;
 } minipsd_read_opts;   /* NULL: decode every layer */
 ```
 
@@ -604,8 +612,16 @@ typedef struct minipsd_read_opts {
   file, sets that layer's `rgba` and clears its `stored`, then writes. Untouched layers are never
   decoded nor encoded again, and the file's own composite is copied, neither rendered nor
   decoded (`E1`), alpha and spot channels with it (the resources naming them are kept). ZIP
-  channels, which minipsd cannot decode, pass this way; a layer without a transparency channel
-  is written without one.
+  channels pass this way without an inflate; a layer without a transparency channel is written
+  without one.
+- **`opts->inflate`** decodes ZIP channels: the measuring pass finds the largest ZIP channel it
+  decodes, and the block holds that much scratch after the document.
+- **ZIP written** (`compression` `MINIPSD_ZIP`, `_PREDICTED`, with `minipsd_write_opts.deflate`):
+  a channel's size is in its record before its data, and the writer never seeks back, so
+  `mpsd__measure_layers` deflates each channel once and the `MPSD__ZIP` piece once more, as RLE
+  rows are packed twice. The workspace holds the largest channel's raw rows (gathered big-endian,
+  predicted in place) and its stream; the stream is kept while a piece of it is handed out in
+  parts, and a second stream of another size is `MINIPSD_ERR_WRITE`. The composite stays RLE.
 - **Limits:** `minipsd_limits` as in the reader; `max_decoded_bytes` bounds the sum of the call's
   decoded pixels. A block larger than `SIZE_MAX` is `MINIPSD_ERR_SIZE`.
 - **What it accepts:** 8- and 16-bit RGB, as the decoder; the document has the file's `depth`.
@@ -653,7 +669,7 @@ feature is serialization: written and read as data. The composite composed as a 
 | **Round trip** | done: `blend`, `clipping`, `flags`, `extra`, `stored`; `resources`, `layer_tail` | done: kept data written back, stored channels copied | done: `clipping`, `flags`, resource names, `layer_tail`; `minipsd_read` with `opts->stored` | `bytes`: the block walker, shared | see [Round trip](#round-trip) |
 | **Layer groups (`lsct`)** | done: `kind` (`MINIPSD_KIND_*`); zero = layer | done: the `lsct` block, the group's mode in it; a kept one of the same kind as it is; nesting checked | done: `kind` in the view | — | the composed composite draws groups flat |
 | **Layer masks** | done: `mask` (`minipsd_mask`: rectangle, colour, flags, pixels or stored, kept real mask and rest) | done: mask data, channels -2 and -3 | done: the view's mask, `minipsd_decode_mask` | — | the composed composite ignores masks |
-| **16-bit channels** | done: `depth` on `minipsd_doc`; zero = 8 | done: 2-byte samples, big-endian, in the layer info | done: `depth` in `minipsd_decode_opts`, layers from `Lr16`, `minipsd_read` | done: `bytes` (`mpsd__at`, samples), `packbits` over a row's bytes, `composite` against 65535 | ZIP channels pass only as stored |
+| **16-bit channels** | done: `depth` on `minipsd_doc`; zero = 8 | done: 2-byte samples, big-endian, in the layer info | done: `depth` in `minipsd_decode_opts`, layers from `Lr16`, `minipsd_read` | done: `bytes` (`mpsd__at`, samples), `packbits` over a row's bytes, `composite` against 65535 | ZIP channels decode through the caller's inflate (S6.9), or pass as stored |
 | **PSB (version 2)** | done: `format` on `minipsd_doc` (`MINIPSD_PSD`, `MINIPSD_PSB`; zero = PSD): the layout of everything in the document, set by `minipsd_read`; the output format a write option, zero = the document's (decided over two document fields and over a converting copy: one field never describes a wish, and a translating writer stays zero-copy, as `tiffsave`'s `bigtiff` does) | done: 8-byte lengths, 4-byte RLE counts; `minipsd_write_opts.format` on the write calls, kept bytes translated while streaming (RLE count tables, long keys' lengths), by a policy per long key in `format.h` | done: both versions, `format` in the info and the view, `minipsd_read` sets the document's | `format`: widths, long keys, blocks | sides up to 300 000 px |
 
 ## Distribution of a multi-file library
@@ -749,8 +765,9 @@ Taken at the S4.1 review, 2026-10-15 (the reader):
    limit gets a stricter reader.
 10. **Un-matting needs an `A` plane in the target**, so the workspace stays independent of the
     file.
-11. **One `minipsd_decode_opts`** carries the row band, the matte option and the depth; `NULL` is
-    the defaults, and new options go at its end.
+11. **One `minipsd_decode_opts`** carries the row band, the matte option, the depth and the
+    inflate; `NULL` is the defaults, and new options go at its end. So does every options struct,
+    which is why a caller zeroes it whole: a field it never heard of is still read.
 12. **Resources are iterated, not looked up by id.**
 13. **A Pascal-only name is read as Latin-1**; the raw view is there for a caller that knows the
     code page.

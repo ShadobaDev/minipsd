@@ -34,7 +34,7 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
     minipsd_blending_range blend_if = { { { 0, 0 }, { 255, 255 } }, { { 59, 59 }, { 210, 210 } } };
     minipsd_doc     doc;
     minipsd_writer *w;
-    uint8_t         workspace[320], again[1024];
+    uint8_t         workspace[384], again[1024];
     smoke_buf       b;
     size_t          i, need, n, pulled = 0;
     int             rc;
@@ -133,6 +133,7 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
         /* As stored: nothing decoded, every byte copied, the same file again. */
         {
             minipsd_read_opts keep;
+            memset(&keep, 0, sizeof keep);   /* fields grow at the end: zero is the old behaviour */
             keep.stored = 1;
             if (minipsd_read(b.data, b.size, NULL, &keep, &rdoc, &lost) != MINIPSD_OK || lost != 0)
                 return -113;

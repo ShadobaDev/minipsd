@@ -56,9 +56,10 @@ fetch them from a pinned psd-tools release, verified by its SHA-256.
 - **described:** another colour mode or depth, or ZIP-compressed layers (Photoshop's 16-bit
   ones). Everything but those pixels is read: size, colour mode, depth, dpi, ICC profile,
   resources, and every layer with its name, rectangle, opacity, visibility, blend mode and blocks.
-  Decoding the pixels returns `MINIPSD_ERR_UNSUPPORTED`; ZIP channels are still copied when the
-  file is read as a document with `stored` and written back. This is a choice of scope
-  ([ROADMAP.md](ROADMAP.md), stage 6), not a failure.
+  Decoding the pixels returns `MINIPSD_ERR_UNSUPPORTED`. ZIP channels decode through the caller's
+  inflate (`minipsd_decode_opts.inflate`), which `read_file` does not give, since minipsd
+  implements no deflate; they are also copied when the file is read as a document with `stored`
+  and written back. This is a choice of scope ([ROADMAP.md](ROADMAP.md), stage 6), not a failure.
 - **refused:** the reader does not open the file, with the reason.
 - **failed:** an error other than the above: a malformed file, or a bug. Each is listed. A
   malformed file that the tests know about is in `knownBad` in `tests/test_reader.cpp`, with the
@@ -180,7 +181,7 @@ def status(f):
     if f.composite == "described":
         return "described", f"{f.mode}: pixels not decoded yet"
     if f.zip:
-        return "described", f"{f.mode}: ZIP-compressed layers, copied, not decoded"
+        return "described", f"{f.mode}: ZIP-compressed layers, decoded through an inflate"
     return "decoded", ""
 
 
@@ -191,7 +192,7 @@ def report(files, source):
     out.append("|---|---|---|")
     meaning = {
         "decoded": "every layer and the composite decoded to pixels",
-        "described": "header, resources and layers read; pixels not decoded: outside 8- and 16-bit RGB, or ZIP",
+        "described": "header, resources and layers read; pixels not decoded: outside 8- and 16-bit RGB, or ZIP without an inflate",
         "refused": "the reader does not open the file (see below)",
         "failed": "malformed, or a reader bug (see below)",
     }
@@ -205,7 +206,7 @@ def report(files, source):
     for mode, n in sorted(modes.items(), key=lambda kv: (-kv[1], kv[0])):
         decoded = sum(1 for f in files if f.mode == mode and status(f)[0] in ("decoded", "failed"))   # failed: listed below
         zipped = sum(1 for f in files if f.mode == mode and f.zip)
-        pixels = ("decoded" if decoded == n else f"decoded, but ZIP-compressed layers in {zipped}" if decoded + zipped == n
+        pixels = ("decoded" if decoded == n else f"decoded, ZIP-compressed layers through an inflate in {zipped}" if decoded + zipped == n
                   else "not yet: described only" if not decoded else f"{decoded} decoded")
         out.append(f"| {mode} | {n} | {pixels} |")
 
