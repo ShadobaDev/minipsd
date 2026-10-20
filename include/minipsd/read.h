@@ -280,8 +280,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         if (icc) memcpy(icc, info.icc.data, info.icc.size);
         if (d) { d->icc = icc; d->icc_size = info.icc.size; }
     }
-    if (a->zip > (uint64_t)(size_t)-1 - MPSD__ALIGN || a->used > (uint64_t)(size_t)-1 - MPSD__ALIGN - a->zip)
-        return MINIPSD_ERR_SIZE;
+    if (a->zip > (uint64_t)(size_t)-1 - MPSD__ALIGN || a->used > (uint64_t)(size_t)-1 - MPSD__ALIGN - a->zip) return MINIPSD_ERR_SIZE;
     if (!d) return MINIPSD_OK;
 
     if (pixels) {
