@@ -526,9 +526,11 @@ def records(lmi):
 
 
 def check_kept(name, before, after, stored=False):
-    """Every layer's blocks, every resource and every global block ('Lr16' aside: its layers are the
-    file's layers), byte for byte as psd-tools writes them, in any order; blend key, clipping and
-    flags of every record.  Stored: every channel's data as well, and the composite."""
+    """The content, as the spec's round trip rule has it: the header; every layer's blocks, every
+    resource and every global block ('Lr16' aside: its layers are the file's layers), byte for
+    byte as psd-tools writes them, in any order; every record's rectangle (an empty one in any
+    form), names, opacity, blend key, clipping, flags, mask data, blending ranges and channels, in
+    any order.  Stored: every channel's data as well, and the composite, every channel of it."""
     errors = []
 
     def same(what, a, b):
@@ -541,16 +543,28 @@ def check_kept(name, before, after, stored=False):
     def resources(psd):
         return {key: resource.tobytes() for key, resource in psd.image_resources.items()}
 
+    def header(psd):   # decoded, the composite is written R, G, B and transparency
+        h = psd._record.header
+        return h.channels if stored else None, h.height, h.width, h.depth, h.color_mode
+
+    def rect(rec):
+        empty = rec.bottom <= rec.top or rec.right <= rec.left
+        return None if empty else (rec.top, rec.left, rec.bottom, rec.right)
+
+    def mask(lmi):
+        info = lmi.global_layer_mask_info
+        return info.tobytes() if info else b""   # none and an empty one alike
+
+    same("header", header(before), header(after))
     same("resources", resources(before), resources(after))
     gb, ga = before._record.layer_and_mask_information, after._record.layer_and_mask_information
     same("global blocks", blocks(gb.tagged_blocks) if gb.tagged_blocks else {}, blocks(ga.tagged_blocks) if ga.tagged_blocks else {})
-    same("global layer mask", gb.global_layer_mask_info, ga.global_layer_mask_info)
+    same("global layer mask", mask(gb), mask(ga))
     (rb, cb), (ra, ca) = records(gb), records(ga)
     same("layer count", len(rb), len(ra))
     if stored:
-        # R, G, B as decoded: minipsd writes four channels where the original may have three.
-        same("composite", before._record.image_data.get_data(before._record.header)[:3],
-             after._record.image_data.get_data(after._record.header)[:3])
+        same("composite", before._record.image_data.get_data(before._record.header),
+             after._record.image_data.get_data(after._record.header))
         vb, va, depth = before.version, after.version, before.depth
 
         def data(rec, c, d, version):
@@ -578,12 +592,15 @@ def check_kept(name, before, after, stored=False):
         same(f"layer {i} blending ranges", b.blending_ranges.tobytes(), a.blending_ranges.tobytes())
         ids = [c.id.value for c in b.channel_info]
         added = [] if -1 in ids or stored else [-1]   # decoded, a layer without transparency gets an opaque one
-        same(f"layer {i} channels", added + ids, [c.id.value for c in a.channel_info])
+        same(f"layer {i} channels", sorted(added + ids), sorted(c.id.value for c in a.channel_info))
+        same(f"layer {i} rectangle", rect(b), rect(a))
+        same(f"layer {i} names", (b.name, blocks(b.tagged_blocks).get(b"luni")), (a.name, blocks(a.tagged_blocks).get(b"luni")))
+        same(f"layer {i} opacity", b.opacity, a.opacity)
         same(f"layer {i} blend, clipping, flags", (b.blend_mode, b.clipping, b.flags), (a.blend_mode, a.clipping, a.flags))
     return errors
 
 
-# --- every file, byte for byte -----------------------------------------------------------------------
+# --- every file: its content, a second pass, and its bytes ---------------------------------------------
 
 # Files minipsd_read takes that do not come back identical, and why: layout the writer chooses,
 # or bytes outside the format (the spec's round trip rule).
@@ -592,8 +609,10 @@ NOT_IDENTICAL = {
 }
 
 
-def check_identical(lib, files, out):
-    """Every file minipsd_read takes (with stored) comes back the same bytes through minipsd_write."""
+def check_every_file(lib, files, out):
+    """Every file minipsd_read takes (with stored), through minipsd_write: its content kept
+    (check_kept), and a second pass changes no byte (the writer's own layout, the same each time).
+    And the same bytes as the file but for those listed in NOT_IDENTICAL."""
     errors, same = [], 0
     for source in sorted(files.rglob("*.ps[db]")):
         name = source.relative_to(files).as_posix()
@@ -601,6 +620,11 @@ def check_identical(lib, files, out):
         rc, _ = resave(lib, source, path, stored=True)
         if rc != MINIPSD_OK:
             continue                                         # refused: not a document minipsd takes
+        errors += check_kept(name, PSDImage.open(source), PSDImage.open(path), stored=True)
+        again = path.with_name("again-" + path.name)
+        rc, _ = resave(lib, path, again, stored=True)
+        if rc != MINIPSD_OK or again.read_bytes() != path.read_bytes():
+            errors.append(f"{name}: a second pass changes the bytes (rc {rc})")
         identical = path.read_bytes() == source.read_bytes()
         if identical and name in NOT_IDENTICAL:
             errors.append(f"{name}: identical now; remove it from NOT_IDENTICAL")
@@ -760,7 +784,7 @@ def main():
         errors += found
         print(f"{'converted' if convert else 'resaved'} {name} (lost {lost}): {'FAILED' if found else 'ok'}")
     if files:
-        errors += check_identical(lib, files, out)
+        errors += check_every_file(lib, files, out)
     for path in sorted(files.rglob("*.psb")) if files else []:
         found = check_psb(lib, path)
         errors += found
