@@ -587,8 +587,6 @@ def check_kept(name, before, after, stored=False):
 
 # Files minipsd_read takes that do not come back identical yet, and why.
 NOT_IDENTICAL = {
-    "colormodes/4x4_8bit_rgba.psd": "S6.8: a fourth composite channel that is not transparency",
-    "effects/stroke-without-vector-mask.psd": "S6.8: a fifth composite channel",
     "third-party-psds/cactus_top.psd": "S6.8: channels beyond RGBA, transparency written last",
 }
 

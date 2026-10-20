@@ -142,9 +142,8 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     as_stored = all;
     as_stored.keep_matte = 1;
     canvas  = (uint64_t)info.width * info.height * MPSD__RGBA << wide;
-    /* Stored: the composite copied as it is, never decoded, when it holds R, G, B and at most
-       transparency; anything more is decoded, the rest reported lost. */
-    keep_composite = opts && opts->stored && (info.channels == 3 || (info.channels == MPSD__RGBA && info.composite_has_alpha));
+    /* Stored: the composite copied as it is, every channel, never decoded. */
+    keep_composite = opts && opts->stored && info.channels >= 3;
     decoded = keep_composite ? 0 : canvas;                      /* the composite */
     /* A flat file: its image as one layer; stored, as it is, no layer, the composite copied. */
     count   = info.layer_count ? info.layer_count : keep_composite ? 0 : 1;
@@ -275,8 +274,8 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         decoded += canvas;
         if (max && decoded > max) return MINIPSD_ERR_LIMIT;
     }
-    if (info.channels > 3u + (info.composite_has_alpha ? 1u : 0u))
-        loss |= MINIPSD_LOST_CHANNELS;                          /* TODO(S6.8): alpha and spot channels */
+    if (!keep_composite && info.channels > 3u + (info.composite_has_alpha ? 1u : 0u))
+        loss |= MINIPSD_LOST_CHANNELS;                          /* decoded: R, G, B, transparency */
     tail = mpsd__copy_tail(a, r, info.layer_tail);
     if ((info.layer_tail.data && !info.layer_tail.size) || tail_none) tail.data = (const uint8_t *)a->base;   /* nothing at all, as the file */
     if (info.icc.size) {
@@ -313,6 +312,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     d->composite_matted = 1;
     d->composite_stored = composite;
     d->composite_channels = keep_composite ? (uint16_t)info.channels : 0;
+    d->composite_alpha    = (uint8_t)(keep_composite && info.composite_has_alpha && info.channels >= MPSD__RGBA);
     d->layer_info_align   = align;
     d->layer_tail       = tail;
     d->depth            = info.depth;

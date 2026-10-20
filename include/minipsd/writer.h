@@ -163,6 +163,10 @@ static unsigned mpsd__composite_channels(const minipsd_doc *d)
     return mpsd__copies_composite(d) ? d->composite_channels : MPSD__RGBA;
 }
 
+/* Is the composite's fourth channel transparency, the layer count negative?  Always for a
+   supplied or composed one. */
+static int mpsd__composite_alpha(const minipsd_doc *d) { return !mpsd__copies_composite(d) || d->composite_alpha; }
+
 /* No source: the pieces outside a layer channel and the composite. */
 static mpsd__source mpsd__no_source(void)
 {
@@ -648,13 +652,13 @@ static int mpsd__retable_ok(const minipsd_doc *d, const minipsd_layer *l, int k,
     return mpsd__table_ok(&src, mpsd__doc_psb(d), out);
 }
 
-/* A stored composite: R, G, B and at most transparency, fitting the canvas, its table the out
-   format's (or one that can become it). */
+/* A stored composite: R, G, B and up to the format's limit, the fourth transparency only when
+   there is one, fitting the canvas, its table the out format's (or one that can become it). */
 static int mpsd__composite_ok(const minipsd_doc *d, unsigned out)
 {
     const mpsd__source src = mpsd__composite_source(d);
     if (!mpsd__copies_composite(d)) return MINIPSD_OK;
-    if ((d->composite_channels != 3 && d->composite_channels != MPSD__RGBA)
+    if (d->composite_channels < 3 || d->composite_channels > MPSD__MAX_CHANNELS || (d->composite_alpha && d->composite_channels < MPSD__RGBA)
         || !mpsd__stored_ok(d->composite_stored, d->width, src.height, mpsd__doc_wide(d), mpsd__doc_psb(d)))
         return MINIPSD_ERR_ARG;
     return mpsd__table_ok(&src, mpsd__doc_psb(d), out);
@@ -767,7 +771,7 @@ static void mpsd__head(mpsd__sink *s, const minipsd_doc *d, uint64_t info, unsig
     mpsd__put(s, "8BPS", 4);
     mpsd__u16(s, out ? MINIPSD_PSB : MINIPSD_PSD);   /* the version */
     mpsd__zeros(s, 6);                        /* reserved            */
-    mpsd__u16(s, mpsd__composite_channels(d));   /* R, G, B, alpha      */
+    mpsd__u16(s, mpsd__composite_channels(d));   /* R, G, B, alpha, ... */
     mpsd__u32(s, d->height);
     mpsd__u32(s, d->width);
     mpsd__u16(s, mpsd__doc_wide(d) ? 16 : 8); /* bits per channel    */
@@ -789,7 +793,7 @@ static void mpsd__head(mpsd__sink *s, const minipsd_doc *d, uint64_t info, unsig
         mpsd__putlen(s, info, out);
     }
     if (d->layer_count)
-        mpsd__u16(s, (unsigned)(uint16_t)(mpsd__composite_channels(d) == MPSD__RGBA ? -(int16_t)d->layer_count : (int16_t)d->layer_count));   /* negative: composite has alpha */
+        mpsd__u16(s, (unsigned)(uint16_t)(mpsd__composite_alpha(d) ? -(int16_t)d->layer_count : (int16_t)d->layer_count));   /* negative: composite has alpha */
 }
 
 /* After the last layer channel: the layer info's padding, the kept tail or an empty global layer

@@ -1810,10 +1810,10 @@ TEST(MinipsdReadTest, AStoredFileKeepsAnInvertedRectangleAndNoLayerTail)
     EXPECT_EQ(decoded->layers[0].bottom, 0) << "decoded: the reader's empty rectangle";
 }
 
-// What stored does not copy: a composite with a fourth channel that is not transparency, or a
-// fifth, is decoded (and the rest lost); a layer without all of R, G, B is not copied (and
-// refused, as decoding refuses it); an empty
-// layer's rectangle with no width is kept as stored; a layer info of odd length is not padded.
+// A composite with a fourth channel that is not transparency, or a fifth: decoded, the rest
+// lost; stored, copied whole and written back as it was.  What stored does not copy: a layer
+// without all of R, G, B is not copied (and refused, as decoding refuses it); an empty layer's
+// rectangle with no width is kept as stored; a layer info of odd length is not padded.
 TEST(MinipsdReadTest, StoredCopiesOnlyWhatItCanWriteBack)
 {
     const minipsd_read_opts keep{1};
@@ -1824,12 +1824,24 @@ TEST(MinipsdReadTest, StoredCopiesOnlyWhatItCanWriteBack)
         s.layers   = {simpleRec()};
         s.count    = channels == 4 ? 1 : -1;                    // four: the fourth is not transparency
         s.image    = rawImage(channels, 2, 2, 0x80);
+        const Bytes file = build(s).bytes;
         std::uint32_t lost = 0;
-        const Doc d = readDoc(build(s).bytes, &lost, MINIPSD_OK, nullptr, &keep);
+        const Doc d = readDoc(file, &lost, MINIPSD_OK);
         ASSERT_TRUE(d);
         EXPECT_NE(d->composite, nullptr) << "decoded";
         EXPECT_EQ(d->composite_stored.size, 0u);
         EXPECT_EQ(lost, static_cast<std::uint32_t>(MINIPSD_LOST_CHANNELS));
+        const Doc k = readDoc(file, &lost, MINIPSD_OK, nullptr, &keep);
+        ASSERT_TRUE(k);
+        EXPECT_EQ(lost, 0u) << "copied whole";
+        EXPECT_EQ(k->composite, nullptr);
+        EXPECT_EQ(k->composite_channels, channels);
+        EXPECT_EQ(k->composite_alpha, channels == 5 ? 1 : 0);
+        EXPECT_EQ(write(*k), file);
+        k->composite_alpha = !k->composite_alpha;
+        const Open other(write(*k));
+        ASSERT_EQ(other.rc, MINIPSD_OK);
+        EXPECT_EQ(other.info.composite_has_alpha, channels == 4) << "the count's sign follows it";
     }
 
     Rec noBlue = simpleRec();
@@ -2365,7 +2377,7 @@ void expectStoredComposite(const minipsd_doc &s, const Bytes &file, std::size_t 
 {
     if (s.composite_stored.size) {
         EXPECT_EQ(s.composite, nullptr) << "copied, not decoded";
-        EXPECT_TRUE(s.composite_channels == 3 || s.composite_channels == 4);
+        EXPECT_GE(s.composite_channels, 3);
         EXPECT_EQ(Bytes(s.composite_stored.data, s.composite_stored.data + s.composite_stored.size),
                   Bytes(file.end() - static_cast<std::ptrdiff_t>(s.composite_stored.size), file.end()));
     } else {

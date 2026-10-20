@@ -273,8 +273,9 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
   - the caller's `composite` when set (the full canvas, straight alpha), whatever the layers
     hold: flattening layers is rendering, the caller's domain;
   - otherwise a file's composite kept as it stores it (`composite_stored`, with
-    `composite_channels`: 3, or 4 with transparency), copied byte for byte, never decoded nor
-    encoded; the header's channel count and the layer count's sign follow it;
+    `composite_channels`: 3 to 56, red, green, blue, then transparency when `composite_alpha`
+    says so, then alpha and spot channels), copied byte for byte, never decoded nor encoded; the
+    header's channel count follows it, and the layer count is negative with `composite_alpha`;
   - otherwise composed as a **best effort, with no guarantee**: the visible layers combined with
     straight-alpha "over", each at its rectangle, clipped to the canvas. Blend modes, masks,
     clipping, groups and effects are not drawn;
@@ -365,8 +366,7 @@ them; nothing is copied or allocated. Results on real files from other programs:
 - **As a document** (`minipsd_read`): 8- and 16-bit RGB files, at their depth; each layer's
   rectangle, name, opacity, visibility, blend key, clipping, flags, kind, mask, blending ranges, decoded pixels
   (or, with `opts->stored`, its channels as stored, ZIP ones too) and blocks, the composite as
-  stored (`composite_matted`; with `opts->stored`, its bytes in `composite_stored` when it holds
-  R, G, B and at most transparency), the dpi (72 when none is stored), the ICC profile, every resource
+  stored (`composite_matted`; with `opts->stored`, every channel's bytes in `composite_stored`), the dpi (72 when none is stored), the ICC profile, every resource
   and the layer tail, the `Lr16` its layers came from in it, empty, all copied into one block. A
   file without layers gets one, "Background", holding its image; with `opts->stored` it stays
   without, its image the composite, copied. Anything else is reported in `lost` (`MINIPSD_LOST_*`), never

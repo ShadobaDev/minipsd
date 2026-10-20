@@ -78,8 +78,10 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   blocks had it (kept resources and blocks were already in their order).
 - `minipsd_read` with `opts->stored` keeps the composite as the file stores it, in
   `composite_stored` and `composite_channels` at the end of `minipsd_doc` (`composite` is then
-  `NULL`), and the writer copies it: no decoding, no encoding, three channels written as
-  three. A supplied `composite` still wins.
+  `NULL`), and the writer copies it: no decoding, no encoding, every channel written as
+  the file has it, alpha and spot channels too (`MINIPSD_LOST_CHANNELS` no longer set for
+  them), and `composite_alpha` says whether the fourth is transparency. A supplied `composite`
+  still wins.
 - A stored layer without a transparency channel is written without one, as its file has it,
   instead of with an opaque one.
 - `minipsd_read` with `opts->stored` keeps an empty layer's channels too (their compression

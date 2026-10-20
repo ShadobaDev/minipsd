@@ -183,9 +183,16 @@ TEST(MinipsdWriterTest, ASuppliedCompositeIsMattedAndWrittenWithoutComposing)
         for (std::size_t i = 0; i < std::size_t(37) * 5 * 4; ++i)
             if (i % 4 != 3) { ASSERT_EQ(back.composite[i], other[i]) << i; }
 
-        // Refused: a channel count other than 3 or 4, or bytes that do not hold the rows.
-        d.composite_channels = 5;
-        EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG);
+        // Refused: fewer than 3 channels or more than 56, transparency without a fourth, or bytes
+        // that do not hold the rows.
+        for (const std::uint16_t n : {std::uint16_t(2), std::uint16_t(57)}) {
+            d.composite_channels = n;
+            EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << n;
+        }
+        d.composite_channels = 3;
+        d.composite_alpha    = 1;
+        EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "transparency, no fourth channel";
+        d.composite_alpha    = 0;
         d.composite_channels = 4;
         EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "three channels' rows for four";
         d.composite_stored = {nullptr, planes.size()};

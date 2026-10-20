@@ -325,8 +325,8 @@ feature; a supplied composite needs nothing. See
         4, others 2 or none).
   - [x] **S6.7g** An empty layer's inverted rectangle, a layer tail the file does not have.
   - [x] **S6.7h** Layers in `Lr16`, files without layers.
-- [ ] **S6.8** Channels beyond RGBA (alpha and spot channels, of layers and of the composite)
-      kept, in the file's order (GIMP writes transparency last); until then
+- [ ] **S6.8** The composite's channels beyond RGBA (alpha and spot channels) kept, and the
+      layers' channel order (Procreate writes transparency last); until then
       `MINIPSD_LOST_CHANNELS`.
 - [ ] **S6.9** ZIP channels (compression 2, and 3 with prediction), Photoshop's 16- and 32-bit
       layers, decoded through the caller's inflate: minipsd implements no deflate. A function
@@ -383,3 +383,6 @@ Large cases. Each would start with a *design* step, and only when a real consume
 - In-place patching of fixed-size fields.
 - Making `packbits` or `composite` public.
 - The C++ facade.
+- A layer's own alpha and spot channels (ids other than R, G, B, transparency and the masks):
+  no file we have holds one, and Photoshop does not write them. Until a file shows one, such a
+  layer sets `MINIPSD_LOST_CHANNELS`.

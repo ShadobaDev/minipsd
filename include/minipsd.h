@@ -381,13 +381,21 @@ typedef struct minipsd_doc {
                                               count, channel by channel, then the rows, laid
                                               out as format lays it out.  minipsd_read sets it
                                               with minipsd_read_opts.stored.  Size 0: none.   */
-    uint16_t             composite_channels; /*!< The channels composite_stored holds: 3 (red,
-                                              green, blue), or 4, the fourth transparency (the
-                                              layer count is then written negative).  Ignored
-                                              without composite_stored.                       */
+    uint16_t             composite_channels; /*!< The channels composite_stored holds, 3 to
+                                              56: red, green, blue, then transparency
+                                              (composite_alpha) and alpha or spot channels, in
+                                              the file's order.  Ignored without
+                                              composite_stored.                               */
     uint8_t              layer_info_align; /*!< The layer info's length is padded to a multiple
                                               of this: 0 or 2, even (the default); 4, as
                                               Photoshop pads it; 1, not padded.  minipsd_read
+                                              sets the file's.                                 */
+    uint8_t              composite_alpha; /*!< Non-zero: composite_stored's fourth channel is
+                                              transparency, and the layer count is written
+                                              negative; zero: any fourth channel is an alpha
+                                              channel, the count positive.  Ignored without
+                                              composite_stored: a supplied or composed
+                                              composite always has transparency.  minipsd_read
                                               sets the file's.                                 */
 } minipsd_doc;
 
@@ -926,7 +934,8 @@ enum {
     MINIPSD_LOST_BLENDING_RANGES = 2, /*!< No longer set: blending ranges are kept
                                            (minipsd_layer.blending_ranges).                     */
     MINIPSD_LOST_CHANNELS        = 4  /*!< Channels beyond R, G, B, transparency and the masks':
-                                           alpha and spot channels, of a layer or of the composite. */
+                                           alpha and spot channels, of a layer, or of the
+                                           composite when it is decoded (without opts->stored). */
 };
 
 /**
@@ -938,9 +947,8 @@ typedef struct minipsd_read_opts {
     int stored; /*!< Non-zero: each layer keeps its channels as stored (minipsd_layer.stored), not
                      decoded, so writing it back copies them: a fraction of the memory, and no
                      encoding, and ZIP-compressed channels pass.  A layer without a transparency
-                     channel is written without one.  The composite too
-                     (minipsd_doc.composite_stored, composite NULL), when it holds red, green,
-                     blue and at most transparency.                                              */
+                     channel is written without one.  The composite too, every channel of it
+                     (minipsd_doc.composite_stored, composite NULL).                             */
 } minipsd_read_opts;
 
 /**
