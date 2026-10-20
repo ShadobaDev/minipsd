@@ -325,9 +325,11 @@ feature; a supplied composite needs nothing. See
         4, others 2 or none).
   - [x] **S6.7g** An empty layer's inverted rectangle, a layer tail the file does not have.
   - [x] **S6.7h** Layers in `Lr16`, files without layers.
-- [ ] **S6.8** The composite's channels beyond RGBA (alpha and spot channels) kept, and the
-      layers' channel order (Procreate writes transparency last); until then
-      `MINIPSD_LOST_CHANNELS`.
+- [x] **S6.8** The composite's channels beyond RGBA (alpha and spot channels) kept, and whether
+      its fourth is transparency (`composite_alpha`). Not kept, by the rule in the spec's
+      [round trip](SPECIFICATION.md#what-is-read): a layer's channel order (Procreate writes
+      transparency last) is the writer's to choose, and the two bytes Procreate writes past the
+      layer info are outside the format.
 - [ ] **S6.9** ZIP channels (compression 2, and 3 with prediction), Photoshop's 16- and 32-bit
       layers, decoded through the caller's inflate: minipsd implements no deflate. A function
       pointer and its `user` at the end of `minipsd_decode_opts` (and of `minipsd_read_opts`, so
@@ -344,6 +346,11 @@ feature; a supplied composite needs nothing. See
       Without the function, decoding them stays `MINIPSD_ERR_UNSUPPORTED`.
       *Done when:* psd-tools' 16-bit RGB files decode, layers and masks, to the samples psd-tools
       gives, through zlib in the tests; the fuzzer decodes ZIP channels through zlib.
+- [ ] **S6.10** S6.7 against the round-trip rule: what it keeps that is layout the writer may
+      choose, or outside the format, goes. First candidate: `layer_info_align` 1 (a layer info
+      of odd length, which the format rounds to even); Photoshop's 4 stays a choice to discuss.
+      *Done when:* each field S6.7 added is listed as content (kept) or layout (written the
+      writer's way), and the layout ones are gone or justified.
 
 ## 7. Interoperability
 

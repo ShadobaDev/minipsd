@@ -371,6 +371,12 @@ them; nothing is copied or allocated. Results on real files from other programs:
   file without layers gets one, "Background", holding its image; with `opts->stored` it stays
   without, its image the composite, copied. Anything else is reported in `lost` (`MINIPSD_LOST_*`), never
   dropped silently.
+- **Round trip:** a file read with `minipsd_read` and written back keeps all its content: what
+  any program reads as different (pixels, channels, blocks, resources, settings). Layout the
+  format leaves to the writer (the order of a layer's channels, padding) is minipsd's own, and
+  what lies outside the format is not reproduced: the file written follows the format even
+  when the one read did not. Identical bytes are a test, not a promise: `roundtrip.py` lists
+  the files of psd-tools' set that differ, each with its reason.
 - **A prefix is enough** for what lies inside it: `MINIPSD_ERR_SHORT` with
   `minipsd_reader_needed` says how much more a call needs.
 - **Limits:** every length is checked against the buffer and the section it lies in; the

@@ -585,9 +585,10 @@ def check_kept(name, before, after, stored=False):
 
 # --- every file, byte for byte -----------------------------------------------------------------------
 
-# Files minipsd_read takes that do not come back identical yet, and why.
+# Files minipsd_read takes that do not come back identical, and why: layout the writer chooses,
+# or bytes outside the format (the spec's round trip rule).
 NOT_IDENTICAL = {
-    "third-party-psds/cactus_top.psd": "S6.8: channels beyond RGBA, transparency written last",
+    "third-party-psds/cactus_top.psd": "Procreate's: transparency last, two bytes past the layer info",
 }
 
 
