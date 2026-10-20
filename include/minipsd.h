@@ -124,26 +124,27 @@
  * MINIPSD_MORE.
  */
 enum {
-    MINIPSD_OK          =  0, /*!< Success.                                                   */
-    MINIPSD_MORE        =  1, /*!< Not an error: the work is not finished, call again.         */
-    MINIPSD_ERR_ARG     = -1, /*!< A NULL document, no layers nor composite, or a dpi outside
-                                   (0, 65536).                                                  */
-    MINIPSD_ERR_SIZE    = -2, /*!< A side is 0 or above the format's (MINIPSD_MAX_SIDE, or
-                                   MINIPSD_MAX_SIDE_PSB), or the document is too large for
-                                   PSD's 32-bit section lengths (about 4 GiB).                */
-    MINIPSD_ERR_WRITE   = -3, /*!< The write callback reported a failure.                      */
-    MINIPSD_ERR_ALLOC   = -4, /*!< MINIPSD_MALLOC returned NULL.                               */
-    MINIPSD_ERR_OPEN    = -5, /*!< Not returned by minipsd; kept for the caller's own file
-                                   code (examples/): a file not opened or closed.             */
-    MINIPSD_ERR_FORMAT  = -6, /*!< Reader: the bytes are not a well-formed PSD.                */
-    MINIPSD_ERR_UNSUPPORTED = -7, /*!< Valid, but outside what minipsd handles yet: reading,
-                                       pixels other than 8- or 16-bit RGB, or ZIP-compressed
-                                       without the caller's inflate;
-                                       writing in the other format, kept content that cannot
-                                       change format yet.                                         */
-    MINIPSD_ERR_SHORT   = -8, /*!< Reader: the buffer ends inside data the call needs; the
-                                   file may be fine.  minipsd_reader_needed says how much more.  */
-    MINIPSD_ERR_LIMIT   = -9  /*!< Reader: a value is over a limit (minipsd_limits).           */
+    MINIPSD_OK          =  0,       /*!< Success.                                               */
+    MINIPSD_MORE        =  1,       /*!< Not an error: the work is not finished, call again.    */
+    MINIPSD_ERR_ARG     = -1,       /*!< A NULL document, no layers nor composite, or a dpi 
+                                        outside (0, 65536).                                     */
+    MINIPSD_ERR_SIZE    = -2,       /*!< A side is 0 or above the format's (MINIPSD_MAX_SIDE, or
+                                        MINIPSD_MAX_SIDE_PSB), or the document is too large for
+                                        PSD's 32-bit section lengths (about 4 GiB).             */
+    MINIPSD_ERR_WRITE   = -3,       /*!< The write callback reported a failure.                 */
+    MINIPSD_ERR_ALLOC   = -4,       /*!< MINIPSD_MALLOC returned NULL.                          */
+    MINIPSD_ERR_OPEN    = -5,       /*!< Not returned by minipsd; kept for the caller's own file
+                                        code (examples/): a file not opened or closed.          */
+    MINIPSD_ERR_FORMAT  = -6,       /*!< Reader: the bytes are not a well-formed PSD.           */
+    MINIPSD_ERR_UNSUPPORTED = -7,   /*!< Valid, but outside what minipsd handles yet: reading,
+                                        pixels other than 8- or 16-bit RGB, or ZIP-compressed
+                                        without the caller's inflate;
+                                        writing in the other format, kept content that cannot
+                                        change format yet.                                      */
+    MINIPSD_ERR_SHORT   = -8,       /*!< Reader: the buffer ends inside data the call needs;
+                                        the file may be fine.  minipsd_reader_needed says 
+                                        how much more.                                          */
+    MINIPSD_ERR_LIMIT   = -9        /*!< Reader: a value is over a limit (minipsd_limits).      */
 };
 
 /**
@@ -184,10 +185,18 @@ enum {
                           counts of four; sides up to MINIPSD_MAX_SIDE_PSB.                   */
 };
 
-/** \brief Channel compression.  Zero is RLE, so a zero-initialised document gets the compact one. */
+/**
+ * \brief Channel compression.  Zero is RLE, so a zero-initialised document gets the compact one.
+ *
+ * ZIP is for the layers' and masks' channels, through the caller's deflate
+ * (minipsd_write_opts.deflate); the composite is then RLE, as Photoshop writes it.
+ */
 enum {
-    MINIPSD_RLE = 0, /*!< PackBits run-length encoding. */
-    MINIPSD_RAW = 1  /*!< Uncompressed.                 */
+    MINIPSD_RLE = 0,          /*!< PackBits run-length encoding.                               */
+    MINIPSD_RAW = 1,          /*!< Uncompressed.                                               */
+    MINIPSD_ZIP = 2,          /*!< zlib, through the caller's deflate.                         */
+    MINIPSD_ZIP_PREDICTED = 3 /*!< zlib of each sample's difference from its left neighbour,
+                                   as Photoshop writes its 16-bit layers.                      */
 };
 
 /**
@@ -340,7 +349,8 @@ typedef struct minipsd_doc {
                                               a flat file, its image the composite.           */
     const uint8_t       *icc;            /*!< Optional ICC profile; NULL means none (sRGB).  */
     size_t               icc_size;       /*!< Size of icc in bytes; 0 when icc is NULL.      */
-    int                  compression;    /*!< MINIPSD_RLE or MINIPSD_RAW.                    */
+    int                  compression;    /*!< MINIPSD_RLE, MINIPSD_RAW, or MINIPSD_ZIP(_PREDICTED)
+                                              with minipsd_write_opts.deflate.                */
     const uint8_t       *composite;      /*!< The composite (merged) image: width * height * 4
                                               samples, rows top down, straight alpha, written
                                               whatever the layers hold.  NULL: composite_stored
@@ -395,6 +405,20 @@ typedef struct minipsd_doc {
 } minipsd_doc;
 
 /**
+ * \brief The caller's deflate, for writing ZIP channels: minipsd implements no deflate.
+ *
+ * Compresses src into a zlib stream (RFC 1950) at dst, which has *dst_size bytes of room on entry
+ * (src_size + src_size / 2048 + 16, more than zlib's compressBound); *dst_size receives the
+ * stream's size.  The same input must give the same bytes: a channel is compressed once to learn
+ * its size, which the layer record holds before the data, and once more to write it.  With zlib:
+ * `uLongf n = *dst_size; int rc = compress2(dst, &n, src, src_size, 6); *dst_size = n; return rc != Z_OK;`
+ *
+ * \param user The pointer given beside the function.
+ * \return 0 on success; anything else fails the write (MINIPSD_ERR_WRITE).
+ */
+typedef int (*minipsd_deflate_fn)(void *user, const uint8_t *src, size_t src_size, uint8_t *dst, size_t *dst_size);
+
+/**
  * \brief How a document is written.  NULL options write it as it is.
  *
  * Fields are only ever added at the end, and zero keeps the previous behaviour, so zero the whole
@@ -410,6 +434,11 @@ typedef struct minipsd_write_opts {
                           keys not yet verified ('Alph', 'FELS', 'FEid', 'FXid',
                           'Mt16', 'Mtrn', 'PxSD', 'lnk3') are refused (MINIPSD_ERR_UNSUPPORTED);
                           a PSB that does not fit a PSD is MINIPSD_ERR_SIZE.                  */
+    minipsd_deflate_fn deflate; /*!< Compresses the channels of a document whose compression is
+                          MINIPSD_ZIP or MINIPSD_ZIP_PREDICTED, which needs it
+                          (MINIPSD_ERR_ARG without); the workspace then holds the largest
+                          such channel twice, raw and compressed.                              */
+    void *deflate_user; /*!< Passed to deflate.                                               */
 } minipsd_write_opts;
 
 /**
@@ -431,7 +460,9 @@ typedef struct minipsd_write_opts {
  *                          channel does not match its rectangle, a layer has only stored
  *                          channels while the composite is to be composed, groups do not nest
  *                          (every group's top record needs its divider below it), or a mask's
- *                          rectangle is inverted or has an area without pixels.
+ *                          rectangle is inverted or has an area without pixels, compression is
+ *                          none of MINIPSD_RLE, _RAW, _ZIP, _ZIP_PREDICTED, or ZIP has no
+ *                          opts->deflate.
  * \retval MINIPSD_ERR_SIZE A side of the canvas, a layer or a mask is 0 or above the format's
  *                          (MINIPSD_MAX_SIDE, MINIPSD_MAX_SIDE_PSB; a layer's may be 0), a
  *                          resource name is longer than 255 bytes, or the resources or a layer's

@@ -56,6 +56,12 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   `minipsd_read_opts` and `minipsd_decode_opts` grow by these fields: a caller that sets
   `stored` or `depth` on an uninitialised struct now passes garbage as `inflate`. Zero the whole
   struct first (`= {0}`, a designated initialiser, or `memset`), as every options struct asks.
+- ZIP written: `MINIPSD_ZIP` and `MINIPSD_ZIP_PREDICTED` as the document's `compression` compress
+  the layers' and masks' channels through the caller's deflate, `minipsd_deflate_fn` in
+  `minipsd_write_opts` (zlib's `compress2` in a few lines); the composite stays RLE. Each channel
+  is deflated twice (sizing, then writing), so the deflate must be deterministic; a failing one
+  is `MINIPSD_ERR_WRITE`. A `compression` that is none of the four is now `MINIPSD_ERR_ARG`
+  (any value but `MINIPSD_RAW` used to mean RLE).
 - PSB, Photoshop's large document format, up to 300 000 px a side (`MINIPSD_MAX_SIDE_PSB`):
   `format` (`MINIPSD_PSD`, `MINIPSD_PSB`) at the end of `minipsd_doc` writes one, and the reader
   reads one through the same calls, `format` in `minipsd_info` and the layer view saying how its

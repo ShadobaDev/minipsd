@@ -341,8 +341,8 @@ feature; a supplied composite needs nothing. See
       byte shuffle at 32) and spreads the samples into the target as for RLE. The reader still
       allocates nothing: a dense plane (`pixel_step` the sample size) takes the inflated channel
       directly; any other target needs a scratch buffer of one channel from the caller. minipsd
-      implements no deflate: ZIP is written only from the caller's buffers (stored ZIP channels,
-      copied as they are), and later perhaps through the caller's deflate (Not scheduled).
+      implements no deflate: ZIP is written from the caller's buffers (stored ZIP channels,
+      copied as they are), and through the caller's deflate (S6.11).
       Without the function, decoding them stays `MINIPSD_ERR_UNSUPPORTED`.
       *Done when:* psd-tools' 16-bit RGB files decode, layers and masks, to the samples psd-tools
       gives, through zlib in the tests; the fuzzer decodes ZIP channels through zlib.
@@ -360,6 +360,18 @@ feature; a supplied composite needs nothing. See
       layer info's padding (`layer_info_align`; always even), empty layers' channels and
       inverted rectangles, a missing global layer mask, a section of length 0.
       `roundtrip.py` checks content and a second pass instead of bytes.
+- [x] **S6.11** ZIP written through the caller's deflate, the counterpart of S6.9's inflate:
+      `minipsd_deflate_fn` and its `user` at the end of `minipsd_write_opts`, and
+      `MINIPSD_ZIP` and `MINIPSD_ZIP_PREDICTED` as the document's `compression`, for the
+      layers' and masks' channels; the composite is then RLE, as Photoshop writes it. A channel's
+      size goes in its record ahead of the data, so the sizing pass deflates each channel once and
+      the writing pass once more, as RLE is packed twice; the deflate must give the same bytes
+      both times, and the workspace holds the largest channel raw and its stream. A deflate that
+      fails, or changes its mind, is `MINIPSD_ERR_WRITE`.
+      *Done when:* documents written as ZIP, 8 and 16 bits, predicted or not, decode in psd-tools
+      to the samples given (`roundtrip.py`, through Python's zlib), and psd-tools' 16-bit files
+      read decoded are written back ZIP-predicted with the same pixels; the unit tests write and
+      read ZIP through stored blocks, deflate failures included.
 
 ## 7. Interoperability
 
@@ -393,8 +405,6 @@ Large cases. Each would start with a *design* step, and only when a real consume
 - Streaming parser without a whole blob (`R9`).
 - Row provider for pixels not in memory (`W6`); layer-at-a-time producer (`W8`).
 - Parallel encoding split API (`W9`).
-- ZIP written through the caller's deflate, a field of `minipsd_write_opts` beside the inflate of
-  S6.9: compression and the composite stay outside minipsd, as libvips provides both.
 - Segment output for zero-copy saves (`E3`).
 - In-place patching of fixed-size fields.
 - Making `packbits` or `composite` public.

@@ -616,6 +616,12 @@ typedef struct minipsd_read_opts {
   without one.
 - **`opts->inflate`** decodes ZIP channels: the measuring pass finds the largest ZIP channel it
   decodes, and the block holds that much scratch after the document.
+- **ZIP written** (`compression` `MINIPSD_ZIP`, `_PREDICTED`, with `minipsd_write_opts.deflate`):
+  a channel's size is in its record before its data, and the writer never seeks back, so
+  `mpsd__measure_layers` deflates each channel once and the `MPSD__ZIP` piece once more, as RLE
+  rows are packed twice. The workspace holds the largest channel's raw rows (gathered big-endian,
+  predicted in place) and its stream; the stream is kept while a piece of it is handed out in
+  parts, and a second stream of another size is `MINIPSD_ERR_WRITE`. The composite stays RLE.
 - **Limits:** `minipsd_limits` as in the reader; `max_decoded_bytes` bounds the sum of the call's
   decoded pixels. A block larger than `SIZE_MAX` is `MINIPSD_ERR_SIZE`.
 - **What it accepts:** 8- and 16-bit RGB, as the decoder; the document has the file's `depth`.

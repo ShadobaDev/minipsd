@@ -249,6 +249,27 @@ rc = minipsd_write(doc, &as_psb, to_file, f);   /* a PSD read from disk, written
 Going the other way, a PSB that a PSD cannot hold is `MINIPSD_ERR_SIZE`, and the few blocks whose
 translation is not verified yet are `MINIPSD_ERR_UNSUPPORTED`, both before a byte is written.
 
+Channels are PackBits RLE by default, or raw. ZIP, as Photoshop writes its 16-bit layers, needs a
+deflate of yours, zlib's here, since minipsd implements none; the composite stays RLE:
+
+```c
+static int deflate_zlib(void *user, const uint8_t *src, size_t src_size, uint8_t *dst, size_t *dst_size)
+{
+    uLongf n = *dst_size;
+    int    rc = compress2(dst, &n, src, (uLong)src_size, 6);
+    (void)user;
+    *dst_size = n;
+    return rc != Z_OK;
+}
+
+const minipsd_write_opts zip = { .deflate = deflate_zlib };
+doc.compression = MINIPSD_ZIP_PREDICTED;   /* or MINIPSD_ZIP, without prediction */
+rc = minipsd_write(&doc, &zip, to_file, f);
+```
+
+Each channel is deflated twice, once to size it and once to write it, so the same input must give
+the same bytes, as zlib's do.
+
 The composite, the flattened image that viewers and thumbnails show, is yours to render when
 the layers use anything beyond plain "over" (libvips does most of it, see
 [Working with libvips](SPECIFICATION.md#working-with-libvips)). Give it in straight alpha, the

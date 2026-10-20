@@ -1,8 +1,9 @@
 /**
  * \file
  * \brief zlib streams of stored blocks (RFC 1950 around RFC 1951's BTYPE 00): enough for the tests
- *        and the fuzzer to make ZIP channels and to inflate them through minipsd_inflate_fn, with
- *        no zlib on any toolchain.  A stream that uses compressed blocks fails to inflate.
+ *        and the fuzzer to make ZIP channels (through minipsd_deflate_fn too) and to inflate them
+ *        (through minipsd_inflate_fn), with no zlib on any toolchain.  Nothing is compressed: a
+ *        stored block holds its bytes as they are.  A stream with compressed blocks fails to inflate.
  *
  * C and C++, static inline so that a file may use only part of it; include after minipsd.h.
  *
@@ -52,6 +53,16 @@ static inline size_t zlib_stored_deflate(const uint8_t *src, size_t n, uint8_t *
         dst[out + 2] = (uint8_t)(adler >> 8); dst[out + 3] = (uint8_t)adler;
     }
     return out + 4;
+}
+
+/* A minipsd_deflate_fn: the stream of stored blocks, when it fits the *dst_size bytes of room. */
+static inline int zlib_stored_compress(void *user, const uint8_t *src, size_t n, uint8_t *dst, size_t *dst_size)
+{
+    const size_t need = zlib_stored_deflate(src, n, NULL);
+    (void)user;
+    if (need > *dst_size) return 1;
+    *dst_size = zlib_stored_deflate(src, n, dst);
+    return 0;
 }
 
 /* A minipsd_inflate_fn: 0 when src is a stream of stored blocks of exactly dst_size bytes. */

@@ -145,7 +145,7 @@ of 8- and 16-bit RGB files, layers and composite.
 | `minipsd_workspace` | `void`: caller memory lent to the writer or the reader, sized by its `*_workspace_size` function |
 | `minipsd_writer` | opaque; built by `minipsd_writer_init` inside the workspace |
 | `minipsd_write_fn` | the callback of `minipsd_write`: non-zero to go on, 0 to abort |
-| `minipsd_write_opts` | how a document is written: `format`, the file's (PSD or PSB), 0 for the document's own; `NULL` writes it as it is |
+| `minipsd_write_opts` | how a document is written: `format`, the file's (PSD or PSB), 0 for the document's own; `deflate`, the caller's, for ZIP; `NULL` writes it as it is |
 | `minipsd_reader` | opaque; built by `minipsd_reader_init` inside the workspace |
 | `minipsd_limits` | what the reader refuses: largest side (canvas, and layers when set), most layers, most bytes one decode call writes; zero fields keep the format's caps |
 | `minipsd_info` | what the file says about itself: size, depth, colour mode, dpi, ICC profile, layer count, format (PSD or PSB) |
@@ -301,6 +301,13 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
 - **Compression:** PackBits RLE (runs from 3 bytes, packets up to 128 bytes) or raw.
   Row byte counts are computed in a separate sizing pass, so output streams forward through the
   callback and never seeks back.
+  ZIP (`MINIPSD_ZIP`, and `MINIPSD_ZIP_PREDICTED` with each sample stored as its difference from
+  its left neighbour) compresses the layers' and masks' channels through the caller's deflate,
+  `minipsd_write_opts.deflate` (`MINIPSD_ERR_ARG` without one): minipsd implements none. The
+  composite is then RLE, as Photoshop writes it. The sizing pass deflates each channel once to
+  learn its size and the writing pass once more, so the deflate must give the same bytes for the
+  same input; one that fails, or gives other bytes, is `MINIPSD_ERR_WRITE`. The workspace holds
+  the largest such channel raw and the room for its stream.
 - **Allocations:** see [Memory and ownership](#memory-and-ownership).
 - **Limits** (all checked before anything is written):
   - each side 1 .. 30 000 px in a PSD, 1 .. 300 000 in a PSB, otherwise `MINIPSD_ERR_SIZE`;

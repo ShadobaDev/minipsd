@@ -9,7 +9,9 @@ minipsd_write: every block, resource and global block psd-tools finds must come 
 Photoshop's 16-bit files go through as stored, their ZIP channels copied byte for byte, and
 decoded through Python's zlib (minipsd_read's inflate), every layer's pixels as psd-tools gives them.
 Files minipsd wrote are also re-encoded by psd-tools as ZIP, with and without prediction, and must
-decode to the same pixels: the ZIP path without psd-tools' files.
+decode to the same pixels: the ZIP path without psd-tools' files.  The other way, documents minipsd
+writes as ZIP through Python's zlib (minipsd_write_opts.deflate) are decoded by psd-tools, and the
+files read decoded are written back as ZIP with prediction, as Photoshop writes its 16-bit layers.
 
 Each of those also goes into the other format (PSD as PSB, PSB as PSD), its kept content
 translated, and must read back the same.
@@ -32,7 +34,7 @@ import zlib
 from psd_tools import PSDImage
 from psd_tools.constants import Compression
 
-MINIPSD_OK, MINIPSD_RLE, MINIPSD_RAW = 0, 0, 1
+MINIPSD_OK, MINIPSD_RLE, MINIPSD_RAW, MINIPSD_ZIP, MINIPSD_ZIP_PREDICTED = 0, 0, 1, 2, 3
 MINIPSD_ERR_UNSUPPORTED = -7
 WRITE_FN = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t)
 INFLATE_FN = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
@@ -93,12 +95,27 @@ class Doc(ctypes.Structure):
                 ("composite_stored", Bytes), ("composite_channels", ctypes.c_uint16)]
 
 
+DEFLATE_FN = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
+                              ctypes.POINTER(ctypes.c_size_t))
+
+
+@DEFLATE_FN
+def deflate(_user, src, size, dst, dst_size):
+    """Python's zlib as minipsd_deflate_fn: the stream, when it fits the room given."""
+    out = zlib.compress(ctypes.string_at(src, size))
+    if len(out) > dst_size[0]:
+        return 1
+    ctypes.memmove(dst, out, len(out))
+    dst_size[0] = len(out)
+    return 0
+
+
 class ReadOpts(ctypes.Structure):
     _fields_ = [("stored", ctypes.c_int), ("inflate", INFLATE_FN), ("inflate_user", ctypes.c_void_p)]
 
 
 class WriteOpts(ctypes.Structure):
-    _fields_ = [("format", ctypes.c_uint16)]
+    _fields_ = [("format", ctypes.c_uint16), ("deflate", DEFLATE_FN), ("deflate_user", ctypes.c_void_p)]
 
 
 class Plane(ctypes.Structure):
@@ -191,6 +208,8 @@ DOCUMENTS = [
     ("stack-raw",    33,    9,      150.0, MINIPSD_RAW, stack(33, 9)),
     ("rects-rle",    24,    16,     72.0,  MINIPSD_RLE, rects(24, 16)),
     ("rects-raw",    24,    16,     72.0,  MINIPSD_RAW, rects(24, 16)),
+    ("stack-zip",    33,    9,      72.0,  MINIPSD_ZIP, stack(33, 9)),
+    ("rects-zip-predicted", 24, 16, 72.0,  MINIPSD_ZIP_PREDICTED, rects(24, 16)),
     ("blend-modes",  9 * 32, 3 * 32, 72.0, MINIPSD_RLE, blend_modes(32)),
 ]
 
@@ -274,7 +293,7 @@ def write(lib, path, w, h, dpi, compression, layers, fmt=0):
         out.extend(ctypes.string_at(data, size))
         return 1
 
-    rc = lib.minipsd_write(ctypes.byref(doc), None, WRITE_FN(collect), None)
+    rc = lib.minipsd_write(ctypes.byref(doc), ctypes.byref(WriteOpts(fmt, deflate)), WRITE_FN(collect), None)
     if rc == MINIPSD_OK:
         path.write_bytes(out)
     return rc
@@ -429,7 +448,7 @@ def check_groups_and_mask(psd, mask_px):
 
 # --- 16 bits, written from scratch ---------------------------------------------------------------
 
-def deep(lib, path):
+def deep(lib, path, compression=MINIPSD_RLE):
     """A 16-bit document: an opaque gradient, and above it a half-transparent layer at an offset, with
     a mask.  Samples are uint16 in host order; returns the layers' samples and the mask's."""
     w, h, lw, lh = 48, 32, 20, 12
@@ -448,7 +467,7 @@ def deep(lib, path):
     records[0] = Layer(name=b"Gradient", rgba=samples(base), opacity=255)
     records[1] = Layer(name=b"Masked", rgba=samples(top), opacity=255, top=5, left=10, bottom=5 + lh, right=10 + lw,
                        mask=ctypes.pointer(mask))
-    doc = Doc(w, h, 72.0, records, 2, None, 0, MINIPSD_RLE)
+    doc = Doc(w, h, 72.0, records, 2, None, 0, compression)
     doc.depth = 16
     out = bytearray()
 
@@ -456,7 +475,7 @@ def deep(lib, path):
         out.extend(ctypes.string_at(data, size))
         return 1
 
-    rc = lib.minipsd_write(ctypes.byref(doc), None, WRITE_FN(collect), None)
+    rc = lib.minipsd_write(ctypes.byref(doc), ctypes.byref(WriteOpts(0, deflate)), WRITE_FN(collect), None)
     if rc == MINIPSD_OK:
         path.write_bytes(out)
     return rc, (w, h, lw, lh, base, top, mask_px)
@@ -519,7 +538,8 @@ KEPT_PSB_16 = ["16bit5x5.psb"]
 
 def resave(lib, source, path, stored=False, fmt=0, zip_=False):
     """source through minipsd_read (stored, or with zip_ decoding ZIP channels through zlib) and
-    minipsd_write (as fmt, or as the document's format)."""
+    minipsd_write (as fmt, or as the document's format; with zip_, what is encoded as ZIP with
+    prediction, through zlib)."""
     data = source.read_bytes()
     doc = ctypes.POINTER(Doc)()
     lost = ctypes.c_uint32(0)
@@ -534,7 +554,9 @@ def resave(lib, source, path, stored=False, fmt=0, zip_=False):
         out.extend(ctypes.string_at(chunk, size))
         return 1
 
-    rc = lib.minipsd_write(doc, ctypes.byref(WriteOpts(fmt)) if fmt else None, WRITE_FN(collect), None)
+    if zip_:
+        doc.contents.compression = MINIPSD_ZIP_PREDICTED
+    rc = lib.minipsd_write(doc, ctypes.byref(WriteOpts(fmt, deflate)), WRITE_FN(collect), None)
     lib.minipsd_doc_free(doc)
     if rc == MINIPSD_OK:
         path.write_bytes(out)
@@ -567,6 +589,17 @@ def pixels(psd):
             w, h = channel_size(rec, c.id.value)
             if w > 0 and h > 0:
                 out[i, c.id.value] = d.get_data(w, h, psd.depth, psd.version)
+    return out
+
+
+def compressions(psd):
+    """How the layer channels with an area are compressed, all of them."""
+    (recs, data), out = records(psd._record.layer_and_mask_information), set()
+    for rec, channels in zip(recs, data):
+        for c, d in zip(rec.channel_info, channels):
+            w, h = channel_size(rec, c.id.value)
+            if w > 0 and h > 0 and c.id.value >= -2:
+                out.add(d.compression)
     return out
 
 
@@ -805,6 +838,8 @@ def main():
         found = check(name, psd, w, h, dpi, layers)
         if psd.version != (2 if fmt else 1):
             found.append(f"{name}: version {psd.version}")
+        if compression >= MINIPSD_ZIP and compressions(psd) != {Compression(compression)}:
+            found.append(f"{name}: layer channels compressed as {compressions(psd)}")
         errors += found
         print(f"{name}: {'FAILED' if found else 'ok'}")
 
@@ -821,11 +856,14 @@ def main():
     errors += found
     print(f"groups-masks: {'FAILED' if found else 'ok'}")
 
-    path = out / "deep-16.psd"
-    rc, expected = deep(lib, path)
-    found = [f"deep-16: minipsd_write returned {rc}"] if rc != MINIPSD_OK else check_deep(PSDImage.open(path), expected)
-    errors += found
-    print(f"deep-16: {'FAILED' if found else 'ok'}")
+    for name, compression in (("deep-16", MINIPSD_RLE), ("deep-16-zip-predicted", MINIPSD_ZIP_PREDICTED)):
+        path = out / f"{name}.psd"
+        rc, expected = deep(lib, path, compression)
+        found = [f"{name}: minipsd_write returned {rc}"] if rc != MINIPSD_OK else check_deep(PSDImage.open(path), expected)
+        if rc == MINIPSD_OK and compression and compressions(PSDImage.open(path)) != {Compression(compression)}:
+            found.append(f"{name}: layer channels compressed as {compressions(PSDImage.open(path))}")
+        errors += found
+        print(f"{name}: {'FAILED' if found else 'ok'}")
 
     for source in (out / "groups-masks.psd", out / "deep-16.psd"):
         found = check_zip(lib, source, out)

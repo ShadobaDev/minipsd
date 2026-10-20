@@ -61,7 +61,8 @@ full canvas), or empty, with UTF-8 names, opacity and visibility; the merged com
 yours or composed as a best effort; the resolution; an optional ICC profile; groups, layer
 masks, blend modes, clipping, and blocks and resources kept from a file (text, effects), as
 they are.
-Channels are PackBits RLE or raw. Each side is limited to 30 000 px, or 300 000 px written as a
+Channels are PackBits RLE or raw, or ZIP through your deflate (zlib's `compress2`: minipsd
+implements none). Each side is limited to 30 000 px, or 300 000 px written as a
 PSB (Photoshop's large document format).
 
 Not written (yet): 32-bit, other colour modes. The full contract is in [docs/SPECIFICATION.md](docs/SPECIFICATION.md).
