@@ -600,23 +600,16 @@ def check_kept(name, before, after, stored=False):
     return errors
 
 
-# --- every file: its content, a second pass, and its bytes ---------------------------------------------
-
-# Files minipsd_read takes that do not come back identical, and why: layout the writer chooses,
-# or bytes outside the format (the spec's round trip rule).
-NOT_IDENTICAL = {
-    "third-party-psds/cactus_top.psd": "Procreate's: transparency last, two bytes past the layer info",
-}
-
+# --- every file: its content, and a second pass ------------------------------------------------------
 
 def check_every_file(lib, files, out):
     """Every file minipsd_read takes (with stored), through minipsd_write: its content kept
     (check_kept), and a second pass changes no byte (the writer's own layout, the same each time).
-    And the same bytes as the file but for those listed in NOT_IDENTICAL."""
-    errors, same = [], 0
+    The bytes themselves may differ: the spec's round trip rule."""
+    errors, count = [], 0
     for source in sorted(files.rglob("*.ps[db]")):
         name = source.relative_to(files).as_posix()
-        path = out / ("identical-" + name.replace("/", "__"))
+        path = out / ("every-" + name.replace("/", "__"))
         rc, _ = resave(lib, source, path, stored=True)
         if rc != MINIPSD_OK:
             continue                                         # refused: not a document minipsd takes
@@ -625,13 +618,8 @@ def check_every_file(lib, files, out):
         rc, _ = resave(lib, path, again, stored=True)
         if rc != MINIPSD_OK or again.read_bytes() != path.read_bytes():
             errors.append(f"{name}: a second pass changes the bytes (rc {rc})")
-        identical = path.read_bytes() == source.read_bytes()
-        if identical and name in NOT_IDENTICAL:
-            errors.append(f"{name}: identical now; remove it from NOT_IDENTICAL")
-        elif not identical and name not in NOT_IDENTICAL:
-            errors.append(f"{name}: read and written back, not the same bytes")
-        same += identical
-    print(f"identical: {same} files, {len(NOT_IDENTICAL)} listed as not yet")
+        count += 1
+    print(f"every file: {count} read and written back")
     return errors
 
 

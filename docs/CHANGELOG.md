@@ -73,9 +73,6 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   layers when set), the most layers, the most bytes one decode call writes.
 
 ### Changed
-- A document read from a file is written back closer to that file, byte for byte: the
-  resolution and ICC profile resources where the file had them, a layer's `luni` where its
-  blocks had it (kept resources and blocks were already in their order).
 - `minipsd_read` with `opts->stored` keeps the composite as the file stores it, in
   `composite_stored` and `composite_channels` at the end of `minipsd_doc` (`composite` is then
   `NULL`), and the writer copies it: no decoding, no encoding, every channel written as
@@ -104,9 +101,9 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   section when the file had none.
 - A file read and written back keeps all its content; layout the format leaves to the writer
   is minipsd's own, and bytes outside the format are not reproduced (the spec's round trip
-  rule). Every file of psd-tools' set that `minipsd_read` takes but one (Procreate's) comes
-  back identical through `minipsd_read` (with `opts->stored`) and `minipsd_write`;
-  `tests/psd_tools/roundtrip.py` checks every one.
+  rule): the writer's own resources and `luni` come first. `tests/psd_tools/roundtrip.py`
+  checks every file of psd-tools' set that `minipsd_read` takes: its content, compared through
+  psd-tools, and a second pass, which changes no byte.
 
 ## [0.2.0] — 2026-10-15
 

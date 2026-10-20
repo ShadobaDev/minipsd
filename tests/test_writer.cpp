@@ -262,7 +262,7 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
         }
         if (res.id == 1036) { EXPECT_EQ(Bytes(res.name.data, res.name.data + res.name.size), nm); }
     }
-    EXPECT_EQ(ids, (std::vector<int>{1036, 1005, 1039})) << "the writer's own resources where the kept ones were";
+    EXPECT_EQ(ids, (std::vector<int>{1005, 1039, 1036})) << "the writer's own resources first";
     minipsd_layer_view v;
     ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
     EXPECT_STREQ(v.blend, "mul ");
@@ -274,11 +274,9 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     EXPECT_EQ(Bytes(v.blending_ranges.data, v.blending_ranges.data + v.blending_ranges.size),
               (Bytes{0, 0, 255, 255, 59, 60, 210, 220, 10, 10, 200, 200, 0, 0, 255, 255})) << "the ranges, as given";
     const Bytes blocks(v.extra.data, v.extra.data + v.extra.size);
-    EXPECT_EQ(Bytes(blocks.begin(), blocks.begin() + static_cast<std::ptrdiff_t>(vmsk.size())), vmsk) << "a kept block first";
-    EXPECT_EQ(std::string(blocks.begin() + static_cast<std::ptrdiff_t>(vmsk.size()) + 4, blocks.begin() + static_cast<std::ptrdiff_t>(vmsk.size()) + 8), "luni")
-        << "the writer's 'luni' where the kept one was";
-    EXPECT_EQ(Bytes(blocks.end() - static_cast<std::ptrdiff_t>(lsct.size() + tysh.size()), blocks.end()), lsct + tysh)
-        << "kept blocks follow it, in order, without the second 'luni'";
+    EXPECT_EQ(std::string(blocks.begin() + 4, blocks.begin() + 8), "luni") << "the writer's 'luni' first";
+    EXPECT_EQ(Bytes(blocks.end() - static_cast<std::ptrdiff_t>(vmsk.size() + lsct.size() + tysh.size()), blocks.end()), vmsk + lsct + tysh)
+        << "kept blocks follow it, in order, without the kept 'luni's";
 
     // Another dpi: the writer's own resolution, in inches.
     d.dpi = 72;
@@ -329,7 +327,7 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     EXPECT_EQ(info.icc.size, 0u);
     ids.clear();
     while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE) ids.push_back(res.id);
-    EXPECT_EQ(ids, (std::vector<int>{1036, 1005}));
+    EXPECT_EQ(ids, (std::vector<int>{1005, 1036}));
 }
 
 TEST(MinipsdWriterTest, GroupsAndMasksAreWritten)

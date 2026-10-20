@@ -250,9 +250,9 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
   - visibility: flag bit `0x02` set means hidden; the other flag bits as given (`flags`);
   - the blend key as given, `norm` by default (the keys: [Blend modes](#blend-modes)), and
     clipping as given;
-  - the blocks kept from a file (`extra`), as they are and in their order, with the writer's own
-    `luni` (and group marker) where the first kept `luni` was, or first without one: the name
-    wins, and a second kept `luni` goes;
+  - the writer's own blocks first, `luni` (a kept one as it is while it says the name) and the
+    group marker, then the blocks kept from a file (`extra`), as they are and in their order:
+    the name wins, and kept `luni` blocks go;
   - channel data encoded from `rgba`, or copied as it is from `stored` (any compression the
     file had, ZIP included), so a layer that was not changed is not encoded again; a stored
     layer without transparency is written without one (three colour channels);
@@ -284,8 +284,8 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
   - **colour is matted against white:** `c*a + max*(1-a)`, `max` being 255 or 65535. Photoshop
     stores it this way and readers subtract the white back out. The writer mattes, a supplied composite too, unless
     `composite_matted` says it already is: then it is written byte for byte.
-- **Image resources:** the resources kept from a file (`resources`), in order, with their names;
-  the writer's own two take the place of the first kept one with the same id, or come first:
+- **Image resources:** the writer's own two first, each with the name of a kept one of the same
+  id, then the resources kept from a file (`resources`), in order, with their names:
   - 1005 ResolutionInfo: dpi as 16.16 fixed point, unit inches; a kept 1005 that says the same
     dpi is written instead, with its own units and vertical resolution;
   - 1039 ICC profile, only when `icc` is set;
@@ -375,8 +375,9 @@ them; nothing is copied or allocated. Results on real files from other programs:
   any program reads as different (pixels, channels, blocks, resources, settings). Layout the
   format leaves to the writer (the order of a layer's channels, padding) is minipsd's own, and
   what lies outside the format is not reproduced: the file written follows the format even
-  when the one read did not. Identical bytes are a test, not a promise: `roundtrip.py` lists
-  the files of psd-tools' set that differ, each with its reason.
+  when the one read did not. `roundtrip.py` checks it on every file of psd-tools' set that
+  `minipsd_read` takes: the content, compared through psd-tools, and a second pass, which
+  changes no byte.
 - **A prefix is enough** for what lies inside it: `MINIPSD_ERR_SHORT` with
   `minipsd_reader_needed` says how much more a call needs.
 - **Limits:** every length is checked against the buffer and the section it lies in; the

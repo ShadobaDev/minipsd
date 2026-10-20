@@ -536,7 +536,7 @@ int            composite_matted;   /* non-zero: composite is already matted, wri
 
 | Field | Zero means | Notes |
 |---|---|---|
-| `const minipsd_resource *resources`, `size_t resource_count` | no other resources | written in order, the writer's own 1005 and 1039 in place of the first kept ones (first without them); the reader's `minipsd_resource` type, which carries the resource's name (`name`, a Pascal string's bytes, at most 255) |
+| `const minipsd_resource *resources`, `size_t resource_count` | no other resources | written in order after the writer's own 1005 and 1039, which take the kept ones' names; the reader's `minipsd_resource` type, which carries the resource's name (`name`, a Pascal string's bytes, at most 255) |
 | `minipsd_bytes layer_tail` | an empty global layer mask (four zero bytes) | the rest of the layer and mask section after the layer info: the global layer mask information and the global additional blocks (`Txt2`, `Patt`, `Lr16`, ...), written back as they are |
 
 The reader gives the matching fields: `minipsd_layer_view.clipping` and `.flags`,

@@ -213,12 +213,27 @@ static int mpsd__kept_kind(minipsd_bytes extra, unsigned kind, unsigned psb)
     return 0;
 }
 
-/* The writer's own blocks: the name in 'luni' (unless the kept names say it), then the group
-   marker unless a kept one says it. */
+/* Is there a kept 'luni'?  The first one's data in *data. */
+static int mpsd__kept_luni(minipsd_bytes extra, unsigned psb, minipsd_bytes *data)
+{
+    minipsd_block block;
+    size_t        pos = 0, next;
+    for (; pos < extra.size && mpsd__block(extra, pos, psb, &block, &next) == MINIPSD_OK; pos = next)
+        if (mpsd__tag((const uint8_t *)block.key, "luni")) { *data = block.data; return 1; }
+    return 0;
+}
+
+/* The writer's own blocks, first: the name in 'luni' (the kept one, as it is, when the kept names
+   say it), then the group marker unless a kept one says it. */
 static void mpsd__own_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned from, int named)
 {
-    const char *name = l->name;
-    if (!named) {
+    const char   *name = l->name;
+    minipsd_bytes kept;
+    if (named && mpsd__kept_luni(l->extra, from, &kept)) {
+        mpsd__put(s, "8BIMluni", 8);
+        mpsd__u32(s, (uint32_t)kept.size);
+        mpsd__put(s, kept.data, kept.size);
+    } else if (!named) {
         const size_t units = mpsd__utf16(name, NULL, NULL);
         const size_t luni  = MPSD__LEN + units * 2;   /* the count of UTF-16 units, the units */
         mpsd__put(s, "8BIMluni", 8);
@@ -236,17 +251,6 @@ static void mpsd__own_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned fro
     }
 }
 
-/* Is there a kept 'luni'?  The first one's data in *data.  The writer's own blocks then take its
-   place, so the blocks keep their order. */
-static int mpsd__kept_luni(minipsd_bytes extra, unsigned psb, minipsd_bytes *data)
-{
-    minipsd_block block;
-    size_t        pos = 0, next;
-    for (; pos < extra.size && mpsd__block(extra, pos, psb, &block, &next) == MINIPSD_OK; pos = next)
-        if (mpsd__tag((const uint8_t *)block.key, "luni")) { *data = block.data; return 1; }
-    return 0;
-}
-
 /* Do the names kept from a file (a 'luni' in extra, else name_pascal read as Latin-1) say the
    layer's name, as minipsd_read made it?  Then they are written as they are. */
 static int mpsd__kept_names(const minipsd_layer *l, unsigned psb)
@@ -261,25 +265,20 @@ static int mpsd__kept_names(const minipsd_layer *l, unsigned psb)
 }
 
 /* Blocks kept from a file, laid out as the from format lays them out, written in the out format,
-   but where the layer's own fields win: the first 'luni' becomes the writer's own blocks (itself
-   when it says the layer's name, and the group marker unless kept), a later one goes, and so does
-   an 'lsct' of another kind than the layer's.  minipsd_doc_check has walked them, and checked
-   they can change format. */
-static void mpsd__kept_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned from, unsigned out, int named)
+   after the writer's own, but where the layer's own fields win: 'luni' (mpsd__own_blocks wrote the
+   name) and an 'lsct' of another kind than the layer's go.  minipsd_doc_check has walked them, and
+   checked they can change format. */
+static void mpsd__kept_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned from, unsigned out)
 {
     const minipsd_bytes extra = l->extra;
     minipsd_block block;
     size_t        pos = 0, next;
-    int           first = 1;
     while (pos < extra.size && mpsd__block(extra, pos, from, &block, &next) == MINIPSD_OK) {
         const int type = mpsd__lsct_type(&block);
-        const int luni = mpsd__tag((const uint8_t *)block.key, "luni");
-        if ((luni && first && named) || (!luni && (type < 0 || type == (int)l->kind))) {
+        if (!mpsd__tag((const uint8_t *)block.key, "luni") && (type < 0 || type == (int)l->kind)) {
             if (from == out) mpsd__put(s, extra.data + pos, next - pos);
             else mpsd__put_block(s, extra.data + pos, (size_t)(block.data.data - (extra.data + pos)), block.data.size, block.data.size, out);
         }
-        if (luni && first) mpsd__own_blocks(s, l, from, named);   /* after the kept name, or in its place */
-        first = first && !luni;
         pos = next;
     }
 }
@@ -311,15 +310,13 @@ static void mpsd__blending_ranges(mpsd__sink *s, const minipsd_layer *l)
 }
 
 /* The extra-data block of a layer record: the mask, the blending ranges, the legacy name, then
-   the blocks: the kept ones in their order (laid out as the from format lays them out, written in
-   the out format), the writer's own ('luni', the group marker) where the kept 'luni' was, or
-   first. */
+   the blocks: the writer's own ('luni', the group marker), then the kept ones in their order (laid
+   out as the from format lays them out, written in the out format). */
 static void mpsd__layer_extra(mpsd__sink *s, const minipsd_layer *l, unsigned from, unsigned out)
 {
     const char          *name = l->name;
     const unsigned char *p = (const unsigned char *)(name ? name : "");
     const int            named = mpsd__kept_names(l, from);
-    minipsd_bytes        luni;
     size_t ascii = 0;
     uint8_t pascal[256];
     if (named) {                              /* the kept legacy name, as it is */
@@ -336,8 +333,8 @@ static void mpsd__layer_extra(mpsd__sink *s, const minipsd_layer *l, unsigned fr
     mpsd__blending_ranges(s, l);
     mpsd__put(s, pascal, ascii + 1);
     mpsd__zeros(s, mpsd__pad(ascii + 1, 4) - (ascii + 1));
-    if (!mpsd__kept_luni(l->extra, from, &luni)) mpsd__own_blocks(s, l, from, named);   /* first, or where the kept one was */
-    mpsd__kept_blocks(s, l, from, out, named);
+    mpsd__own_blocks(s, l, from, named);
+    mpsd__kept_blocks(s, l, from, out);
 }
 
 
@@ -424,7 +421,7 @@ static const uint8_t *mpsd__kept_resolution(const minipsd_doc *d)
     return NULL;
 }
 
-/* The first kept resource with this id; NULL when there is none. */
+/* The first kept resource with this id; NULL when there is none: its name goes on the writer's own. */
 static const minipsd_resource *mpsd__find_resource(const minipsd_doc *d, unsigned id)
 {
     size_t i;
@@ -459,22 +456,18 @@ static void mpsd__resolution(mpsd__sink *s, const minipsd_doc *d, minipsd_bytes 
     mpsd__put_resource(s, MPSD__RES_RESOLUTION, name, kept ? kept : own, MPSD__RESOLUTION_SIZE);
 }
 
-/* The image resources: the writer's own (the resolution, the ICC profile if any) where the first
-   kept one of the same id was, so a file's order comes back, or first when there is none; then
-   the kept ones.  A later kept resolution or profile goes: the document's field says it. */
+/* The image resources: the writer's own first (the resolution, the ICC profile if any), then the
+   kept ones.  A kept resolution or profile goes: the document's field says it. */
 static void mpsd__resources(mpsd__sink *s, const minipsd_doc *d)
 {
     const minipsd_resource *res = mpsd__find_resource(d, MPSD__RES_RESOLUTION), *icc = mpsd__find_resource(d, MPSD__RES_ICC);
     const minipsd_bytes     none = { NULL, 0 };
     size_t                  i;
-    if (!res) mpsd__resolution(s, d, none);
-    if (!icc && d->icc) mpsd__put_resource(s, MPSD__RES_ICC, none, d->icc, d->icc_size);
-    for (i = 0; i < d->resource_count; ++i) {
-        const minipsd_resource *r = &d->resources[i];
-        if (r == res)                mpsd__resolution(s, d, r->name);
-        else if (r == icc && d->icc) mpsd__put_resource(s, MPSD__RES_ICC, r->name, d->icc, d->icc_size);
-        else if (mpsd__kept_resource(r)) mpsd__put_resource(s, r->id, r->name, r->data.data, r->data.size);
-    }
+    mpsd__resolution(s, d, res ? res->name : none);
+    if (d->icc) mpsd__put_resource(s, MPSD__RES_ICC, icc ? icc->name : none, d->icc, d->icc_size);
+    for (i = 0; i < d->resource_count; ++i)
+        if (mpsd__kept_resource(&d->resources[i]))
+            mpsd__put_resource(s, d->resources[i].id, d->resources[i].name, d->resources[i].data.data, d->resources[i].data.size);
 }
 
 static uint64_t mpsd__resources_size(const minipsd_doc *d)
