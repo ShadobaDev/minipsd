@@ -96,9 +96,11 @@ else()
     set(_minipsd_test_only_warnings -Wno-unused-function)
 endif()
 
+find_package(Threads REQUIRED)   # the reader's decode calls, at once from several threads
+
 function(minipsd_add_test_executable target)
     add_executable(${target} ${ARGN})
-    target_link_libraries(${target} PRIVATE GTest::gtest GTest::gtest_main)
+    target_link_libraries(${target} PRIVATE GTest::gtest GTest::gtest_main Threads::Threads)
     target_compile_options(${target} PRIVATE ${MINIPSD_WARNINGS} ${_minipsd_test_only_warnings})
     # PSD files from other programs: tests/data is committed, tests/fixtures is local and ignored
     # (empty when MINIPSD_TEST_FIXTURES is off), psd-tools' files are fetched (empty when
@@ -207,7 +209,7 @@ if(Python3_FOUND)
                     RESULT_VARIABLE _psd_tools_rc OUTPUT_QUIET ERROR_QUIET)
 endif()
 if(CMAKE_C_FLAGS MATCHES "-fsanitize=")
-    # A sanitized library does not load into an uninstrumented Python (linux-asan).
+    # A sanitized library does not load into an uninstrumented Python (linux-asan, linux-tsan).
     message(STATUS "Sanitizer build: skipping the psd-tools round trip")
 elseif(_psd_tools_rc EQUAL 0)
     add_library(minipsd-shared SHARED psd_tools/minipsd_shared.c)

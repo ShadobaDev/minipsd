@@ -956,6 +956,11 @@ MINIPSDDEF void minipsd_target_interleaved(minipsd_target *t, void *pixels, size
  * inflate, it holds what was decoded so far.
  * An empty layer, or a band of no rows, writes nothing.
  *
+ * Threads: the decode calls only read the reader, so any number of them may run at once on one
+ * reader, beside the one thread that walks it.  Each needs its own target and scratch, and an
+ * inflate that is safe to call at once (zlib's is).  The exception is MINIPSD_ERR_SHORT, which
+ * records what is needed, so run them at once only when the buffer holds the whole file.
+ *
  * \param r      The reader the layer came from.
  * \param layer  A record from minipsd_reader_next_layer of that reader.
  * \param target Where the samples go; only its non-NULL planes are written.
@@ -987,7 +992,7 @@ MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view 
  * Un-matting reads each pixel's alpha back from the target, so it then needs an A plane.  Other
  * modes decode as stored: no file shows how they are matted.  A file whose composite has no
  * transparency (info.composite_has_alpha is 0) decodes as opaque.  As in minipsd_decode_layer,
- * every check comes before the first sample is written.
+ * every check comes before the first sample is written, and calls may run at once.
  *
  * \param r      A reader from minipsd_reader_init.
  * \param target Where the samples go; only its non-NULL planes are written.
@@ -1012,8 +1017,8 @@ MINIPSDDEF int minipsd_decode_composite(minipsd_reader *r, const minipsd_target 
  * The mask is decoded as stored: its rectangle's width by the rows asked for, one sample per pixel
  * at the file's depth (opts->depth), full where the layer shows; its colour outside the rectangle
  * and its flags are in the view.  As in
- * minipsd_decode_layer, every check comes before the first sample is written, and opts.keep_matte
- * does not apply.
+ * minipsd_decode_layer, every check comes before the first sample is written, calls may run at
+ * once, and opts.keep_matte does not apply.
  *
  * \param r     The reader the layer came from.
  * \param layer A record from minipsd_reader_next_layer of that reader, with has_mask set.

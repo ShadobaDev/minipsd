@@ -428,6 +428,38 @@ feature; a supplied composite needs nothing. See
       *Done when:* every file of psd-tools' set decodes the same through a window fed in chunks
       of 4 KiB as from the whole blob, and no call holds more than its records, one resource
       and one layer's compressed data (counted in a test).
+- [ ] **S6.16** Names, before 0.3.0 (S4.10) freezes them: fields take Adobe's descriptive names in
+      snake_case, the four-character key in their comment; where Adobe gives none or an
+      ambiguous one, psd-tools'. `kind` and `MINIPSD_KIND_*` (psd-tools' name for `lsct`'s
+      "type") become `section_type` and `MINIPSD_SECTION_*`, or stay, decided here.
+      *Done when:* the rule is in the spec, and every public field follows it or says why not.
+- [ ] **S6.17** Typed views of kept data: what the file's own bytes say, parsed into plain values;
+      what needs another tool stays out. No allocation, no tree built: a view in, a small
+      struct or one scalar out, as `minipsd_layer_blending_range` does. ImageMagick parses
+      only the resolution, the "has merged image" flag and four profiles; psd-tools nearly
+      everything. In order:
+      - **Resources by name (P1).** Constants for the ids of standard data (EXIF 1058, XMP 1060,
+        IPTC 1028, thumbnail 1036, version info 1057, alpha names 1006 and 1045, alpha ids
+        1053, transparency index 1047, guides 1032) and `minipsd_reader_find_resource`. EXIF,
+        XMP and IPTC stay bytes: other formats, parsed by libexif and expat.
+      - **What libvips needs (P1).** Version info's "has real merged data" (whether the
+        composite can be trusted; ImageMagick flattens the layers without it); the resolution
+        whole, horizontal and vertical with their units.
+      - **Fixed-layout layer blocks (P2):** `lyid` layer id, `lclr` colour label, `iOpa` fill
+        opacity, `lspf` protection, `knko` knockout, `clbl` and `infx` blend clipped and
+        interior elements.
+      - **Fixed-layout resources (P2):** guides, alpha channel names and ids, an indexed file's
+        transparency index.
+      - **Old fixed-layout adjustments (P3):** `levl`, `curv`, `brit`, `hue2` and the like.
+      - *design (P3).* One-level descriptor reader: one item a call (key, type, a scalar, or a
+        nested descriptor or list as a view, never descended into). Descriptor items carry no
+        length, so skipping a nested one walks its shape (depth-limited) without building it;
+        decide whether that is acceptable. It would give a text layer's text (`TySh`, key
+        `Txt `), a smart object's name, effects' flags.
+      - **Out:** EngineData (text styling, a nested text format), rendering effects,
+        adjustments, blend modes and vectors, parsing EXIF, XMP or IPTC, colour conversion.
+      *Done when:* each step's values match psd-tools' on its test files; the P1 ones are
+      what S7.3 sets as libvips metadata.
 
 ## 7. Interoperability
 
@@ -447,7 +479,8 @@ the loader and saver; how they reach libvips is not this roadmap's.
         format.
       - **Access.** Strips from several threads (S6.12, S6.14).
       - **Saving.** One image as a layer with its composite, or pages as layers.
-      - **What minipsd still needs.** Every colour mode and depth (S6.13); the row provider (S7.5).
+      - **What minipsd still needs.** Every colour mode and depth (S6.13); the row provider (S7.5);
+        the metadata ImageMagick gives (S6.17, P1).
       - **Building.** The build dependency: pkg-config, a meson wrap.
 - [ ] **S7.3** Loader: a PSD or PSB as a libvips image, the composite or a layer, decoded in
       strips; ZIP through zlib.
