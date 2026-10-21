@@ -72,7 +72,9 @@ The rules apply to `include/` only. Tests and examples may use anything.
   3. the library aligns inside it with pointer arithmetic, so any `void *` works.
 - **Borrowed, never owned.** Every pointer the caller gives must stay valid and unchanged for as
   long as the call or the object that holds it lives. The library never frees or copies it.
-- **Re-entrant.** No hidden state: two writers or readers in two threads never interact.
+- **Re-entrant.** No hidden state: two writers or readers in two threads never interact. The
+  decode calls only read the reader (but for `needed`, set on `MINIPSD_ERR_SHORT`), so they may
+  run at once on one reader; a field they write would break that (linux-tsan checks it).
 
 ## Files and modules
 

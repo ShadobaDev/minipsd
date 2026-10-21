@@ -648,7 +648,10 @@ with `minipsd_read_into`). Everything else is yours, and minipsd only borrows it
 There is nothing to release: the writer and the reader live inside their workspaces, so freeing
 or reusing the workspace ends them. Any memory will do (stack, static, heap, a pool), at any
 alignment. No state is global, so separate threads never interact; one workspace serves one
-writer or reader at a time. The full table, every view included, is in the spec's
+writer or reader at a time. The one exception is decoding: with the whole file in the buffer,
+the decode calls may run at once on one reader, each thread with its own target and scratch, as
+libvips decodes bands. Which call may run beside which, and what may be shared, is in the spec's
+[Threads](SPECIFICATION.md#threads). The full table, every view included, is in the spec's
 [Memory and ownership](SPECIFICATION.md#memory-and-ownership).
 
 ## Return codes

@@ -24,8 +24,10 @@
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <thread>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -1208,6 +1210,43 @@ TEST(MinipsdReaderTest, ABandOfRowsLandsInTheTargetsFirstRow)
     }
 }
 
+TEST(MinipsdReaderTest, BandsOfOneLayerDecodeFromSeveralThreadsAtOnce)
+{
+    // As libvips asks for a layer: bands of a few rows, taken by whichever thread is free, every
+    // thread on the same reader with its own scratch (linux-tsan runs this under ThreadSanitizer).
+    constexpr std::uint32_t w = 37, h = 64, rows = 4, threads = 4;
+    const Bytes               px = testImage(w, h);
+    const minipsd_layer       layer{"L", px.data(), 255, 0};
+    const minipsd_write_opts  zipped{0, zlib_stored_compress, nullptr};
+    for (int compression : {MINIPSD_RLE, MINIPSD_RAW, MINIPSD_ZIP_PREDICTED}) {
+        SCOPED_TRACE(compression);
+        minipsd_doc d = docOf(w, h, &layer, 1);
+        d.compression = compression;
+        Open o(write(d, MINIPSD_OK, &zipped));
+        const minipsd_layer_view v = nextLayer(o.r);
+
+        Bytes                    out(px.size(), 0xEE);
+        std::vector<int>         inflated(threads, 0);
+        std::vector<std::thread> pool;
+        for (std::uint32_t k = 0; k < threads; ++k)
+            pool.emplace_back([&, k] {
+                Bytes               scratch(px.size());   // every channel, each in its own part
+                minipsd_decode_opts opts{0, rows, 0, 8, countingInflate, &inflated[k], scratch.data(), scratch.size()};
+                for (std::uint32_t y = k * rows; y < h; y += threads * rows) {   // band k, k + threads, ...
+                    minipsd_target t;
+                    minipsd_target_rgba(&t, out.data() + std::size_t(y) * w * 4, std::size_t(w) * 4);
+                    opts.y_first      = y;
+                    opts.scratch_kept = y > k * rows;
+                    EXPECT_EQ(minipsd_decode_layer(o.r, &v, &t, &opts), MINIPSD_OK) << y;
+                }
+            });
+        for (std::thread &th : pool) th.join();
+        EXPECT_EQ(out, px);
+        EXPECT_EQ(inflated, std::vector<int>(threads, compression == MINIPSD_ZIP_PREDICTED ? 4 : 0))
+            << "one inflate a channel and thread, not one a band";
+    }
+}
+
 TEST(MinipsdReaderTest, TheTargetDescribesAnyLayout)
 {
     const std::uint32_t w = 6, h = 3;
@@ -1481,6 +1520,7 @@ TEST(MinipsdReaderTest, ZipChannelsDecodeThroughTheCallersInflate)
         }
         EXPECT_EQ(bands, z.rgba);
         EXPECT_EQ(calls, 4) << "one inflate a channel, not one a band";
+
         opts.scratch = scratch.data();
         opts.scratch_size = scratch.size();
         opts.scratch_kept = 0;

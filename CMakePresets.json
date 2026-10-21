@@ -64,6 +64,17 @@
       }
     },
     {
+      "name": "linux-tsan",
+      "displayName": "Linux · Clang + ThreadSanitizer",
+      "inherits": "linux-clang",
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=thread"
+      }
+    },
+    {
       "name": "linux-fuzz",
       "displayName": "Linux · Clang + libFuzzer, AddressSanitizer/UBSan (local only)",
       "inherits": "linux-clang",
@@ -86,8 +97,8 @@
       "displayName": "Linux · GCC + coverage (gcovr)",
       "inherits": "linux-gcc",
       "cacheVariables": {
-        "CMAKE_C_FLAGS": "--coverage",
-        "CMAKE_CXX_FLAGS": "--coverage",
+        "CMAKE_C_FLAGS": "--coverage -fprofile-update=atomic",
+        "CMAKE_CXX_FLAGS": "--coverage -fprofile-update=atomic",
         "CMAKE_EXE_LINKER_FLAGS": "--coverage",
         "CMAKE_SHARED_LINKER_FLAGS": "--coverage",
         "MINIPSD_TEST_FIXTURES": "OFF"
@@ -102,6 +113,7 @@
     { "name": "linux-clang", "configurePreset": "linux-clang" },
     { "name": "linux-asan",     "configurePreset": "linux-asan" },
     { "name": "linux-tidy",     "configurePreset": "linux-tidy" },
+    { "name": "linux-tsan",     "configurePreset": "linux-tsan" },
     { "name": "linux-fuzz",     "configurePreset": "linux-fuzz" },
     { "name": "linux-coverage", "configurePreset": "linux-coverage" }
   ],
@@ -118,6 +130,7 @@
     { "name": "linux-clang", "inherits": "base", "configurePreset": "linux-clang" },
     { "name": "linux-asan",     "inherits": "base", "configurePreset": "linux-asan" },
     { "name": "linux-tidy",     "inherits": "base", "configurePreset": "linux-tidy" },
+    { "name": "linux-tsan",     "inherits": "base", "configurePreset": "linux-tsan" },
     { "name": "linux-fuzz",     "inherits": "base", "configurePreset": "linux-fuzz" },
     { "name": "linux-coverage", "inherits": "base", "configurePreset": "linux-coverage" }
   ]

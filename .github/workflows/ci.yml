@@ -81,6 +81,7 @@ jobs:
   # The same tests, instrumented, on Linux:
   #   linux-asan      AddressSanitizer + UBSan: out-of-bounds access, overflow, undefined shifts.
   #                   No round trip: Python would need the sanitizer runtime preloaded.
+  #   linux-tsan      ThreadSanitizer: decode calls run at once on one reader.
   #   linux-tidy      clang-tidy with .clang-tidy, findings are errors.
   #   linux-coverage  coverage of minipsd.h, round trip included: lines 100 %, branches >= 95 %.
   analysis:
@@ -89,13 +90,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        preset: [ linux-asan, linux-tidy, linux-coverage ]
+        preset: [ linux-asan, linux-tsan, linux-tidy, linux-coverage ]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - run: sudo apt-get update && sudo apt-get install -y ninja-build pkg-config
 
-      - if: matrix.preset != 'linux-asan'
+      - if: matrix.preset != 'linux-asan' && matrix.preset != 'linux-tsan'
         uses: actions/setup-python@v7
         with:
           python-version: "3.13"
@@ -103,6 +104,9 @@ jobs:
         run: python -m pip install -r tests/requirements-qa.txt
       - if: matrix.preset == 'linux-coverage'
         run: python -m pip install -r tests/requirements-qa.txt -r tests/requirements.txt
+      # ThreadSanitizer cannot map its shadow memory under the runner's wider ASLR.
+      - if: matrix.preset == 'linux-tsan'
+        run: sudo sysctl vm.mmap_rnd_bits=28
 
       - name: Configure, build, test
         run: |
