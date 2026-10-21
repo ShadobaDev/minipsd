@@ -23,13 +23,12 @@ fetch them from a pinned psd-tools release, verified by its SHA-256.
 
 ## How to read the results
 
-- **decoded:** 8- or 16-bit RGB. The header, resources and every layer record are read, and
-  every layer's pixels and the composite are decoded. This is the subset minipsd supports today.
-- **described:** another colour mode or depth, or ZIP-compressed layers (Photoshop's 16-bit
-  ones). Everything but those pixels is read: size, colour mode, depth, dpi, ICC profile,
-  resources, and every layer with its name, rectangle, opacity, visibility, blend mode and blocks.
-  Decoding the pixels returns `MINIPSD_ERR_UNSUPPORTED`. ZIP channels decode through the caller's
-  inflate (`minipsd_decode_opts.inflate`), which `read_file` does not give, since minipsd
+- **decoded:** any colour mode and depth. The header, resources and every layer record are
+  read, and every layer's pixels and the composite are decoded, as stored: no colour is converted.
+- **described:** ZIP-compressed layers (Photoshop's 16- and 32-bit ones). Everything but those
+  pixels is read: size, colour mode, depth, dpi, ICC profile, resources, and every layer with its
+  name, rectangle, opacity, visibility, blend mode and blocks. ZIP channels decode through the
+  caller's inflate (`minipsd_decode_opts.inflate`), which `read_file` does not give, since minipsd
   implements no deflate; they are also copied when the file is read as a document with `stored`
   and written back. This is a choice of scope ([ROADMAP.md](ROADMAP.md), stage 6), not a failure.
 - **refused:** the reader does not open the file, with the reason.
@@ -54,8 +53,8 @@ python tools/compat_report.py build/msvc/examples/Debug/read_file.exe build/msvc
 
 | Result | Files | Meaning |
 |---|---|---|
-| decoded | 248 | every layer and the composite decoded to pixels |
-| described | 66 | header, resources and layers read; pixels not decoded: outside 8- and 16-bit RGB, or ZIP without an inflate |
+| decoded | 294 | every layer and the composite decoded to pixels |
+| described | 20 | header, resources and layers read; ZIP-compressed pixels not decoded without an inflate |
 | refused | 0 | the reader does not open the file (see below) |
 | failed | 1 | malformed, or a reader bug (see below) |
 
@@ -64,19 +63,19 @@ python tools/compat_report.py build/msvc/examples/Debug/read_file.exe build/msvc
 | Colour mode, depth | Files | Pixels |
 |---|---|---|
 | 8-bit RGB | 248 | decoded |
-| 32-bit RGB | 16 | not yet: described only |
-| 8-bit grey | 16 | not yet: described only |
-| 8-bit CMYK | 13 | not yet: described only |
+| 32-bit RGB | 16 | decoded, ZIP-compressed layers through an inflate in 13 |
+| 8-bit grey | 16 | decoded |
+| 8-bit CMYK | 13 | decoded |
 | 16-bit RGB | 5 | decoded, ZIP-compressed layers through an inflate in 4 |
-| 8-bit Lab | 4 | not yet: described only |
-| 1-bit bitmap | 3 | not yet: described only |
-| 16-bit grey | 3 | not yet: described only |
-| 16-bit CMYK | 2 | not yet: described only |
-| 16-bit Lab | 1 | not yet: described only |
-| 16-bit multichannel | 1 | not yet: described only |
-| 32-bit grey | 1 | not yet: described only |
-| 8-bit duotone | 1 | not yet: described only |
-| 8-bit indexed | 1 | not yet: described only |
+| 8-bit Lab | 4 | decoded |
+| 1-bit bitmap | 3 | decoded |
+| 16-bit grey | 3 | decoded, ZIP-compressed layers through an inflate in 2 |
+| 16-bit CMYK | 2 | decoded, ZIP-compressed layers through an inflate in 1 |
+| 16-bit Lab | 1 | decoded |
+| 16-bit multichannel | 1 | decoded |
+| 32-bit grey | 1 | decoded |
+| 8-bit duotone | 1 | decoded |
+| 8-bit indexed | 1 | decoded |
 
 ### Failed
 
@@ -93,7 +92,7 @@ minipsd decodes each layer's pixels as stored and hands these features over as r
 | Blend modes other than normal | 272 | 47 |
 | Layer groups | 327 | 94 |
 | Layer masks | 488 | 147 |
-| Other channels, not read (alpha, spot, CMYK's black) | 316 | 12 |
+| Other channels, not read (alpha, spot) | 0 | 0 |
 | Adjustment layers | 183 | 68 |
 | Fill layers (solid, gradient, pattern) | 571 | 144 |
 | Text layers | 43 | 17 |
@@ -119,12 +118,12 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 | `2layer_8ele_tblocks.psd` | decoded |  |
 | `2layers.psb` | decoded |  |
 | `2layers.psd` | decoded |  |
-| `300dpi.psb` | described | 32-bit RGB: pixels not decoded yet |
-| `300dpi.psd` | described | 32-bit RGB: pixels not decoded yet |
-| `32bit.psb` | described | 32-bit RGB: pixels not decoded yet |
-| `32bit.psd` | described | 32-bit RGB: pixels not decoded yet |
-| `32bit5x5.psb` | described | 32-bit RGB: pixels not decoded yet |
-| `32bit5x5.psd` | described | 32-bit RGB: pixels not decoded yet |
+| `300dpi.psb` | described | 32-bit RGB: ZIP-compressed layers, decoded through an inflate |
+| `300dpi.psd` | described | 32-bit RGB: ZIP-compressed layers, decoded through an inflate |
+| `32bit.psb` | described | 32-bit RGB: ZIP-compressed layers, decoded through an inflate |
+| `32bit.psd` | described | 32-bit RGB: ZIP-compressed layers, decoded through an inflate |
+| `32bit5x5.psb` | described | 32-bit RGB: ZIP-compressed layers, decoded through an inflate |
+| `32bit5x5.psd` | described | 32-bit RGB: ZIP-compressed layers, decoded through an inflate |
 | `adjustment-fillers.psd` | decoded |  |
 | `adjustment-mask.psd` | decoded |  |
 | `adjustments/adjustment_backdrop_test.psd` | decoded |  |
@@ -134,44 +133,44 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 | `adjustments/adjustment_nested_composition_3.psd` | decoded |  |
 | `adjustments/adjustment_nested_composition_4.psd` | decoded |  |
 | `adjustments/adjustment_nested_composition_5.psd` | decoded |  |
-| `adjustments/brightnesscontrast_cmyk.psd` | described | 8-bit CMYK: pixels not decoded yet |
-| `adjustments/brightnesscontrast_grayscale.psd` | described | 8-bit grey: pixels not decoded yet |
-| `adjustments/brightnesscontrast_legacy_cmyk.psd` | described | 8-bit CMYK: pixels not decoded yet |
-| `adjustments/brightnesscontrast_legacy_grayscale.psd` | described | 8-bit grey: pixels not decoded yet |
+| `adjustments/brightnesscontrast_cmyk.psd` | decoded |  |
+| `adjustments/brightnesscontrast_grayscale.psd` | decoded |  |
+| `adjustments/brightnesscontrast_legacy_cmyk.psd` | decoded |  |
+| `adjustments/brightnesscontrast_legacy_grayscale.psd` | decoded |  |
 | `adjustments/brightnesscontrast_legacy_rgb.psd` | decoded |  |
 | `adjustments/brightnesscontrast_rgb.psd` | decoded |  |
-| `adjustments/curves_cmyk.psd` | described | 8-bit CMYK: pixels not decoded yet |
-| `adjustments/curves_grayscale.psd` | described | 8-bit grey: pixels not decoded yet |
+| `adjustments/curves_cmyk.psd` | decoded |  |
+| `adjustments/curves_grayscale.psd` | decoded |  |
 | `adjustments/curves_rgb.psd` | decoded |  |
-| `adjustments/exposure_grayscale.psd` | described | 8-bit grey: pixels not decoded yet |
+| `adjustments/exposure_grayscale.psd` | decoded |  |
 | `adjustments/exposure_rgb.psd` | decoded |  |
 | `adjustments/huesaturation_colorize_rgb.psd` | decoded |  |
 | `adjustments/huesaturation_lightness_rgb.psd` | decoded |  |
 | `adjustments/huesaturation_rgb.psd` | decoded |  |
 | `adjustments/huesaturation_saturation_rgb.psd` | decoded |  |
-| `adjustments/invert_cmyk.psd` | described | 8-bit CMYK: pixels not decoded yet |
-| `adjustments/invert_grayscale.psd` | described | 8-bit grey: pixels not decoded yet |
+| `adjustments/invert_cmyk.psd` | decoded |  |
+| `adjustments/invert_grayscale.psd` | decoded |  |
 | `adjustments/invert_rgb.psd` | decoded |  |
-| `adjustments/levels_cmyk.psd` | described | 8-bit CMYK: pixels not decoded yet |
-| `adjustments/levels_grayscale.psd` | described | 8-bit grey: pixels not decoded yet |
+| `adjustments/levels_cmyk.psd` | decoded |  |
+| `adjustments/levels_grayscale.psd` | decoded |  |
 | `adjustments/levels_rgb.psd` | decoded |  |
-| `adjustments/posterize_16bits_cmyk.psd` | described | 16-bit CMYK: pixels not decoded yet |
-| `adjustments/posterize_16bits_grayscale.psd` | described | 16-bit grey: pixels not decoded yet |
+| `adjustments/posterize_16bits_cmyk.psd` | described | 16-bit CMYK: ZIP-compressed layers, decoded through an inflate |
+| `adjustments/posterize_16bits_grayscale.psd` | described | 16-bit grey: ZIP-compressed layers, decoded through an inflate |
 | `adjustments/posterize_16bits_rgb.psd` | described | 16-bit RGB: ZIP-compressed layers, decoded through an inflate |
-| `adjustments/posterize_cmyk.psd` | described | 8-bit CMYK: pixels not decoded yet |
-| `adjustments/posterize_grayscale.psd` | described | 8-bit grey: pixels not decoded yet |
+| `adjustments/posterize_cmyk.psd` | decoded |  |
+| `adjustments/posterize_grayscale.psd` | decoded |  |
 | `adjustments/posterize_rgb.psd` | decoded |  |
-| `adjustments/threshold_16bits_grayscale.psd` | described | 16-bit grey: pixels not decoded yet |
+| `adjustments/threshold_16bits_grayscale.psd` | described | 16-bit grey: ZIP-compressed layers, decoded through an inflate |
 | `adjustments/threshold_16bits_rgb.psd` | described | 16-bit RGB: ZIP-compressed layers, decoded through an inflate |
-| `adjustments/threshold_cmyk.psd` | described | 8-bit CMYK: pixels not decoded yet |
-| `adjustments/threshold_grayscale.psd` | described | 8-bit grey: pixels not decoded yet |
+| `adjustments/threshold_cmyk.psd` | decoded |  |
+| `adjustments/threshold_grayscale.psd` | decoded |  |
 | `adjustments/threshold_rgb.psd` | decoded |  |
 | `advanced-blending.psd` | decoded |  |
 | `artboard-bgcolor.psd` | decoded |  |
 | `artboard.psd` | decoded |  |
 | `background-red-opacity-80.psd` | decoded |  |
 | `blend-and-clipping.psd` | decoded |  |
-| `blend-modes/cmyk-blend-modes.psd` | described | 8-bit CMYK: pixels not decoded yet |
+| `blend-modes/cmyk-blend-modes.psd` | decoded |  |
 | `blend-modes/color-burn.psd` | decoded |  |
 | `blend-modes/color-dodge.psd` | decoded |  |
 | `blend-modes/color.psd` | decoded |  |
@@ -181,7 +180,7 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 | `blend-modes/dissolve.psd` | decoded |  |
 | `blend-modes/divide.psd` | decoded |  |
 | `blend-modes/exclusion.psd` | decoded |  |
-| `blend-modes/gray-blend-modes.psd` | described | 8-bit grey: pixels not decoded yet |
+| `blend-modes/gray-blend-modes.psd` | decoded |  |
 | `blend-modes/group-divider-blend-mode.psd` | failed | the buffer ends too soon: read more and call again |
 | `blend-modes/hard-light.psd` | decoded |  |
 | `blend-modes/hard-mix.psd` | decoded |  |
@@ -212,32 +211,32 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 | `clipping-mask3.psd` | decoded |  |
 | `clipping-mask4.psd` | decoded |  |
 | `clipping-mask5.psd` | decoded |  |
-| `cmyk-alpha-spot.psd` | described | 8-bit CMYK: pixels not decoded yet |
-| `cmyk-gray-ramp.psd` | described | 8-bit CMYK: pixels not decoded yet |
-| `cmyk-spot.psd` | described | 8-bit CMYK: pixels not decoded yet |
-| `colormodes/100x20_1bit_bitmap_rle.psd` | described | 1-bit bitmap: pixels not decoded yet |
-| `colormodes/20x5_1bit_bitmap.psd` | described | 1-bit bitmap: pixels not decoded yet |
-| `colormodes/4x4_16bit_cmyk.psd` | described | 16-bit CMYK: pixels not decoded yet |
-| `colormodes/4x4_16bit_grayscale.psd` | described | 16-bit grey: pixels not decoded yet |
-| `colormodes/4x4_16bit_lab.psd` | described | 16-bit Lab: pixels not decoded yet |
-| `colormodes/4x4_16bit_multichannel.psd` | described | 16-bit multichannel: pixels not decoded yet |
+| `cmyk-alpha-spot.psd` | decoded |  |
+| `cmyk-gray-ramp.psd` | decoded |  |
+| `cmyk-spot.psd` | decoded |  |
+| `colormodes/100x20_1bit_bitmap_rle.psd` | decoded |  |
+| `colormodes/20x5_1bit_bitmap.psd` | decoded |  |
+| `colormodes/4x4_16bit_cmyk.psd` | decoded |  |
+| `colormodes/4x4_16bit_grayscale.psd` | decoded |  |
+| `colormodes/4x4_16bit_lab.psd` | decoded |  |
+| `colormodes/4x4_16bit_multichannel.psd` | decoded |  |
 | `colormodes/4x4_16bit_rgb.psd` | decoded |  |
-| `colormodes/4x4_1bit_bitmap.psd` | described | 1-bit bitmap: pixels not decoded yet |
-| `colormodes/4x4_32bit_grayscale.psd` | described | 32-bit grey: pixels not decoded yet |
-| `colormodes/4x4_32bit_rgb.psd` | described | 32-bit RGB: pixels not decoded yet |
-| `colormodes/4x4_8bit_cmyk.psd` | described | 8-bit CMYK: pixels not decoded yet |
-| `colormodes/4x4_8bit_duotone.psd` | described | 8-bit duotone: pixels not decoded yet |
-| `colormodes/4x4_8bit_grayscale.psd` | described | 8-bit grey: pixels not decoded yet |
-| `colormodes/4x4_8bit_index_color.psd` | described | 8-bit indexed: pixels not decoded yet |
-| `colormodes/4x4_8bit_lab.psd` | described | 8-bit Lab: pixels not decoded yet |
+| `colormodes/4x4_1bit_bitmap.psd` | decoded |  |
+| `colormodes/4x4_32bit_grayscale.psd` | decoded |  |
+| `colormodes/4x4_32bit_rgb.psd` | decoded |  |
+| `colormodes/4x4_8bit_cmyk.psd` | decoded |  |
+| `colormodes/4x4_8bit_duotone.psd` | decoded |  |
+| `colormodes/4x4_8bit_grayscale.psd` | decoded |  |
+| `colormodes/4x4_8bit_index_color.psd` | decoded |  |
+| `colormodes/4x4_8bit_lab.psd` | decoded |  |
 | `colormodes/4x4_8bit_rgb.psd` | decoded |  |
 | `colormodes/4x4_8bit_rgba.psd` | decoded |  |
 | `colorprofiles/north_america_newspaper.psd` | decoded |  |
 | `descriptors/hsb-color-swatches.psd` | decoded |  |
-| `descriptors/lab-color-swatches.psd` | described | 8-bit Lab: pixels not decoded yet |
-| `descriptors/stroke-color-descriptors-gray.psd` | described | 8-bit grey: pixels not decoded yet |
+| `descriptors/lab-color-swatches.psd` | decoded |  |
+| `descriptors/stroke-color-descriptors-gray.psd` | decoded |  |
 | `descriptors/stroke-color-descriptors-hsb-with-rgb-mode.psd` | decoded |  |
-| `descriptors/stroke-color-descriptors-lab.psd` | described | 8-bit Lab: pixels not decoded yet |
+| `descriptors/stroke-color-descriptors-lab.psd` | decoded |  |
 | `descriptors/stroke-color-descriptors-rgb.psd` | decoded |  |
 | `effect-stroke-gradient.psd` | decoded |  |
 | `effects/antialiased-stroke-edge.psd` | decoded |  |
@@ -267,18 +266,18 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 | `empty-layer.psb` | decoded |  |
 | `empty-layer.psd` | decoded |  |
 | `fill_adjustments.psd` | decoded |  |
-| `gradient-fill.psb` | described | 32-bit RGB: pixels not decoded yet |
-| `gradient-fill.psd` | described | 32-bit RGB: pixels not decoded yet |
+| `gradient-fill.psb` | described | 32-bit RGB: ZIP-compressed layers, decoded through an inflate |
+| `gradient-fill.psd` | described | 32-bit RGB: ZIP-compressed layers, decoded through an inflate |
 | `gradient-sizes.psd` | decoded |  |
 | `gradient-styles.psd` | decoded |  |
-| `gradients/noise-gradient-cmyk.psd` | described | 8-bit CMYK: pixels not decoded yet |
-| `gradients/noise-gradient-grayscale.psd` | described | 8-bit grey: pixels not decoded yet |
-| `gradients/noise-gradient-lab.psd` | described | 8-bit Lab: pixels not decoded yet |
+| `gradients/noise-gradient-cmyk.psd` | decoded |  |
+| `gradients/noise-gradient-grayscale.psd` | decoded |  |
+| `gradients/noise-gradient-lab.psd` | decoded |  |
 | `gradients/noise-gradient-rgb.psd` | decoded |  |
-| `gray0.psb` | described | 8-bit grey: pixels not decoded yet |
-| `gray0.psd` | described | 8-bit grey: pixels not decoded yet |
-| `gray1.psb` | described | 8-bit grey: pixels not decoded yet |
-| `gray1.psd` | described | 8-bit grey: pixels not decoded yet |
+| `gray0.psb` | decoded |  |
+| `gray0.psd` | decoded |  |
+| `gray1.psb` | decoded |  |
+| `gray1.psd` | decoded |  |
 | `group-clipping/group-clipping.psd` | decoded |  |
 | `group.psb` | decoded |  |
 | `group.psd` | decoded |  |
@@ -377,8 +376,8 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 | `path-operations/subtract-group.psd` | decoded |  |
 | `path-operations/subtract-second.psd` | decoded |  |
 | `patterns.psd` | decoded |  |
-| `pen-text.psb` | described | 32-bit RGB: pixels not decoded yet |
-| `pen-text.psd` | described | 32-bit RGB: pixels not decoded yet |
+| `pen-text.psb` | described | 32-bit RGB: ZIP-compressed layers, decoded through an inflate |
+| `pen-text.psd` | described | 32-bit RGB: ZIP-compressed layers, decoded through an inflate |
 | `placedLayer.psb` | decoded |  |
 | `placedLayer.psd` | decoded |  |
 | `semi-transparent-layers.psb` | decoded |  |
@@ -413,13 +412,13 @@ Blend modes seen: multiply (`mul `) 27, darken (`dark`) 24, linear dodge (`lddg`
 | `transparency/transparency-group.psd` | decoded |  |
 | `transparentbg-gimp.psb` | decoded |  |
 | `transparentbg-gimp.psd` | decoded |  |
-| `transparentbg.psb` | described | 32-bit RGB: pixels not decoded yet |
-| `transparentbg.psd` | described | 32-bit RGB: pixels not decoded yet |
+| `transparentbg.psb` | decoded |  |
+| `transparentbg.psd` | decoded |  |
 | `unicode_pathname.psb` | decoded |  |
 | `unicode_pathname.psd` | decoded |  |
-| `vector-mask-disabled.psd` | described | 32-bit RGB: pixels not decoded yet |
-| `vector-mask.psb` | described | 32-bit RGB: pixels not decoded yet |
-| `vector-mask.psd` | described | 32-bit RGB: pixels not decoded yet |
+| `vector-mask-disabled.psd` | described | 32-bit RGB: ZIP-compressed layers, decoded through an inflate |
+| `vector-mask.psb` | described | 32-bit RGB: ZIP-compressed layers, decoded through an inflate |
+| `vector-mask.psd` | described | 32-bit RGB: ZIP-compressed layers, decoded through an inflate |
 | `vector-mask2.psd` | decoded |  |
 | `vector-mask3.psd` | decoded |  |
 

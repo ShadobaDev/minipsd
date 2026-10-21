@@ -4,8 +4,8 @@
  *        what a document read from it (minipsd_read) could not carry.
  *
  * The file is read whole into memory, then walked in place: the reader allocates nothing, and its
- * workspace sits on the stack.  Pixels are decoded into one buffer per image, at the file's depth
- * (8 or 16 bits), to count how many are not fully transparent and where they lie.
+ * workspace sits on the stack.  Pixels are decoded into one buffer per image, in the file's mode
+ * and at its depth, to count how many are not fully transparent and where they lie.
  *
  * Usage: read_file path.  Exits with 1 when the file cannot be read or is refused.
  *
@@ -57,36 +57,43 @@ static uint8_t *read_all(const char *path, size_t *size)
     return data;
 }
 
-/* Decodes width x height pixels of depth bits through decode (a layer or the composite) and prints
-   what is visible: how many pixels are not fully transparent, and the box around them.  ZIP, which
-   needs an inflate this example does not give (minipsd_decode_opts.inflate), is no failure: the
-   pixels are only described. */
-static int show_pixels(minipsd_reader *r, const minipsd_layer_view *layer, uint32_t width, uint32_t height, int depth)
+/* Decodes width x height pixels through decode (a layer or the composite), the mode's colour
+   channels and transparency interleaved at the file's depth, and prints what is visible: how many
+   pixels are not fully transparent, and the box around them.  ZIP, which needs an inflate this
+   example does not give (minipsd_decode_opts.inflate), is no failure: the pixels are only
+   described. */
+static int show_pixels(minipsd_reader *r, const minipsd_layer_view *layer, uint32_t width, uint32_t height,
+                       const minipsd_info *info)
 {
+    const unsigned      planes = info->color_channels < MINIPSD_PLANES ? info->color_channels + 1u : MINIPSD_PLANES;
+    const unsigned      sample = info->depth == 32 ? 4u : info->depth == 16 ? 2u : 1u;
+    const unsigned      alpha  = info->color_channels;   /* transparency's plane, when there is room for it */
     minipsd_target      t;
     minipsd_decode_opts opts;
-    uint16_t           *rgba;                     /* 16-bit samples, or 8-bit ones in its first half */
+    uint8_t            *px;
     uint32_t            x, y, x0 = width, y0 = height, x1 = 0, y1 = 0;
     uint64_t            seen = 0;
     int                 rc;
     if (!width || !height) { printf("      empty\n"); return MINIPSD_OK; }
-    rgba = (uint16_t *)malloc((size_t)width * height * 4 * sizeof *rgba);
-    if (!rgba) { printf("      out of memory\n"); return MINIPSD_ERR_ALLOC; }
+    px = (uint8_t *)malloc((size_t)width * height * planes * sample);
+    if (!px) { printf("      out of memory\n"); return MINIPSD_ERR_ALLOC; }
     memset(&opts, 0, sizeof opts);
-    opts.depth = depth;
-    if (depth == 16) minipsd_target_rgba16(&t, rgba, (size_t)width * 8);
-    else             minipsd_target_rgba(&t, (uint8_t *)rgba, (size_t)width * 4);
+    opts.depth = info->depth;
+    minipsd_target_interleaved(&t, px, (size_t)width * planes * sample, planes, info->depth);
     rc = layer ? minipsd_decode_layer(r, layer, &t, &opts) : minipsd_decode_composite(r, &t, &opts);
     if (rc == MINIPSD_OK) {
         for (y = 0; y < height; ++y)
-            for (x = 0; x < width; ++x)
-                if (depth == 16 ? rgba[((size_t)y * width + x) * 4 + 3] : ((uint8_t *)rgba)[((size_t)y * width + x) * 4 + 3]) {
-                    ++seen;
-                    if (x < x0) x0 = x;
-                    if (y < y0) y0 = y;
-                    if (x >= x1) x1 = x + 1;
-                    if (y >= y1) y1 = y + 1;
-                }
+            for (x = 0; x < width; ++x) {
+                const uint8_t *a = px + (((size_t)y * width + x) * planes + alpha) * sample;
+                unsigned       k, shown = alpha >= planes;   /* no transparency plane: every pixel shows */
+                for (k = 0; k < sample && !shown; ++k) shown = a[k] != 0;
+                if (!shown) continue;
+                ++seen;
+                if (x < x0) x0 = x;
+                if (y < y0) y0 = y;
+                if (x >= x1) x1 = x + 1;
+                if (y >= y1) y1 = y + 1;
+            }
         if (seen) printf("      %llu visible pixels, within (%u, %u)-(%u, %u)\n", (unsigned long long)seen, x0, y0, x1, y1);
         else      printf("      fully transparent\n");
     } else if (rc == MINIPSD_ERR_UNSUPPORTED) {
@@ -95,7 +102,7 @@ static int show_pixels(minipsd_reader *r, const minipsd_layer_view *layer, uint3
     } else {
         printf("      not decoded: %s\n", minipsd_error_string(rc));
     }
-    free(rgba);
+    free(px);
     return rc;
 }
 
@@ -131,7 +138,7 @@ int main(int argc, char **argv)
     }
     printf("%u x %u, %u-bit %s, %u channels, %g dpi, ICC profile: %lu bytes\n", info.width, info.height,
            (unsigned)info.depth, mode_name(info.color_mode), (unsigned)info.channels, info.dpi, (unsigned long)info.icc.size);
-    rgb = (info.depth == 8 || info.depth == 16) && info.color_mode == 3;   /* what minipsd decodes */
+    rgb = (info.depth == 8 || info.depth == 16) && info.color_mode == 3;   /* what minipsd_read takes */
 
     printf("resources:");
     while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE) printf(" %u (%lu)", (unsigned)res.id, (unsigned long)res.data.size);
@@ -149,16 +156,13 @@ int main(int argc, char **argv)
         }
         printf("%s%s\n", layer.has_mask ? ", mask" : "", layer.other_channels ? ", and channels not read" : "");
         show_blend_if(&layer);
-        if (rgb && show_pixels(r, &layer, (uint32_t)(layer.right - layer.left), (uint32_t)(layer.bottom - layer.top), info.depth) != MINIPSD_OK)
+        if (show_pixels(r, &layer, (uint32_t)(layer.right - layer.left), (uint32_t)(layer.bottom - layer.top), &info) != MINIPSD_OK)
             failed = 1;
-        else if (!rgb)
-            printf("      not 8- or 16-bit RGB: described, not decoded\n");
     }
     if (rc != MINIPSD_OK) { printf("  layers: %s\n", minipsd_error_string(rc)); failed = 1; }
 
     printf("composite:\n");
-    if (!rgb) printf("      not 8- or 16-bit RGB: described, not decoded\n");
-    else if (show_pixels(r, NULL, info.width, info.height, info.depth) != MINIPSD_OK) failed = 1;
+    if (show_pixels(r, NULL, info.width, info.height, &info) != MINIPSD_OK) failed = 1;
 
     /* The same file as a document, which minipsd_write takes back: anything lost is worth an issue.
        ZIP channels are not decoded without an inflate; read as stored, they are copied. */

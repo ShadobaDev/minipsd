@@ -137,8 +137,9 @@ enum {
                                         code (examples/): a file not opened or closed.          */
     MINIPSD_ERR_FORMAT  = -6,       /*!< Reader: the bytes are not a well-formed PSD.           */
     MINIPSD_ERR_UNSUPPORTED = -7,   /*!< Valid, but outside what minipsd handles yet: reading,
-                                        pixels other than 8- or 16-bit RGB, or ZIP-compressed
-                                        without the caller's inflate;
+                                        samples of another depth than the file's, ZIP-compressed
+                                        without the caller's inflate, or a document of a mode
+                                        other than 8- or 16-bit RGB;
                                         writing in the other format, kept content that cannot
                                         change format yet.                                      */
     MINIPSD_ERR_SHORT   = -8,       /*!< Reader: the buffer ends inside data the call needs;
@@ -609,8 +610,8 @@ typedef struct minipsd_limits {
 /**
  * \brief What a file says about itself, read by minipsd_reader_init.
  *
- * Any PSD or PSB is described, whatever its colour mode or depth; it is the decoding that is
- * limited to 8- and 16-bit RGB.  Fields are only ever added at the end.
+ * Any PSD or PSB is described and decoded, whatever its colour mode or depth.  Fields are only
+ * ever added at the end.
  */
 typedef struct minipsd_info {
     uint32_t      width, height;       /*!< In pixels.                                                 */
@@ -631,9 +632,28 @@ typedef struct minipsd_info {
     uint16_t      format;              /*!< MINIPSD_PSD or MINIPSD_PSB: the layout of every view of the
                                             file's bytes (channels with their row counts, blocks, the
                                             layer tail).                                               */
+    uint16_t      color_channels;      /*!< The mode's colour channels, before transparency: 3 in RGB
+                                            and Lab, 4 in CMYK, 1 in grey, bitmap, indexed and duotone,
+                                            and in multichannel every channel but the composite's
+                                            transparency.  Transparency has the plane after them in a
+                                            target and in a layer view.                               */
+    minipsd_bytes color_data;          /*!< The colour mode data, as stored: an indexed file's palette
+                                            (256 reds, 256 greens, 256 blues), a duotone file's
+                                            inks and curves; size 0 for none.  minipsd converts no
+                                            colour: this, or the ICC profile, says what samples mean. */
 } minipsd_info;
 
-/** \brief The index of a colour channel in minipsd_layer_view.channel. */
+/**
+ * \brief The planes of a target and the channels of a layer view: the mode's colour channels, then
+ *        transparency (at minipsd_info.color_channels), as many as fit.
+ *
+ * Grey is grey and transparency; CMYK is C, M, Y, K (stored inverted, 255 no ink) and
+ * transparency; multichannel its first five channels.  Channels past them (alpha and spot
+ * channels) are other channels, not decoded.
+ */
+#define MINIPSD_PLANES 5
+
+/** \brief RGB's planes in a target and channels in a layer view; Lab's are L, a, b, transparency. */
 enum {
     MINIPSD_CH_R = 0, /*!< Red.                                */
     MINIPSD_CH_G = 1, /*!< Green.                              */
@@ -660,14 +680,15 @@ typedef struct minipsd_layer_view {
                                                  record has none.  minipsd_layer_name converts.        */
     minipsd_bytes extra;                    /*!< All the layer's additional-information blocks, walked
                                                  with minipsd_layer_next_block.                        */
-    minipsd_bytes channel[4];               /*!< Red, green, blue, transparency (MINIPSD_CH_*): the
-                                                 channel's stored data, its compression marker first.
-                                                 size 0: the layer has no such channel.  data NULL with
-                                                 a size: the channel exists but the buffer ends before
-                                                 it (a prefix of the file).                            */
-    uint64_t      channel_offset[4];        /*!< Where each channel's data starts in the file (0 for an
-                                                 absent one): a buffer holds the channel once it reaches
-                                                 channel_offset + size.                                */
+    minipsd_bytes channel[MINIPSD_PLANES];  /*!< The colour channels, then transparency (MINIPSD_PLANES;
+                                                 RGB's MINIPSD_CH_*): the channel's stored data, its
+                                                 compression marker first.  size 0: the layer has no
+                                                 such channel.  data NULL with a size: the channel
+                                                 exists but the buffer ends before it (a prefix of the
+                                                 file).                                               */
+    uint64_t      channel_offset[MINIPSD_PLANES]; /*!< Where each channel's data starts in the file (0
+                                                 for an absent one): a buffer holds the channel once
+                                                 it reaches channel_offset + size.                     */
     uint16_t      other_channels;           /*!< Channels the reader does not read (alpha, spot, ...). */
     uint8_t       clipping;                 /*!< Non-zero: clipped to the layer below.                 */
     uint8_t       flags;                    /*!< The record's flag bits as stored (0x02 is hidden).    */
@@ -822,7 +843,8 @@ MINIPSDDEF int minipsd_layer_blending_range(const minipsd_layer_view *layer, uin
  *
  * The library cannot see the size of the memory behind data: it writes exactly the samples of the
  * rows it decodes, at data + y * row_step + x * pixel_step, and nothing else.  Steps count bytes,
- * whatever the depth; a 16-bit sample is two bytes, a uint16_t in host order.
+ * whatever the depth.  A sample is as the file stores it, in host order: at 1 bit a byte of 0 or
+ * 1 (1 is black), at 8 a byte, at 16 a uint16_t, at 32 a float (0.0 to 1.0, maybe past it).
  */
 typedef struct minipsd_plane {
     uint8_t  *data;       /*!< Sample (0, 0) of the channel; NULL: the channel is not written.      */
@@ -831,15 +853,16 @@ typedef struct minipsd_plane {
 } minipsd_plane;
 
 /**
- * \brief Where decoded pixels go: one plane per channel, by MINIPSD_CH_* (R, G, B, A).
+ * \brief Where decoded pixels go: one plane per channel, the mode's colour channels, then
+ *        transparency (MINIPSD_PLANES; RGB's MINIPSD_CH_*).
  *
- * One shape for every layout: interleaved RGBA (minipsd_target_rgba), BGRA (swap two planes),
- * planar, a sub-rectangle of a larger image (offset data), or only some channels (the rest NULL).
- * Its row 0 receives the first decoded row.  Samples are of minipsd_decode_opts.depth; straight, not
- * premultiplied, alpha.
+ * One shape for every layout: interleaved (minipsd_target_interleaved, minipsd_target_rgba), BGRA
+ * (swap two planes), planar, a sub-rectangle of a larger image (offset data), or only some
+ * channels (the rest NULL).  Planes past the mode's are not read.  Its row 0 receives the first
+ * decoded row.  Samples are of minipsd_decode_opts.depth; straight, not premultiplied, alpha.
  */
 typedef struct minipsd_target {
-    minipsd_plane channel[4]; /*!< R, G, B, A. */
+    minipsd_plane channel[MINIPSD_PLANES]; /*!< The colour channels, then transparency. */
 } minipsd_target;
 
 /**
@@ -850,8 +873,7 @@ typedef struct minipsd_target {
  * libdeflate's zlib_decompress or miniz's mz_uncompress fit the same way.
  *
  * \param user     The pointer given beside the function.
- * 
-eturn 0 when the stream inflated to exactly dst_size bytes; anything else is a malformed
+ * \return 0 when the stream inflated to exactly dst_size bytes; anything else is a malformed
  *         channel (MINIPSD_ERR_FORMAT).
  */
 typedef int (*minipsd_inflate_fn)(void *user, const uint8_t *src, size_t src_size, uint8_t *dst, size_t dst_size);
@@ -867,13 +889,14 @@ typedef struct minipsd_decode_opts {
     uint32_t y_first;    /*!< The first row, counted from the layer's top.                     */
     uint32_t y_count;    /*!< How many rows; 0: from y_first to the end.                        */
     int      keep_matte; /*!< Composite only: non-zero keeps the white matte, as stored.        */
-    int      depth;      /*!< The target's bits a sample: 0 or 8, or 16 (a uint16_t in host
-                              order).  It must be the file's (minipsd_info.depth).               */
+    int      depth;      /*!< The target's bits a sample, which must be the file's
+                              (minipsd_info.depth): 1, 0 or 8, 16, 32 (see minipsd_plane).      */
     minipsd_inflate_fn inflate; /*!< Layers and masks: decodes ZIP channels (compression 2, and
                               3 with prediction); NULL leaves them MINIPSD_ERR_UNSUPPORTED.      */
     void    *inflate_user; /*!< Passed to inflate.                                               */
     uint8_t *scratch;    /*!< With inflate: where a ZIP channel is inflated whole, even for a
-                              band; at least width * height samples of the layer (or mask).
+                              band; at least the layer's (or mask's) height times rows of
+                              (width * depth + 7) / 8 bytes.
                               Room for every ZIP channel the target asks for keeps each in its
                               own part, in R, G, B, A order, for scratch_kept; less shares one. */
     size_t   scratch_size; /*!< Bytes at scratch.                                                */
@@ -905,11 +928,29 @@ MINIPSDDEF void minipsd_target_rgba(minipsd_target *t, uint8_t *rgba, size_t row
 MINIPSDDEF void minipsd_target_rgba16(minipsd_target *t, uint16_t *rgba, size_t row_stride);
 
 /**
+ * \brief Points a target at interleaved pixels of any mode and depth: planes samples a pixel.
+ *
+ * For a pixel of the mode's colour channels and transparency, planes is
+ * minipsd_info.color_channels + 1 (grey and alpha 2, CMYK and alpha 5); one less leaves
+ * transparency out.  Planes past them are NULL.
+ *
+ * \param t          The target to fill; nothing happens when it is NULL.
+ * \param pixels     The first pixel; NULL leaves every plane NULL.
+ * \param row_stride Bytes from a row to the next: width * planes * the sample's bytes for a tight
+ *                   image.
+ * \param planes     Samples a pixel, 1 to MINIPSD_PLANES (more are taken as MINIPSD_PLANES).
+ * \param depth      Bits a sample, as minipsd_decode_opts.depth: a byte at 1 and 8 bits, two at
+ *                   16, four at 32.
+ */
+MINIPSDDEF void minipsd_target_interleaved(minipsd_target *t, void *pixels, size_t row_stride, unsigned planes, int depth);
+
+/**
  * \brief Decodes a layer's pixels, or a band of its rows, into the target.
  *
  * The layer is decoded as stored: its rectangle's width (right - left) by the rows asked for,
  * with its opacity and hidden flag left in the view, not applied.  A layer without a transparency
- * channel decodes as opaque (255 in the A plane).  Everything that can fail before decoding is
+ * channel decodes as opaque (the full sample: 1, 255, 65535 or 1.0).  Everything that can fail
+ * before decoding is
  * checked first, so after MINIPSD_ERR_ARG, MINIPSD_ERR_UNSUPPORTED or MINIPSD_ERR_SHORT the target
  * is untouched; after MINIPSD_ERR_FORMAT found inside a row, or a ZIP channel that does not
  * inflate, it holds what was decoded so far.
@@ -922,14 +963,15 @@ MINIPSDDEF void minipsd_target_rgba16(minipsd_target *t, uint16_t *rgba, size_t 
  * \return MINIPSD_OK or an error code.
  *
  * \retval MINIPSD_ERR_ARG         r (never initialised), layer or target is NULL, the band lies
- *                                 outside the layer, opts->depth is not 0, 8 or 16, or a ZIP
- *                                 channel is to be inflated with opts->scratch too small.
+ *                                 outside the layer, opts->depth is not 0, 1, 8, 16 or 32, or a
+ *                                 ZIP channel is to be inflated with opts->scratch too small.
  * \retval MINIPSD_ERR_LIMIT       The call would write more than max_decoded_bytes.
- * \retval MINIPSD_ERR_UNSUPPORTED The file is not 8- or 16-bit RGB, its depth is not opts->depth,
- *                                 or a channel is ZIP-compressed and opts->inflate is NULL.
+ * \retval MINIPSD_ERR_UNSUPPORTED The file's depth is not opts->depth, or a channel is
+ *                                 ZIP-compressed and opts->inflate is NULL.
  * \retval MINIPSD_ERR_SHORT       A channel the target asks for is not all in the buffer;
  *                                 minipsd_reader_needed says how far it must reach.
- * \retval MINIPSD_ERR_FORMAT      A channel the target asks for is missing or malformed.
+ * \retval MINIPSD_ERR_FORMAT      A channel the target asks for is missing or malformed (a 1-bit
+ *                                 one ZIP-predicted).
  */
 MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view *layer, const minipsd_target *target,
                                     const minipsd_decode_opts *opts);
@@ -938,13 +980,14 @@ MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view 
  * \brief Decodes the composite (merged) image, or a band of its rows, into the target.
  *
  * The composite is what a reader that ignores layers shows: the full canvas, info.width by the
- * rows asked for.  The file stores its colour matted against white; by default the matte is
+ * rows asked for.  An RGB file stores its colour matted against white; by default the matte is
  * undone, giving straight alpha, exact where alpha is full and within about max / (2 * alpha)
  * levels below (max is 255, or 65535 at 16 bits), since matting has already merged nearby colours
- * (0 where alpha is 0).
- * Un-matting reads each pixel's alpha back from the target, so it then needs an A plane.  A file
- * whose composite has no transparency (info.composite_has_alpha is 0) decodes as opaque.  As in
- * minipsd_decode_layer, every check comes before the first sample is written.
+ * (0 where alpha is 0; at 32 bits 1 - (1 - c) / alpha).
+ * Un-matting reads each pixel's alpha back from the target, so it then needs an A plane.  Other
+ * modes decode as stored: no file shows how they are matted.  A file whose composite has no
+ * transparency (info.composite_has_alpha is 0) decodes as opaque.  As in minipsd_decode_layer,
+ * every check comes before the first sample is written.
  *
  * \param r      A reader from minipsd_reader_init.
  * \param target Where the samples go; only its non-NULL planes are written.
@@ -953,13 +996,13 @@ MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view 
  *
  * \retval MINIPSD_ERR_ARG         r (never initialised) or target is NULL, the band lies outside
  *                                 the image, the matte is to be undone with no A plane, or
- *                                 opts->depth is not 0, 8 or 16.
+ *                                 opts->depth is not 0, 1, 8, 16 or 32.
  * \retval MINIPSD_ERR_LIMIT       The call would write more than max_decoded_bytes.
- * \retval MINIPSD_ERR_UNSUPPORTED The file is not 8- or 16-bit RGB, its depth is not opts->depth,
- *                                 or the image is ZIP-compressed (opts->inflate is for layers).
+ * \retval MINIPSD_ERR_UNSUPPORTED The file's depth is not opts->depth, or the image is
+ *                                 ZIP-compressed (opts->inflate is for layers).
  * \retval MINIPSD_ERR_SHORT       The rows of a channel the target asks for are not all in the
  *                                 buffer; minipsd_reader_needed says how far it must reach.
- * \retval MINIPSD_ERR_FORMAT      The image is malformed.
+ * \retval MINIPSD_ERR_FORMAT      The image is malformed, or has fewer channels than its mode.
  */
 MINIPSDDEF int minipsd_decode_composite(minipsd_reader *r, const minipsd_target *target, const minipsd_decode_opts *opts);
 

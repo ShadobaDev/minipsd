@@ -141,11 +141,11 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
 
     rc = minipsd_reader_init(&r, data, size, workspace, sizeof workspace, limits, &info);
     if (rc != MINIPSD_OK) return rc;
-    if (!r->rgb) return MINIPSD_ERR_UNSUPPORTED;
-    wide = r->wide;                                            /* 16-bit samples, aligned for a uint16_t */
+    if (!r->rgb || (r->depth != MPSD__CH_8BIT && r->depth != MPSD__CH_16BIT)) return MINIPSD_ERR_UNSUPPORTED;   /* TODO(S6.13): every mode */
+    wide = r->shift;                                           /* 16-bit samples, aligned for a uint16_t */
     side = mpsd__max_side(r->psb);
     memset(&all, 0, sizeof all);                               /* every row, un-matted; new fields zero */
-    all.depth      = wide ? 16 : 8;
+    all.depth      = wide ? MPSD__CH_16BIT : MPSD__CH_8BIT;
     all.inflate      = opts ? opts->inflate : NULL;            /* ZIP channels: without it, unsupported */
     all.inflate_user = opts ? opts->inflate_user : NULL;
     all.scratch      = a->scratch;
@@ -222,7 +222,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         if (!d) continue;
         (void)minipsd_layer_name(&v, name, n, NULL);
         if (pixels) {
-            mpsd__target(&t, pixels, (size_t)(w * MPSD__RGBA << wide), wide);
+            mpsd__target(&t, pixels, (size_t)(w * MPSD__RGBA << wide), MPSD__RGBA, wide);
             rc = minipsd_decode_layer(r, &v, &t, &all);
             if (rc != MINIPSD_OK) return rc;
         }
@@ -285,12 +285,12 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     if (!d) return MINIPSD_OK;
 
     if (pixels) {
-        mpsd__target(&t, pixels, (size_t)info.width * MPSD__RGBA << wide, wide);
+        mpsd__target(&t, pixels, (size_t)info.width * MPSD__RGBA << wide, MPSD__RGBA, wide);
         rc = minipsd_decode_composite(r, &t, &as_stored);
         if (rc != MINIPSD_OK) return rc;
     }
     if (flat) {
-        mpsd__target(&t, flat, (size_t)info.width * MPSD__RGBA << wide, wide);
+        mpsd__target(&t, flat, (size_t)info.width * MPSD__RGBA << wide, MPSD__RGBA, wide);
         rc = minipsd_decode_composite(r, &t, &all);
         if (rc != MINIPSD_OK) return rc;
         layers[0].name    = "Background";

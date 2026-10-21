@@ -39,37 +39,40 @@ static void zip_opts(minipsd_decode_opts *opts, uint8_t *scratch, uint64_t n)
     opts->scratch_size = scratch ? (size_t)n : 0;
 }
 
+/* Bytes a sample takes in memory: one at 1 and 8 bits, two at 16, four at 32. */
+static unsigned sample_bytes(int depth) { return depth == 32 ? 4u : depth == 16 ? 2u : 1u; }
+
 /* Decodes a width x height image (a layer, or the composite when layer is NULL) whole, then its
-   middle row with the matte kept; at 16 bits for a 16-bit file. */
-static void decode(minipsd_reader *r, const minipsd_layer_view *layer, uint64_t width, uint64_t height, int depth,
-                   size_t size)
+   middle row with the matte kept: the mode's planes, interleaved, at the file's depth. */
+static void decode(minipsd_reader *r, const minipsd_layer_view *layer, uint64_t width, uint64_t height,
+                   const minipsd_info *info, size_t size)
 {
     minipsd_target      t;
     minipsd_decode_opts all = {0, 0, 0, 0}, band = {0, 1, 1, 0};
-    uint16_t            pixel[4];
-    uint8_t            *rgba = (uint8_t *)pixel, *scratch;
-    const unsigned      wide = depth == 16;
-    uint64_t            bytes = width * height * 4 << wide;
+    const unsigned      planes = info->color_channels < MINIPSD_PLANES ? info->color_channels + 1u : MINIPSD_PLANES;
+    const unsigned      sample = sample_bytes(info->depth);
+    uint32_t            pixel[MINIPSD_PLANES];
+    uint8_t            *px = (uint8_t *)pixel, *scratch;
+    uint64_t            bytes = width * height * planes * sample;
     int                 rc;
-    all.depth = band.depth = wide ? 16 : 8;
+    all.depth = band.depth = info->depth;
     if (bytes > FUZZ_MAX_DECODED) {
-        minipsd_target_rgba(&t, rgba, 0);
+        minipsd_target_interleaved(&t, px, 0, planes, info->depth);
         rc = layer ? minipsd_decode_layer(r, layer, &t, &all) : minipsd_decode_composite(r, &t, &all);
         if (rc == MINIPSD_OK) abort();
         return;
     }
-    if (bytes && !(rgba = (uint8_t *)malloc((size_t)bytes))) return;
-    scratch = bytes ? (uint8_t *)malloc((size_t)bytes / 4) : NULL;   /* one channel */
-    zip_opts(&all, scratch, bytes / 4);
-    zip_opts(&band, scratch, bytes / 4);
-    if (wide) minipsd_target_rgba16(&t, (uint16_t *)rgba, (size_t)width * 8);
-    else      minipsd_target_rgba(&t, rgba, (size_t)width * 4);
+    if (bytes && !(px = (uint8_t *)malloc((size_t)bytes))) return;
+    scratch = bytes ? (uint8_t *)malloc((size_t)bytes / planes) : NULL;   /* one channel */
+    zip_opts(&all, scratch, bytes / planes);
+    zip_opts(&band, scratch, bytes / planes);
+    minipsd_target_interleaved(&t, px, (size_t)width * planes * sample, planes, info->depth);
     rc = layer ? minipsd_decode_layer(r, layer, &t, &all) : minipsd_decode_composite(r, &t, &all);
     check_short(r, rc, size);
     band.y_first = (uint32_t)(height / 2);
     rc = layer ? minipsd_decode_layer(r, layer, &t, &band) : minipsd_decode_composite(r, &t, &band);
     check_short(r, rc, size);
-    if (rgba != (uint8_t *)pixel) free(rgba);
+    if (px != (uint8_t *)pixel) free(px);
     free(scratch);
 }
 
@@ -78,24 +81,24 @@ static void decode_mask(minipsd_reader *r, const minipsd_layer_view *layer, int 
 {
     const uint64_t      width = (uint64_t)((int64_t)layer->mask.right - layer->mask.left);
     const uint64_t      height = (uint64_t)((int64_t)layer->mask.bottom - layer->mask.top);
-    const unsigned      wide = depth == 16;
+    const unsigned      sample = sample_bytes(depth);
     minipsd_decode_opts all = {0, 0, 0, 0}, band = {0, 1, 0, 0};
     minipsd_plane       plane;
     uint8_t            *scratch;
-    uint16_t            one;
+    uint32_t            one;
     int                 rc;
     if (layer->mask.right < layer->mask.left || layer->mask.bottom < layer->mask.top) abort();   /* never inverted */
-    all.depth = band.depth = wide ? 16 : 8;
-    plane.data = (uint8_t *)&one; plane.pixel_step = (ptrdiff_t)1 << wide; plane.row_step = 0;
-    if ((width * height << wide) > FUZZ_MAX_DECODED) {
+    all.depth = band.depth = depth;
+    plane.data = (uint8_t *)&one; plane.pixel_step = (ptrdiff_t)sample; plane.row_step = 0;
+    if (width * height * sample > FUZZ_MAX_DECODED) {
         if (minipsd_decode_mask(r, layer, &plane, &all) == MINIPSD_OK) abort();
         return;
     }
-    if (width && height && !(plane.data = (uint8_t *)malloc((size_t)(width * height << wide)))) return;
-    plane.row_step = (ptrdiff_t)(width << wide);
-    scratch = width && height ? (uint8_t *)malloc((size_t)(width * height << wide)) : NULL;
-    zip_opts(&all, scratch, width * height << wide);
-    zip_opts(&band, scratch, width * height << wide);
+    if (width && height && !(plane.data = (uint8_t *)malloc((size_t)(width * height * sample)))) return;
+    plane.row_step = (ptrdiff_t)(width * sample);
+    scratch = width && height ? (uint8_t *)malloc((size_t)(width * height * sample)) : NULL;
+    zip_opts(&all, scratch, width * height * sample);
+    zip_opts(&band, scratch, width * height * sample);
     rc = minipsd_decode_mask(r, layer, &plane, &all);
     check_short(r, rc, size);
     band.y_first = (uint32_t)(height / 2);
@@ -133,11 +136,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
             if (minipsd_layer_blending_range(&layer, i, &range) != MINIPSD_OK) abort();
         if (layer.right < layer.left || layer.bottom < layer.top) abort();   /* never inverted */
         decode(r, &layer, (uint64_t)((int64_t)layer.right - layer.left), (uint64_t)((int64_t)layer.bottom - layer.top),
-               info.depth, size);
+               &info, size);
         if (layer.has_mask) decode_mask(r, &layer, info.depth, size);
         if (layer.kind > MINIPSD_KIND_GROUP_END) abort();
     }
     check_short(r, rc, size);
-    decode(r, NULL, info.width, info.height, info.depth, size);
+    decode(r, NULL, info.width, info.height, &info, size);
     return 0;
 }

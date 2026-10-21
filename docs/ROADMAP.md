@@ -394,6 +394,12 @@ feature; a supplied composite needs nothing. See
         writer refuses.
       - **Read.** The composite first, then layers: grey, CMYK, Lab, multichannel and duotone
         of 8 and 16 bits; grey and RGB of 32; bitmap of 1; indexed of 8.
+        As done: `MINIPSD_PLANES` (5) planes, the mode's colour channels then transparency at
+        `color_channels`; 1-bit samples as bytes (no packed form); `color_data` a view; the
+        composite un-matted in RGB only (psd-tools does the same; no file shows other modes);
+        Photoshop's `Mtrn`/`Mt16`/`Mt32` say the composite has transparency. `roundtrip.py`
+        checks every psd-tools file's layers and composite against psd-tools. `minipsd_read`
+        stays 8- and 16-bit RGB until the writer takes the other modes.
       - **Write.** The same modes at 1, 8, 16 and 32 bits, each where Photoshop allows it; the
         palette and the duotone data written as given.
       *Done when:* psd-tools' files of every mode and depth decode to the samples psd-tools
