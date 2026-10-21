@@ -49,6 +49,8 @@ static uint32_t mpsd__get16(const uint8_t *p) { return ((uint32_t)p[0] << 8) | p
 static uint32_t mpsd__get32(const uint8_t *p) { return (mpsd__get16(p) << 16) | mpsd__get16(p + 2); }
 static uint64_t mpsd__get64(const uint8_t *p) { return ((uint64_t)mpsd__get32(p) << 32) | mpsd__get32(p + 4); }
 
+static void mpsd__set16(uint8_t *p, uint32_t v) { p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v; }
+
 /* Four bytes equal to a four-character tag. */
 static int mpsd__tag(const uint8_t *p, const char *tag)
 {

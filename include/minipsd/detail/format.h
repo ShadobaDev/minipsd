@@ -160,10 +160,6 @@ static uint64_t mpsd__record_size(uint32_t channels, unsigned psb)
 #define MPSD__CH_MASK  4
 #define MPSD__CH_REAL  5
 #define MPSD__CHANNELS 6          /* the most channels the writer writes a layer */
-#define MSPD__CH_1BIT 1           /* the 1-bit channel size */
-#define MPSD__CH_8BIT 8           /* the 8-bit channel size */
-#define MPSD__CH_16BIT 16         /* the 16-bit channel size */
-#define MPSD__CH_32BIT 32         /* the 32-bit channel size */
 
 /* The reader keeps a layer's channels in slots: the colour channels, then transparency, as a
    target's planes (MINIPSD_PLANES), then the two masks. */

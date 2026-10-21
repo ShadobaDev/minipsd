@@ -119,8 +119,6 @@ static void mpsd__info_clear(minipsd_info *i)
     i->color_data.size = 0;
 }
 
-static int mpsd__depth_ok(uint32_t depth) { return depth == 1 || depth == 8 || depth == 16 || depth == 32; }
-
 /* Colour modes: bitmap, grey, indexed, RGB, CMYK, multichannel, duotone, Lab. */
 static int mpsd__mode_ok(uint32_t mode) { return mode <= 4 || (mode >= 7 && mode <= 9); }
 
@@ -634,7 +632,7 @@ static int mpsd__within(const minipsd_reader *r, const minipsd_target *t, uint32
 static int mpsd__opts_depth(const minipsd_decode_opts *opts)
 {
     const int depth = opts && opts->depth ? opts->depth : MPSD__CH_8BIT;
-    return depth == MPSD__CH_1BIT || depth == MPSD__CH_8BIT || depth == MPSD__CH_16BIT || depth == MPSD__CH_32BIT ? depth : -1;
+    return mpsd__depth_ok((uint32_t)depth) ? depth : -1;
 }
 
 /* Fills rows of a plane with full samples: the transparency of a file that stores none. */
@@ -660,18 +658,18 @@ static void mpsd__target(minipsd_target *t, uint8_t *pixels, size_t row_stride, 
 
 MINIPSDDEF void minipsd_target_rgba(minipsd_target *t, uint8_t *rgba, size_t row_stride)
 {
-    mpsd__target(t, rgba, row_stride, MPSD__RGBA, 0);
+    mpsd__target(t, rgba, row_stride, MPSD__RGBA, MPSD__SHIFT_8);
 }
 
 MINIPSDDEF void minipsd_target_rgba16(minipsd_target *t, uint16_t *rgba, size_t row_stride)
 {
-    mpsd__target(t, (uint8_t *)rgba, row_stride, MPSD__RGBA, 1);
+    mpsd__target(t, (uint8_t *)rgba, row_stride, MPSD__RGBA, MPSD__SHIFT_16);
 }
 
 MINIPSDDEF void minipsd_target_interleaved(minipsd_target *t, void *pixels, size_t row_stride, unsigned planes, int depth)
 {
     mpsd__target(t, (uint8_t *)pixels, row_stride, planes < MINIPSD_PLANES ? planes : MINIPSD_PLANES,
-                 mpsd__shift(depth > 0 ? (unsigned)depth : 8u));
+                 mpsd__shift(depth > 0 ? (unsigned)depth : MPSD__CH_8BIT));
 }
 
 /* One channel's stored data, checked whole before a sample is written: the compression marker,
@@ -723,7 +721,7 @@ static int mpsd__chan_open(const minipsd_reader *r, minipsd_bytes c, uint32_t wi
     case MPSD__COMP_ZIP: case MPSD__COMP_ZIP_PREDICTED:
         if (!opts || !opts->inflate) return MINIPSD_ERR_UNSUPPORTED;
         ch->predicted = mpsd__get16(c.data) == MPSD__COMP_ZIP_PREDICTED;
-        if (ch->predicted && r->depth == 1) return MINIPSD_ERR_FORMAT;   /* bits have no neighbours to subtract */
+        if (ch->predicted && r->depth == MPSD__CH_1BIT) return MINIPSD_ERR_FORMAT;   /* bits have no neighbours to subtract */
         if (!opts->scratch || opts->scratch_size < plane) return MINIPSD_ERR_ARG;
         ch->stream      = c.data + MPSD__MARKER_SIZE;
         ch->stream_size = (size_t)left;
@@ -745,7 +743,7 @@ static int mpsd__chan_inflate(mpsd__chan *ch, uint32_t width, uint32_t height, c
     if (!stream) return MINIPSD_OK;                            /* not ZIP: opts may be NULL */
     ch->rows     = at;
     ch->stream   = NULL;
-    ch->shuffled = ch->predicted && ch->depth == 32;
+    ch->shuffled = ch->predicted && ch->depth == MPSD__CH_32BIT;
     if (opts->scratch_kept) return MINIPSD_OK;
     if (opts->inflate(opts->inflate_user, stream, ch->stream_size, at, row * height)) return MINIPSD_ERR_FORMAT;
     for (y = 0; ch->predicted && y < height; ++y) mpsd__unpredict(at + (size_t)y * row, width, ch->depth);
@@ -763,7 +761,7 @@ static int mpsd__chan_rows(const mpsd__chan *ch, uint32_t width, uint32_t y0, ui
         for (y = 0; y < rows; ++y, src += bytes) {
             uint8_t *out = pl->data + (ptrdiff_t)y * pl->row_step;
             for (x = 0; x < bytes; ++x) out[mpsd__at(x, pl->pixel_step, ch->shift)] = src[ch->shuffled ? mpsd__shuffled(x, width) : x];
-            if (ch->depth == 1) mpsd__unpack_bits(out, pl->pixel_step, width);
+            if (ch->depth == MPSD__CH_1BIT) mpsd__unpack_bits(out, pl->pixel_step, width);
         }
         return MINIPSD_OK;
     }
@@ -772,7 +770,7 @@ static int mpsd__chan_rows(const mpsd__chan *ch, uint32_t width, uint32_t y0, ui
         uint8_t     *out = pl->data + (ptrdiff_t)y * pl->row_step;
         const size_t n   = mpsd__count(ch->table, y0 + y, ch->psb);
         if (!mpsd__unpackbits(src, n, out, pl->pixel_step, bytes, ch->shift)) return MINIPSD_ERR_FORMAT;
-        if (ch->depth == 1) mpsd__unpack_bits(out, pl->pixel_step, width);
+        if (ch->depth == MPSD__CH_1BIT) mpsd__unpack_bits(out, pl->pixel_step, width);
         src += n;
     }
     return MINIPSD_OK;
@@ -913,7 +911,7 @@ static int mpsd__composite_open(minipsd_reader *r, int last, mpsd__chan *ch)
 /* Undoes the white matte of a row's colour sample s, at alpha a (detail/composite.h). */
 static void mpsd__unmatte_at(const minipsd_reader *r, uint8_t *s, const uint8_t *a)
 {
-    if (r->depth == 32) {                                      /* c = 1 - (1 - s) / a */
+    if (r->depth == MPSD__CH_32BIT) {                          /* c = 1 - (1 - s) / a */
         const float alpha = mpsd__float(a);
         mpsd__set_float(s, alpha > 0.0f ? 1.0f - (1.0f - mpsd__float(s)) / alpha : 0.0f);
     } else {

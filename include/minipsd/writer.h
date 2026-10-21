@@ -113,7 +113,7 @@ static mpsd__source mpsd__channel_source(const minipsd_doc *d, const minipsd_lay
     src.step    = (size_t)1 << wide;
     src.width   = src.height = 0;
     if (k < MPSD__RGBA) {
-        static const uint8_t full[2] = { 255, 255 };          /* 255, or 65535 at 16 bits */
+        static const uint8_t full[2] = { MPSD__FULL_8, MPSD__FULL_8 };   /* 255, or 65535 at 16 bits */
         const mpsd__rect r = mpsd__layer_rect(d, l);
         src.height = r.height;
         if (l->stored && l->stored[mpsd__channel_of[k]].size) { src.stored = &l->stored[mpsd__channel_of[k]]; return src; }
@@ -716,7 +716,7 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *d, const minipsd_write_opts 
     /* The dpi is stored as 16.16 fixed point: it must round to 1 .. 2^32 - 1.  NaN fails both. */
     res = d->dpi * MPSD__FIXED_ONE + 0.5;
     if ((d->layer_count && !d->layers) || (!d->layer_count && !d->composite && !d->composite_stored.size) || d->layer_count > MPSD__MAX_LAYERS || !(res >= 1.0 && res < 4294967296.0)
-        || (d->depth != 0 && d->depth != 8 && d->depth != 16) || d->format > MINIPSD_PSB
+        || (d->depth != 0 && d->depth != MPSD__CH_8BIT && d->depth != MPSD__CH_16BIT) || d->format > MINIPSD_PSB
         || d->compression < MINIPSD_RLE || d->compression > MINIPSD_ZIP_PREDICTED || (mpsd__zip(d) && !(opts && opts->deflate)))
         return MINIPSD_ERR_ARG;
     rc = mpsd__kept_ok(d, out);
@@ -899,7 +899,7 @@ static int mpsd__zip_channel(minipsd_writer *w, size_t i, int k)
         const uint8_t *row = src.samples + y * src.width * src.step;
         uint8_t       *out = w->zip_plane + y * bytes;
         for (x = 0; x < bytes; ++x) out[x] = row[mpsd__at(x, (ptrdiff_t)src.step, wide)];
-        if (d->compression == MINIPSD_ZIP_PREDICTED) mpsd__predict(out, src.width, wide ? 16u : 8u);
+        if (d->compression == MINIPSD_ZIP_PREDICTED) mpsd__predict(out, src.width, wide ? MPSD__CH_16BIT : MPSD__CH_8BIT);
     }
     if (w->deflate(w->deflate_user, w->zip_plane, bytes * src.height, w->zip_out, &size) || size > w->zip_room)
         return MINIPSD_ERR_WRITE;
