@@ -2273,25 +2273,25 @@ TEST(MinipsdReaderTest, LayersInAGlobalBlock)
         const char *what;
         Bytes       tail;
         int         rc;
+        int         alpha;    // composite_has_alpha; -1: not checked
         std::size_t layers;
-        Bytes       kept;   // the document's layer tail
-        int         alpha = -1;   // composite_has_alpha; -1: not checked
+        Bytes       kept;     // the document's layer tail
     };
     const Case cases[] = {
-        {"behind another block", cat({mask, patt, block("8BIM", "Lr16", n, layers), pad, patt}), MINIPSD_OK, 1,
+        {"behind another block", cat({mask, patt, block("8BIM", "Lr16", n, layers), pad, patt}), MINIPSD_OK, -1, 1,
          cat({mask, patt, block("8BIM", "Lr16", 0, {}), patt})},
-        {"'8B64', 'Lr32', last, its padding missing", cat({mask, block("8B64", "Lr32", n, layers)}), MINIPSD_OK, 1,
-         cat({mask, block("8B64", "Lr32", 0, {})}), 1},
-        {"a positive count: the composite has no transparency", cat({mask, block("8BIM", "Lr32", n, positive)}), MINIPSD_OK, 1,
-         cat({mask, block("8BIM", "Lr32", 0, {})}), 0},
+        {"'8B64', 'Lr32', last, its padding missing", cat({mask, block("8B64", "Lr32", n, layers)}), MINIPSD_OK, 1, 1,
+         cat({mask, block("8B64", "Lr32", 0, {})})},
+        {"a positive count: the composite has no transparency", cat({mask, block("8BIM", "Lr32", n, positive)}), MINIPSD_OK, 0, 1,
+         cat({mask, block("8BIM", "Lr32", 0, {})})},
         {"a positive count after 'Mt32': transparency, as Photoshop's 32-bit files say it",
-         cat({mask, block("8BIM", "Mt32", 4, {0, 0, 0, 1}), block("8BIM", "Lr32", n, positive)}), MINIPSD_OK, 1,
-         cat({mask, block("8BIM", "Mt32", 4, {0, 0, 0, 1}), block("8BIM", "Lr32", 0, {})}), 1},
-        {"empty", cat({mask, block("8BIM", "Lr16", 0, {})}), MINIPSD_OK, 0, {}},
-        {"one byte long", cat({mask, block("8BIM", "Lr16", 1, {0, 0, 0, 0})}), MINIPSD_ERR_FORMAT, 0, {}},
-        {"not a block", cat({mask, Bytes(12, 'x')}), MINIPSD_OK, 0, {}},
-        {"a block past the tail", cat({mask, block("8BIM", "Patt", 1000, {})}), MINIPSD_OK, 0, {}},
-        {"a tail too short for a global mask", Bytes(2, 0), MINIPSD_OK, 0, {}},
+         cat({mask, block("8BIM", "Mt32", 4, {0, 0, 0, 1}), block("8BIM", "Lr32", n, positive)}), MINIPSD_OK, 1, 1,
+         cat({mask, block("8BIM", "Mt32", 4, {0, 0, 0, 1}), block("8BIM", "Lr32", 0, {})})},
+        {"empty", cat({mask, block("8BIM", "Lr16", 0, {})}), MINIPSD_OK, -1, 0, {}},
+        {"one byte long", cat({mask, block("8BIM", "Lr16", 1, {0, 0, 0, 0})}), MINIPSD_ERR_FORMAT, -1, 0, {}},
+        {"not a block", cat({mask, Bytes(12, 'x')}), MINIPSD_OK, -1, 0, {}},
+        {"a block past the tail", cat({mask, block("8BIM", "Patt", 1000, {})}), MINIPSD_OK, -1, 0, {}},
+        {"a tail too short for a global mask", Bytes(2, 0), MINIPSD_OK, -1, 0, {}},
     };
     for (const Case &c : cases) {
         SCOPED_TRACE(c.what);

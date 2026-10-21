@@ -96,15 +96,13 @@ static ptrdiff_t mpsd__at(size_t i, ptrdiff_t step, unsigned shift)
     return (ptrdiff_t)(i >> shift) * step + (ptrdiff_t)((i & byte) ^ lane);
 }
 
-/* A sample in memory: a byte, a uint16_t, or a float's bits. */
+/* A sample in memory: a byte or a uint16_t.  32-bit samples are floats: mpsd__float. */
 static uint32_t mpsd__sample(const uint8_t *p, unsigned shift)
 {
     uint16_t h;
-    uint32_t w;
     if (shift == MPSD__SHIFT_8) return *p;
-    if (shift == MPSD__SHIFT_16) { memcpy(&h, p, sizeof h); return h; }
-    memcpy(&w, p, sizeof w);
-    return w;
+    memcpy(&h, p, sizeof h);
+    return h;
 }
 
 static void mpsd__set_sample(uint8_t *p, unsigned shift, uint32_t v)
@@ -176,7 +174,7 @@ static void mpsd__unpredict(uint8_t *row, uint32_t width, unsigned depth)
 /* Pixel x of a packed row: 1 or 0. */
 static uint8_t mpsd__bit(uint8_t packed, uint32_t x)
 {
-    return (uint8_t)((packed >> (MPSD__BYTE_BITS - 1 - x % MPSD__BYTE_BITS)) & 1u);
+    return (uint8_t)(((unsigned)packed >> (MPSD__BYTE_BITS - 1u - x % MPSD__BYTE_BITS)) & 1u);
 }
 
 /* A packed row, held in the first (width + 7) / 8 samples of a row in memory, step bytes apart,
