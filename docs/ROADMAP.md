@@ -384,7 +384,7 @@ feature; a supplied composite needs nothing. See
       `MINIPSD_ERR_ARG`.
       *Done when:* a ZIP layer decoded in bands of one row calls the inflate once per channel,
       with the same samples as a whole decode.
-- [ ] **S6.13** Every colour mode and depth, read and written, as the file stores them, no colour
+- [x] **S6.13** Every colour mode and depth, read and written, as the file stores them, no colour
       conversion (the ICC profile, the palette or the duotone data say what samples mean):
       - *design.* A target that names its channels beyond R, G, B, A: grey, C, M, Y, K
         (inverted, as Photoshop stores them), L, a, b, an index, a multichannel's N channels;
