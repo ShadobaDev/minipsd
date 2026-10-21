@@ -337,7 +337,11 @@ them; nothing is copied or allocated. Results on real files from other programs:
     stream and the channel's size, the rectangle times the sample size, which it must fill
     exactly (anything else is `MINIPSD_ERR_FORMAT`). It is inflated whole, even for a band, into
     the caller's `scratch` of that size (`MINIPSD_ERR_ARG` when smaller), where minipsd undoes the
-    prediction and takes the rows as raw ones. Without an inflate it is
+    prediction and takes the rows as raw ones. A scratch with room for every ZIP channel the
+    target asks for holds each in its own part (R, G, B, A order), and `scratch_kept` on a later
+    call takes the rows from there without inflating again: the caller vouches that the
+    previous call had the same layer, scratch and channels (with too little room for all,
+    `MINIPSD_ERR_ARG`). Without an inflate it is
     `MINIPSD_ERR_UNSUPPORTED`, as is a ZIP-compressed composite, which no file we have holds;
   - the layers of a file whose layer info is empty come from its global block `Lr16` or `Lr32`
     (Photoshop's 16- and 32-bit files);

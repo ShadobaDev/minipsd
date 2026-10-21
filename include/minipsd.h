@@ -873,8 +873,15 @@ typedef struct minipsd_decode_opts {
                               3 with prediction); NULL leaves them MINIPSD_ERR_UNSUPPORTED.      */
     void    *inflate_user; /*!< Passed to inflate.                                               */
     uint8_t *scratch;    /*!< With inflate: where a ZIP channel is inflated whole, even for a
-                              band; at least width * height samples of the layer (or mask).    */
+                              band; at least width * height samples of the layer (or mask).
+                              Room for every ZIP channel the target asks for keeps each in its
+                              own part, in R, G, B, A order, for scratch_kept; less shares one. */
     size_t   scratch_size; /*!< Bytes at scratch.                                                */
+    int      scratch_kept; /*!< Non-zero: scratch still holds this layer's (or mask's) ZIP
+                              channels as the previous call left them, inflated, each in its own
+                              part; their rows are taken from there, not inflated again, so bands
+                              cost one inflate a channel.  That call had the same layer, scratch
+                              and channels; the caller vouches for it.                          */
 } minipsd_decode_opts;
 
 /**

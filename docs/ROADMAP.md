@@ -183,10 +183,11 @@ Additive. See [Reader](CODE-ARCH.md#reader).
       - Extensibility rules: the reader needs no opt-in macro;
       - README (what it reads), the header's brief, the CMake description (SBOM, `.pc`,
         packages), USE-CASES (what is done), CODE-ARCH (stages).
-- [ ] **S4.10** Release **0.2.1** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md): nothing since
-      0.2.0 broke the API, so it is a PATCH under the pre-1.0 rules. Before it: regenerate
-      [COMPATIBILITY.md](COMPATIBILITY.md) with the new version, and decide whether CI fetches
-      psd-tools' files (`MINIPSD_PSD_TOOLS_FILES`).
+- [ ] **S4.10** Release **0.3.0** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md), with stages 4 to 6:
+      `minipsd_write_opts` became a parameter of the write calls, a break, so it is a MINOR under
+      the pre-1.0 rules. Before it: regenerate [COMPATIBILITY.md](COMPATIBILITY.md) with the new
+      version, and have one CI job fetch psd-tools' files (`MINIPSD_PSD_TOOLS_FILES`), so that
+      Photoshop's ZIP files are checked through zlib there too, not only locally.
 
 ## 5. Round trip and conveniences
 
@@ -373,15 +374,92 @@ feature; a supplied composite needs nothing. See
       read decoded are written back ZIP-predicted with the same pixels; the unit tests write and
       read ZIP through stored blocks, deflate failures included.
 
+- [x] **S6.12** ZIP in bands without inflating again: a band of a ZIP channel inflates the
+      whole channel, so decoding a layer in strips, as libvips asks for it, inflates it once per
+      strip. The caller says its scratch already holds that channel (a field at the end of
+      `minipsd_decode_opts`), and minipsd takes the rows from there.
+      As done: `scratch_kept`. A scratch with room for every ZIP channel the target asks for
+      holds each in its own part, R, G, B, A in order; less room shares one part, as before, so
+      `minipsd_read` keeps a scratch of one channel. Kept without room for all is
+      `MINIPSD_ERR_ARG`.
+      *Done when:* a ZIP layer decoded in bands of one row calls the inflate once per channel,
+      with the same samples as a whole decode.
+- [ ] **S6.13** Every colour mode and depth, read and written, as the file stores them, no colour
+      conversion (the ICC profile, the palette or the duotone data say what samples mean):
+      - *design.* A target that names its channels beyond R, G, B, A: grey, C, M, Y, K
+        (inverted, as Photoshop stores them), L, a, b, an index, a multichannel's N channels;
+        32-bit samples as `float`, 1-bit ones as bytes of 0 or 1, or packed; the palette
+        (colour mode data) and the duotone data as views. Which modes have layers in
+        Photoshop's files (bitmap, indexed and multichannel have none) decides what the
+        writer refuses.
+      - **Read.** The composite first, then layers: grey, CMYK, Lab, multichannel and duotone
+        of 8 and 16 bits; grey and RGB of 32; bitmap of 1; indexed of 8.
+      - **Write.** The same modes at 1, 8, 16 and 32 bits, each where Photoshop allows it; the
+        palette and the duotone data written as given.
+      *Done when:* psd-tools' files of every mode and depth decode to the samples psd-tools
+      gives, and COMPATIBILITY.md has no file described for its mode or depth; documents of
+      each mode and depth that minipsd writes decode the same in psd-tools and in minipsd; the
+      files that psd-tools lacks come from GIMP or Photopea, private fixtures checked by hand
+      there.
+- [ ] **S6.14** Threads: the reader's decode calls stated thread-safe on one reader, or one
+      reader a thread (its workspace is a few hundred bytes), whichever the code supports
+      without a lock; a scratch is one per thread. In the spec's Memory and ownership.
+      *Done when:* a test decodes the bands of one layer from several threads at once under
+      ThreadSanitizer, or the spec says why it must not.
+- [ ] **S6.15** Streaming read (`R9`): the reader over a window of the file instead of the whole
+      blob, generalising today's prefix (`MINIPSD_ERR_SHORT`, `minipsd_reader_needed`):
+      - *design.* A call that cannot go on says which range it needs (offset and size), not
+        only a prefix length; the caller hands that range, and the offset from which it may
+        drop what it holds. Views stay valid until it drops them. The same calls serve a
+        source that seeks (a file, `vips_source`), which then reads only what is asked for.
+      - **What must be held at once:** the layer records (layer 0's data begins only after the
+        last record), one resource, and one layer's or the composite's channel data, still
+        compressed (they are planar, so a layer's rows need all its channels). Each bounded by
+        `minipsd_limits`. The global blocks after the layers' data and the resources are
+        skipped by their lengths when not asked for.
+      - **Order.** Without a seek, forward only: resources, records, layers bottom first, the
+        tail, the composite.
+      *Done when:* every file of psd-tools' set decodes the same through a window fed in chunks
+      of 4 KiB as from the whole blob, and no call holds more than its records, one resource
+      and one layer's compressed data (counted in a test).
+
 ## 7. Interoperability
+
+libvips is where minipsd is meant to be used: as a loader and saver of PSD and PSB, and in
+programs that render a composite with libvips and write the layers with minipsd. Steps 7.2 on are
+the loader and saver; how they reach libvips is not this roadmap's.
 
 - [ ] **S7.1** `examples/vips_composite.c`: a document's composite rendered with libvips
       (`vips_composite`, blend keys mapped as in the spec's
       [Working with libvips](SPECIFICATION.md#working-with-libvips)), then written with it;
       built and run only when pkg-config finds `vips`. A "With libvips" chapter in
-      [MANUAL.md](MANUAL.md).
+      [MANUAL.md](MANUAL.md). The pattern a program such as Platemaker follows to export layered
+      PSDs with 0.3.0.
+- [ ] **S7.2** *design.* minipsd as a libvips loader and saver:
+      - **Loading.** What the image is: the composite by default, one layer by an option, its
+        offset in the metadata. Metadata: ICC profile, resolution, interpretation, sample
+        format.
+      - **Access.** Strips from several threads (S6.12, S6.14).
+      - **Saving.** One image as a layer with its composite, or pages as layers.
+      - **What minipsd still needs.** Every colour mode and depth (S6.13); the row provider (S7.5).
+      - **Building.** The build dependency: pkg-config, a meson wrap.
+- [ ] **S7.3** Loader: a PSD or PSB as a libvips image, the composite or a layer, decoded in
+      strips; ZIP through zlib.
+      *Done when:* psd-tools' files that minipsd decodes load with the samples psd-tools gives;
+      a large PSB loads with memory bounded by strips, not by the image.
+- [ ] **S7.4** Saver: an image as a one-layer PSD or PSB with its composite, the image whole in
+      memory; RLE, or ZIP through zlib.
+      *Done when:* psd-tools and GIMP open what it writes, and the loader reads it back the same.
+- [ ] **S7.5** Row provider (`W6`): a layer's or the composite's rows asked from a callback instead
+      of an `rgba` pointer, twice with RLE or ZIP (sizing, then writing), so it must be
+      deterministic, as libvips pipelines are. The saver then streams.
+      *Done when:* the saver writes an image larger than the memory it is given, the bytes the
+      same as from memory.
 
 ## 8. Test quality
+
+Deferred: lines are at 100 % and branches near 97 %, so it waits for a quiet moment, with any
+release.
 
 - [ ] **S8.1** Branch coverage of compound conditions: each operand of an `&&` / `||` taken on its
       own, where today only the main path is tested. The list as gcovr gives it (CI's
@@ -402,8 +480,7 @@ Large cases. Each would start with a *design* step, and only when a real consume
 
 - The composed composite learning blend modes, masks, clipping or groups: a supplied composite
   is the way to get them right.
-- Streaming parser without a whole blob (`R9`).
-- Row provider for pixels not in memory (`W6`); layer-at-a-time producer (`W8`).
+- Layer-at-a-time producer (`W8`); the row provider (`W6`) is S7.5.
 - Parallel encoding split API (`W9`).
 - Segment output for zero-copy saves (`E3`).
 - In-place patching of fixed-size fields.
