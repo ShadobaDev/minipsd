@@ -694,16 +694,21 @@ static int mpsd__chan_open(const minipsd_reader *r, minipsd_bytes c, uint32_t wi
     }
 }
 
-/* A ZIP channel inflated whole into opts->scratch, its prediction undone (byte sums at 8 bits,
-   big-endian sample sums at 16), so its rows are raw ones from there on. */
-static int mpsd__chan_inflate(mpsd__chan *ch, uint32_t width, uint32_t height, const minipsd_decode_opts *opts)
+/* A ZIP channel inflated whole into its part of opts->scratch, at, its prediction undone (byte sums
+   at 8 bits, big-endian sample sums at 16), so its rows are raw ones from there on; with
+   scratch_kept they are there already. */
+static int mpsd__chan_inflate(mpsd__chan *ch, uint32_t width, uint32_t height, const minipsd_decode_opts *opts,
+                              uint8_t *at)
 {
-    const size_t size = (size_t)width * height << ch->wide;   /* chan_open checked the scratch holds it */
-    uint8_t     *row;
-    uint32_t     x, y;
-    if (!ch->stream) return MINIPSD_OK;                        /* not ZIP: opts may be NULL */
-    row = opts->scratch;
-    if (opts->inflate(opts->inflate_user, ch->stream, ch->stream_size, opts->scratch, size)) return MINIPSD_ERR_FORMAT;
+    const size_t size = (size_t)width * height << ch->wide;   /* the caller checked the scratch holds it */
+    const uint8_t *stream = ch->stream;
+    uint8_t       *row = at;
+    uint32_t       x, y;
+    if (!stream) return MINIPSD_OK;                            /* not ZIP: opts may be NULL */
+    ch->rows   = at;
+    ch->stream = NULL;
+    if (opts->scratch_kept) return MINIPSD_OK;
+    if (opts->inflate(opts->inflate_user, stream, ch->stream_size, at, size)) return MINIPSD_ERR_FORMAT;
     for (y = 0; ch->predicted && y < height; ++y, row += (size_t)width << ch->wide)
         for (x = 1; x < width; ++x) {
             uint8_t *s = row + ((size_t)x << ch->wide);
@@ -715,8 +720,6 @@ static int mpsd__chan_inflate(mpsd__chan *ch, uint32_t width, uint32_t height, c
                 s[0] = (uint8_t)(s[0] + s[-1]);
             }
         }
-    ch->rows   = opts->scratch;
-    ch->stream = NULL;
     return MINIPSD_OK;
 }
 
@@ -750,7 +753,8 @@ MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view 
     mpsd__chan ch[MPSD__RGBA];
     uint64_t   short_end = 0;
     uint32_t   width, height, y0, rows;
-    int        k, rc, wide = mpsd__opts_wide(opts);
+    uint8_t   *part = opts ? opts->scratch : NULL;            /* where the next ZIP channel goes */
+    int        k, rc, zip, zips = 0, apart = 0, wide = mpsd__opts_wide(opts);
     if (!r || !layer || !target || !r->ready || wide < 0) return MINIPSD_ERR_ARG;
     width  = (uint32_t)((int64_t)layer->right - layer->left);    /* next_layer checked the order */
     height = (uint32_t)((int64_t)layer->bottom - layer->top);
@@ -777,6 +781,13 @@ MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view 
         if (!target->channel[k].data || layer->channel[k].size == 0) continue;
         rc = mpsd__chan_open(r, layer->channel[k], width, height, opts, &ch[k]);
         if (rc != MINIPSD_OK) return rc;
+        zips += ch[k].stream != NULL;
+    }
+    /* Each ZIP channel its own part of the scratch when it has room for all (one does: chan_open
+       checked), else all in one; scratch_kept needs the parts the previous call filled. */
+    if (zips) {
+        apart = opts->scratch_size / ((uint64_t)width * height << r->wide) >= (uint64_t)zips;
+        if (opts->scratch_kept && !apart) return MINIPSD_ERR_ARG;
     }
 
     for (k = 0; k < MPSD__RGBA; ++k) {
@@ -786,7 +797,9 @@ MINIPSDDEF int minipsd_decode_layer(minipsd_reader *r, const minipsd_layer_view 
             mpsd__opaque(pl, width, rows, r->wide);
             continue;
         }
-        rc = mpsd__chan_inflate(&ch[k], width, height, opts);
+        zip = ch[k].stream != NULL;
+        rc  = mpsd__chan_inflate(&ch[k], width, height, opts, part);
+        if (zip && apart) part += (size_t)width * height << r->wide;
         if (rc == MINIPSD_OK) rc = mpsd__chan_rows(&ch[k], width, y0, rows, pl);
         if (rc != MINIPSD_OK) return rc;
     }
@@ -821,7 +834,7 @@ MINIPSDDEF int minipsd_decode_mask(minipsd_reader *r, const minipsd_layer_view *
         return MINIPSD_ERR_SHORT;
     }
     rc = mpsd__chan_open(r, c, width, height, opts, &ch);
-    if (rc == MINIPSD_OK) rc = mpsd__chan_inflate(&ch, width, height, opts);
+    if (rc == MINIPSD_OK) rc = mpsd__chan_inflate(&ch, width, height, opts, opts ? opts->scratch : NULL);
     return rc != MINIPSD_OK ? rc : mpsd__chan_rows(&ch, width, y0, rows, plane);
 }
 

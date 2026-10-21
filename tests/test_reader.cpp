@@ -1321,11 +1321,39 @@ TEST(MinipsdReaderTest, ZipChannelsDecodeThroughTheCallersInflate)
         ASSERT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, &opts), MINIPSD_OK);
         EXPECT_EQ(band, Bytes(z.rgba.begin() + std::ptrdiff_t(band.size()), z.rgba.end()));
 
+        // Bands of one row over a scratch of every channel: the first inflates them, each in its
+        // own part, the next take them from there.
+        opts.scratch_kept = 1;
+        EXPECT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, &opts), MINIPSD_ERR_ARG) << "kept, but one channel's room shares one part";
+        Bytes all(scratch.size() * 4), bands(z.rgba.size(), 0xEE);
+        opts.scratch = all.data();
+        opts.scratch_size = all.size();
+        calls = 0;
+        for (std::uint32_t y = 0; y < h; ++y) {
+            t = targetOf(band, w, depth);
+            opts.y_first = y;
+            opts.scratch_kept = y > 0;
+            ASSERT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, &opts), MINIPSD_OK);
+            std::copy(band.begin(), band.end(), bands.begin() + std::ptrdiff_t(y * band.size()));
+        }
+        EXPECT_EQ(bands, z.rgba);
+        EXPECT_EQ(calls, 4) << "one inflate a channel, not one a band";
+        opts.scratch = scratch.data();
+        opts.scratch_size = scratch.size();
+        opts.scratch_kept = 0;
+
         Bytes mask(std::size_t(w) * h * bytes, 0xEE);
         const minipsd_plane plane{mask.data(), static_cast<std::ptrdiff_t>(bytes), static_cast<std::ptrdiff_t>(w * bytes)};
         opts.y_first = opts.y_count = 0;
         ASSERT_EQ(minipsd_decode_mask(l.o.r, &l.v, &plane, &opts), MINIPSD_OK);
         EXPECT_EQ(mask, z.red);
+        std::fill(mask.begin(), mask.end(), 0xEE);
+        opts.scratch_kept = 1;
+        calls = 0;
+        ASSERT_EQ(minipsd_decode_mask(l.o.r, &l.v, &plane, &opts), MINIPSD_OK);
+        EXPECT_EQ(mask, z.red) << "the mask kept from the call before";
+        EXPECT_EQ(calls, 0);
+        opts.scratch_kept = 0;
 
         // Refused before a sample is written: no room to inflate into.
         Bytes untouched(z.rgba.size(), 0xEE);

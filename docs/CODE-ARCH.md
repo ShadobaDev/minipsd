@@ -349,8 +349,10 @@ typedef struct minipsd_decode_opts {
     int      depth;             /* the target's samples: 0 or 8, or 16; the file's */
     minipsd_inflate_fn inflate; /* ZIP channels: the caller's inflate, NULL: unsupported */
     void    *inflate_user;
-    uint8_t *scratch;           /* where a ZIP channel is inflated whole: one channel */
+    uint8_t *scratch;           /* where a ZIP channel is inflated whole: one channel, or a
+                                   part each when it has room for all */
     size_t   scratch_size;
+    int      scratch_kept;      /* bands: the parts still hold this layer's channels */
 } minipsd_decode_opts;           /* NULL opts: the whole image, 8-bit, un-matted */
 ```
 

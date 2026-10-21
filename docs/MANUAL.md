@@ -509,6 +509,20 @@ deep.scratch_size = (size_t)w * h * 2;
 rc = minipsd_decode_layer(r, &layer, &t, &deep);
 ```
 
+A channel is inflated whole even for a band, so decoding in strips would inflate it once a strip.
+Give a scratch of every channel instead, and from the second strip on say that it is still there:
+
+```c
+deep.scratch      = malloc((size_t)w * h * 2 * 4);   /* R, G, B, A, each its own part */
+deep.scratch_size = (size_t)w * h * 2 * 4;
+for (y = 0; y < h; y += 64) {
+    deep.y_first      = y;
+    deep.y_count      = h - y < 64 ? h - y : 64;
+    deep.scratch_kept = y > 0;    /* same layer, scratch and channels as the call before */
+    rc = minipsd_decode_layer(r, &layer, &strip, &deep);
+}
+```
+
 `minipsd_read` takes the same function in `minipsd_read_opts.inflate` and keeps the scratch in its
 own block.
 
