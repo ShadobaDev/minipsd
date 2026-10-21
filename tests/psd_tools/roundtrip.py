@@ -16,8 +16,8 @@ files read decoded are written back as ZIP with prediction, as Photoshop writes 
 Each of those also goes into the other format (PSD as PSB, PSB as PSD), its kept content
 translated, and must read back the same.
 
-And it reads every PSB of psd-tools' set through minipsd's reader: each layer and the composite
-decode to what psd-tools decompresses from the same file.
+And it reads every file of psd-tools' set through minipsd's reader, every colour mode and depth,
+PSD and PSB: each layer and the composite decode to what psd-tools decompresses from the same file.
 
 Usage: roundtrip.py <minipsd shared library> <output directory> [<psd-tools' psd_files directory>]
 
@@ -123,13 +123,16 @@ class Plane(ctypes.Structure):
 
 
 class Target(ctypes.Structure):
-    _fields_ = [("channel", Plane * 4)]
+    _fields_ = [("channel", Plane * 5)]
+
+
+PLANES = 5   # MINIPSD_PLANES
 
 
 class DecodeOpts(ctypes.Structure):
     _fields_ = [("y_first", ctypes.c_uint32), ("y_count", ctypes.c_uint32), ("keep_matte", ctypes.c_int),
                 ("depth", ctypes.c_int), ("inflate", INFLATE_FN), ("inflate_user", ctypes.c_void_p),
-                ("scratch", ctypes.c_void_p), ("scratch_size", ctypes.c_size_t)]
+                ("scratch", ctypes.c_void_p), ("scratch_size", ctypes.c_size_t), ("scratch_kept", ctypes.c_int)]
 
 
 # --- the documents --------------------------------------------------------------------------------
@@ -740,26 +743,40 @@ MINIPSD_MORE, ZIP = 1, (2, 3)
 VIEW_BYTES = 1024   # room for a minipsd_layer_view, opaque here but for its rectangle, which comes first
 
 
-def target(buffer, width, sample):
-    """Interleaved RGBA in buffer, `sample` bytes a sample."""
+def target(buffer, width, sample, planes):
+    """planes samples a pixel, interleaved in buffer, `sample` bytes each; the other planes NULL."""
     t = Target()
-    for k in range(4):
-        t.channel[k] = Plane(ctypes.addressof(buffer) + k * sample, 4 * sample, 4 * sample * width)
+    for k in range(planes):
+        t.channel[k] = Plane(ctypes.addressof(buffer) + k * sample, planes * sample, planes * sample * width)
     return t
 
 
 def interleaved(planes, width, height, depth):
-    """psd-tools' planes (big-endian samples, None for an absent transparency) as host-order RGBA."""
+    """psd-tools' planes as the file stores them (None for an absent transparency) as minipsd gives
+    them: host-order samples, a float at 32 bits, a byte of 0 or 1 (1 black) at 1 bit."""
     import numpy as np
-    big = np.dtype(">u2") if depth == 16 else np.dtype("u1")
-    full = 65535 if depth == 16 else 255
+    if depth == 1:
+        row = (width + 7) // 8
+        arrays = [np.unpackbits(np.frombuffer(p, np.uint8)[:row * height].reshape(height, row), axis=1, count=width).ravel()
+                  if p is not None else np.ones(width * height, np.uint8) for p in planes]
+        return np.stack(arrays, axis=-1).tobytes()
+    big = np.dtype({8: "u1", 16: ">u2", 32: ">f4"}[depth])
+    full = {8: 255, 16: 65535, 32: 1.0}[depth]
     arrays = [np.frombuffer(p, big)[:width * height] if p is not None else np.full(width * height, full, big)
               for p in planes]
     return np.stack(arrays, axis=-1).astype(big.newbyteorder("=")).tobytes()
 
 
-def check_psb(lib, path):
-    """The reader over a PSB (minipsd_read refuses one until a document of it can be written)."""
+def color_channels(header, alpha):
+    """The mode's colour channels, as minipsd_info.color_channels: multichannel's are all but the
+    composite's transparency."""
+    return {3: 3, 9: 3, 4: 4, 7: header.channels - alpha}.get(int(header.color_mode), 1)
+
+
+def check_decoded(lib, path):
+    """The reader over a file of any mode and depth: each layer and the composite (as stored, with
+    its matte) decode to what psd-tools decompresses from the same file, the mode's colour channels
+    and transparency, as many as a target holds."""
     lib.minipsd_reader_init.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
                                         ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p]
     lib.minipsd_reader_next_layer.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
@@ -774,14 +791,19 @@ def check_psb(lib, path):
     rc = lib.minipsd_reader_init(ctypes.byref(reader), buf, len(data), workspace, need.value, None, info)
     if rc != MINIPSD_OK:
         return [f"{path.name}: minipsd_reader_init returned {rc}"]
-    record = PSDImage.open(path)._record
+    psd = PSDImage.open(path)
+    record = psd._record
     header, errors = record.header, []
     depth, version = header.depth, header.version
-    rgb = depth in (8, 16) and header.color_mode == 3
-    sample = depth // 8
+    sample = max(depth // 8, 1)
     opts = DecodeOpts(0, 0, 1, depth, inflate)
     layer_info = record._get_layer_info()
     records = layer_info.layer_records if layer_info else []
+    merged = any("SAVING_MERGED_TRANSPARENCY" in str(k) for k in (psd.tagged_blocks.keys() if psd.tagged_blocks else []))
+    alpha = int(bool(layer_info is not None and layer_info.layer_count < 0) or merged)
+    colors = color_channels(header, alpha)
+    planes = min(colors + 1, PLANES)
+    ids = [c for c in range(min(colors, PLANES))] + ([-1] if colors < PLANES else [])
     for i, rec in enumerate(records):
         view = ctypes.create_string_buffer(VIEW_BYTES)
         rc = lib.minipsd_reader_next_layer(reader, view)
@@ -793,24 +815,27 @@ def check_psb(lib, path):
             errors.append(f"{path.name}: layer {i}: rectangle {(top, left, bottom, right)}")
         w, h = right - left, bottom - top
         channels = {c.id: d for c, d in zip(rec.channel_info, layer_info.channel_image_data[i])}
-        if not rgb or w * h == 0:
+        if w * h == 0:
             continue
-        scratch = ctypes.create_string_buffer(w * h * sample)   # one channel, for ZIP
+        scratch = ctypes.create_string_buffer(((w * depth + 7) // 8) * h)   # one channel, for ZIP
         opts.scratch, opts.scratch_size = ctypes.addressof(scratch), len(scratch)
-        out = ctypes.create_string_buffer(w * h * 4 * sample)
-        t = target(out, w, sample)
+        out = ctypes.create_string_buffer(w * h * planes * sample)
+        t = target(out, w, sample, planes)
         rc = lib.minipsd_decode_layer(reader, view, ctypes.byref(t), ctypes.byref(opts))
-        planes = [channels[c].get_data(w, h, depth, version) if c in channels else None for c in (0, 1, 2, -1)]
-        if rc != MINIPSD_OK or out.raw != interleaved(planes, w, h, depth):
+        want = [channels[c].get_data(w, h, depth, version) if c in channels else None for c in ids]
+        if rc != MINIPSD_OK or out.raw != interleaved(want, w, h, depth):
             errors.append(f"{path.name}: layer {i}: decodes differently from psd-tools (rc {rc})")
-    if rgb and record.image_data.compression not in ZIP:
+    if record.image_data.compression not in ZIP:
         w, h = header.width, header.height
-        out = ctypes.create_string_buffer(w * h * 4 * sample)
-        t = target(out, w, sample)
+        out = ctypes.create_string_buffer(w * h * planes * sample)
+        t = target(out, w, sample, planes)
         rc = lib.minipsd_decode_composite(reader, ctypes.byref(t), ctypes.byref(opts))
-        planes = record.image_data.get_data(header)
-        alpha = planes[3] if layer_info is not None and layer_info.layer_count < 0 and len(planes) > 3 else None
-        if rc != MINIPSD_OK or out.raw != interleaved(planes[:3] + [alpha], w, h, depth):
+        try:
+            stored = record.image_data.get_data(header)
+        except ValueError:   # a malformed file (the reader test's knownBad): minipsd must refuse it too
+            return errors + ([f"{path.name}: psd-tools refuses the composite, minipsd decodes it"] if rc == MINIPSD_OK else [])
+        want = [stored[k] if k < colors else stored[colors] if alpha and colors < len(stored) else None for k in range(planes)]
+        if rc != MINIPSD_OK or out.raw != interleaved(want, w, h, depth):
             errors.append(f"{path.name}: the composite decodes differently from psd-tools (rc {rc})")
     return errors
 
@@ -901,10 +926,10 @@ def main():
         print(f"{kind} {name} (lost {lost}): {'FAILED' if found else 'ok'}")
     if files:
         errors += check_every_file(lib, files, out)
-    for path in sorted(files.rglob("*.psb")) if files else []:
-        found = check_psb(lib, path)
+    for path in sorted(list(files.rglob("*.psd")) + list(files.rglob("*.psb"))) if files else []:
+        found = check_decoded(lib, path)
         errors += found
-        print(f"psb {path.name}: {'FAILED' if found else 'ok'}")
+        print(f"decoded {path.relative_to(files)}: {'FAILED' if found else 'ok'}")
     for e in errors:
         print(e)
     return 1 if errors else 0

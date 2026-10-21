@@ -475,9 +475,10 @@ which records open and close them.
 
 Pixels come as stored: straight alpha, the layer's opacity and visibility left in the view. A
 `minipsd_decode_opts` with `y_first` and `y_count` decodes a band of rows into the target's first
-row, so a huge layer can go through a small buffer in strips. 8- and 16-bit RGB files decode
-(`MINIPSD_ERR_UNSUPPORTED` otherwise; every other file is still described). A 16-bit file decodes
-into 16-bit samples only, `uint16_t` in host order; say so in the options:
+row, so a huge layer can go through a small buffer in strips. Every colour mode and depth
+decodes, as stored: no colour is converted, the palette (`info.color_data`) or the ICC profile
+says what samples mean. A 16-bit file decodes into 16-bit samples only, `uint16_t` in host order;
+say so in the options:
 
 ```c
 uint16_t           *rgba16 = malloc((size_t)w * h * 4 * sizeof *rgba16);

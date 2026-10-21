@@ -51,13 +51,12 @@ fetch them from a pinned psd-tools release, verified by its SHA-256.
 
 ## How to read the results
 
-- **decoded:** 8- or 16-bit RGB. The header, resources and every layer record are read, and
-  every layer's pixels and the composite are decoded. This is the subset minipsd supports today.
-- **described:** another colour mode or depth, or ZIP-compressed layers (Photoshop's 16-bit
-  ones). Everything but those pixels is read: size, colour mode, depth, dpi, ICC profile,
-  resources, and every layer with its name, rectangle, opacity, visibility, blend mode and blocks.
-  Decoding the pixels returns `MINIPSD_ERR_UNSUPPORTED`. ZIP channels decode through the caller's
-  inflate (`minipsd_decode_opts.inflate`), which `read_file` does not give, since minipsd
+- **decoded:** any colour mode and depth. The header, resources and every layer record are
+  read, and every layer's pixels and the composite are decoded, as stored: no colour is converted.
+- **described:** ZIP-compressed layers (Photoshop's 16- and 32-bit ones). Everything but those
+  pixels is read: size, colour mode, depth, dpi, ICC profile, resources, and every layer with its
+  name, rectangle, opacity, visibility, blend mode and blocks. ZIP channels decode through the
+  caller's inflate (`minipsd_decode_opts.inflate`), which `read_file` does not give, since minipsd
   implements no deflate; they are also copied when the file is read as a document with `stored`
   and written back. This is a choice of scope ([ROADMAP.md](ROADMAP.md), stage 6), not a failure.
 - **refused:** the reader does not open the file, with the reason.
@@ -192,7 +191,7 @@ def report(files, source):
     out.append("|---|---|---|")
     meaning = {
         "decoded": "every layer and the composite decoded to pixels",
-        "described": "header, resources and layers read; pixels not decoded: outside 8- and 16-bit RGB, or ZIP without an inflate",
+        "described": "header, resources and layers read; ZIP-compressed pixels not decoded without an inflate",
         "refused": "the reader does not open the file (see below)",
         "failed": "malformed, or a reader bug (see below)",
     }
@@ -249,7 +248,7 @@ def report(files, source):
                  sum(1 for f in files if any(k != "norm" for k in f.blends))))
     rows.append(("Layer groups", sum(f.groups for f in files), sum(1 for f in files if f.groups)))
     rows.append(("Layer masks", sum(f.masks for f in files), sum(1 for f in files if f.masks)))
-    rows.append(("Other channels, not read (alpha, spot, CMYK's black)", sum(f.others for f in files), sum(1 for f in files if f.others)))
+    rows.append(("Other channels, not read (alpha, spot)", sum(f.others for f in files), sum(1 for f in files if f.others)))
     for label, _ in FEATURES:
         rows.append((label, sum(f.features[label] for f in files), sum(1 for f in files if f.features[label])))
     for label, layers, nfiles in rows:

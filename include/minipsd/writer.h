@@ -23,6 +23,7 @@
 
 #include "detail/bytes.h"
 #include "detail/format.h"
+#include "detail/samples.h"
 #include "detail/utf.h"
 #include "detail/packbits.h"
 #include "detail/composite.h"
@@ -898,16 +899,7 @@ static int mpsd__zip_channel(minipsd_writer *w, size_t i, int k)
         const uint8_t *row = src.samples + y * src.width * src.step;
         uint8_t       *out = w->zip_plane + y * bytes;
         for (x = 0; x < bytes; ++x) out[x] = row[mpsd__at(x, (ptrdiff_t)src.step, wide)];
-        for (x = src.width; d->compression == MINIPSD_ZIP_PREDICTED && x-- > 1;) {   /* right to left */
-            uint8_t *s = out + (x << wide);
-            if (wide) {
-                const uint32_t v = mpsd__get16(s) - mpsd__get16(s - 2);
-                s[0] = (uint8_t)(v >> 8);
-                s[1] = (uint8_t)v;
-            } else {
-                s[0] = (uint8_t)(s[0] - s[-1]);
-            }
-        }
+        if (d->compression == MINIPSD_ZIP_PREDICTED) mpsd__predict(out, src.width, wide ? 16u : 8u);
     }
     if (w->deflate(w->deflate_user, w->zip_plane, bytes * src.height, w->zip_out, &size) || size > w->zip_room)
         return MINIPSD_ERR_WRITE;

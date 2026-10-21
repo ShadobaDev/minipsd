@@ -1282,13 +1282,145 @@ TEST(MinipsdReaderTest, PackBitsRowsMayCarryNoOpsAndPadding)
     for (std::size_t i = 0; i < 8; ++i) EXPECT_EQ(out[i * 4], red[i]) << i;
 }
 
-TEST(MinipsdReaderTest, OnlyEightBitRgbAndUncompressedOrPackBitsDecode)
+namespace {
+
+// A float as the file stores it: IEEE 754, big-endian.
+Bytes floatBytes(float f)
 {
-    Bytes out(16, 0xEE);
-    for (const auto &[depth, mode] : {std::pair{16u, 3u}, std::pair{1u, 3u}, std::pair{8u, 4u}, std::pair{8u, 1u}}) {
-        OneLayer l(simpleRec(), depth, mode);
-        EXPECT_EQ(l.decode(out), MINIPSD_ERR_UNSUPPORTED) << depth << " bits, mode " << mode;
+    std::uint32_t u = 0;
+    std::memcpy(&u, &f, 4);
+    return Out().u32(u).b;
+}
+
+// A 32-bit channel of w-wide rows: raw, or ZIP with each row shuffled (every sample's first byte,
+// then every second, ...) and made byte differences, as Photoshop predicts its 32-bit layers.
+Chan floatChan(int id, const std::vector<float> &samples, std::uint32_t w, bool zip)
+{
+    Out raw;
+    for (float f : samples) raw.raw(floatBytes(f));
+    if (!zip) return Chan{id, Out().u16(0).raw(raw.b).b};
+    Bytes rows(raw.b.size());
+    for (std::size_t y = 0; y < samples.size() / w; ++y) {
+        std::uint8_t *row = rows.data() + y * w * 4;
+        for (std::size_t i = 0; i < std::size_t(w) * 4; ++i) row[(i % 4) * w + i / 4] = raw.b[y * w * 4 + i];
+        for (std::size_t i = std::size_t(w) * 4; i-- > 1;) row[i] = static_cast<std::uint8_t>(row[i] - row[i - 1]);
     }
+    Bytes z(zlib_stored_deflate(rows.data(), rows.size(), nullptr));
+    zlib_stored_deflate(rows.data(), rows.size(), z.data());
+    return Chan{id, Out().u16(3).raw(z).b};
+}
+
+std::vector<float> floatsOf(const Bytes &b)
+{
+    std::vector<float> out(b.size() / 4);
+    std::memcpy(out.data(), b.data(), b.size());
+    return out;
+}
+
+} // namespace
+
+TEST(MinipsdReaderTest, EveryModeAndDepthDecodesItsOwnChannels)
+{
+    // Grey: grey, then transparency.  An RGBA target's planes past the mode's two are not read.
+    {
+        Rec r;
+        r.right = 2; r.bottom = 1;
+        r.channels = {chan(-1, 4, 3), chan(0, 4, 7)};
+        OneLayer l(r, 8, 1);
+        EXPECT_EQ(l.o.info.color_channels, 1);
+        Bytes ga(4, 0xEE), rgba(8, 0xEE);
+        minipsd_target t;
+        minipsd_target_interleaved(&t, ga.data(), 4, 2, 8);
+        ASSERT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, nullptr), MINIPSD_OK);
+        EXPECT_EQ(ga, (Bytes{7, 3, 7, 3}));
+        ASSERT_EQ(l.decode(rgba), MINIPSD_OK);
+        EXPECT_EQ(rgba, (Bytes{7, 3, 0xEE, 0xEE, 7, 3, 0xEE, 0xEE}));
+        const minipsd_decode_opts deep{0, 0, 0, 16};
+        EXPECT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, &deep), MINIPSD_ERR_UNSUPPORTED) << "another depth than the file's";
+    }
+    // CMYK: C, M, Y, K, then transparency, the fifth plane.
+    {
+        Rec r;
+        r.right = 1; r.bottom = 1;
+        r.channels = {chan(-1, 3, 9), chan(0, 3, 1), chan(1, 3, 2), chan(2, 3, 3), chan(3, 3, 4)};
+        OneLayer l(r, 8, 4);
+        EXPECT_EQ(l.o.info.color_channels, 4);
+        EXPECT_EQ(l.v.other_channels, 0);
+        Bytes cmyka(5, 0xEE);
+        minipsd_target t;
+        minipsd_target_interleaved(&t, cmyka.data(), 5, 5, 8);
+        ASSERT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, nullptr), MINIPSD_OK);
+        EXPECT_EQ(cmyka, (Bytes{1, 2, 3, 4, 9}));
+    }
+    // 32 bits: floats in host order, ZIP-predicted rows unshuffled, raw ones and opaque 1.0.
+    {
+        constexpr std::uint32_t w = 3, h = 2;
+        const std::vector<float> red = {0.0f, 0.25f, 1.0f, 0.5f, 1.0000098f, -0.125f}, green = {1, 2, 3, 4, 5, 6};
+        Rec r;
+        r.right = w; r.bottom = h;
+        r.channels = {floatChan(0, red, w, true), floatChan(1, green, w, false), floatChan(2, red, w, true)};
+        OneLayer l(r, 32, 3);
+        Bytes out(std::size_t(w) * h * 16, 0xEE), scratch(std::size_t(w) * h * 4);
+        minipsd_decode_opts opts{0, 0, 0, 32, zlib_stored_inflate, nullptr, scratch.data(), scratch.size()};
+        minipsd_target t;
+        minipsd_target_interleaved(&t, out.data(), std::size_t(w) * 16, 4, 32);
+        ASSERT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, &opts), MINIPSD_OK);
+        const std::vector<float> got = floatsOf(out);
+        for (std::size_t i = 0; i < red.size(); ++i) {
+            EXPECT_EQ(got[i * 4 + 0], red[i]) << i;
+            EXPECT_EQ(got[i * 4 + 1], green[i]) << i;
+            EXPECT_EQ(got[i * 4 + 2], red[i]) << i;
+            EXPECT_EQ(got[i * 4 + 3], 1.0f) << "no transparency: opaque";
+        }
+    }
+    // A 32-bit RGB composite: the matte undone, c = 1 - (1 - s) / a.
+    {
+        Spec s;
+        s.depth = 32;
+        s.width = 1; s.height = 1;
+        Rec empty;
+        empty.channels = {chan(-1, 2, 0), chan(0, 2, 0), chan(1, 2, 0), chan(2, 2, 0)};
+        s.layers = {empty};
+        s.count = -1;
+        s.image = Out().u16(0).raw(floatBytes(0.75f)).raw(floatBytes(1.0f)).raw(floatBytes(0.5f)).raw(floatBytes(0.5f)).b;
+        Open o(build(s).bytes);
+        ASSERT_EQ(o.rc, MINIPSD_OK);
+        Bytes out(16, 0xEE);
+        minipsd_target t;
+        minipsd_target_interleaved(&t, out.data(), 16, 4, 32);
+        const minipsd_decode_opts opts{0, 0, 0, 32};
+        ASSERT_EQ(minipsd_decode_composite(o.r, &t, &opts), MINIPSD_OK);
+        EXPECT_EQ(floatsOf(out), (std::vector<float>{0.5f, 1.0f, 0.0f, 0.5f}));
+    }
+    // 1 bit: rows packed, eight pixels a byte, padded; a byte of 0 or 1 each (1 black), raw and RLE.
+    {
+        constexpr std::uint32_t w = 11;
+        const Bytes packed = {0xA5, 0xE0, 0x01, 0x3F};   // two rows of two bytes, the last five bits padding
+        const Bytes bits = {1, 0, 1, 0, 0, 1, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1};
+        for (const Bytes &image : {Out().u16(0).raw(packed).b,
+                                   Out().u16(1).u16(3).u16(3).u8(1).u8(0xA5).u8(0xE0).u8(1).u8(0x01).u8(0x3F).b}) {
+            Spec s;
+            s.mode = 0; s.depth = 1; s.channels = 1;
+            s.width = w; s.height = 2;
+            s.count = 0;
+            s.image = image;
+            Open o(build(s).bytes);
+            ASSERT_EQ(o.rc, MINIPSD_OK);
+            EXPECT_EQ(o.info.color_channels, 1);
+            Bytes out(std::size_t(w) * 2 * 2, 0xEE);   // planar, every other byte: the step is kept
+            const minipsd_plane plane{out.data(), 2, static_cast<std::ptrdiff_t>(w) * 2};
+            minipsd_target t{};
+            t.channel[0] = plane;
+            const minipsd_decode_opts opts{0, 0, 0, 1};
+            ASSERT_EQ(minipsd_decode_composite(o.r, &t, &opts), MINIPSD_OK);
+            for (std::size_t i = 0; i < bits.size(); ++i) {
+                EXPECT_EQ(out[i * 2], bits[i]) << i;
+                EXPECT_EQ(out[i * 2 + 1], 0xEE) << i;
+            }
+        }
+    }
+    // ZIP: without the caller's inflate it is unsupported; predicted at 1 bit, malformed.
+    Bytes out(16, 0xEE);
     for (unsigned zip : {2u, 3u}) {
         Rec r = simpleRec();
         r.channels[1].data[1] = static_cast<std::uint8_t>(zip);   // red, ZIP
@@ -1296,6 +1428,17 @@ TEST(MinipsdReaderTest, OnlyEightBitRgbAndUncompressedOrPackBitsDecode)
         EXPECT_EQ(l.decode(out), MINIPSD_ERR_UNSUPPORTED) << zip << ": without the caller's inflate";
     }
     EXPECT_EQ(out, Bytes(16, 0xEE)) << "untouched";
+    {
+        Rec r;
+        r.right = 8; r.bottom = 1;
+        r.channels = {Chan{0, Out().u16(3).u8(0).b}};
+        OneLayer l(r, 1, 0);
+        Bytes scratch(8);
+        minipsd_decode_opts opts{0, 0, 0, 1, zlib_stored_inflate, nullptr, scratch.data(), scratch.size()};
+        minipsd_target t{};
+        t.channel[0] = minipsd_plane{out.data(), 1, 8};
+        EXPECT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, &opts), MINIPSD_ERR_FORMAT);
+    }
 }
 
 TEST(MinipsdReaderTest, ZipChannelsDecodeThroughTheCallersInflate)
@@ -2111,6 +2254,9 @@ TEST(MinipsdReaderTest, LayersInAGlobalBlock)
     info.u16(static_cast<unsigned>(std::int16_t(-1))).raw(record(simpleRec())).raw(channelData(simpleRec()));
     Bytes layers = info.b;
     layers.resize(layers.size() + (6 - layers.size() % 4) % 4);   // a length of 2 mod 4: padded past it
+    Bytes positive = layers;                                       // a layer count of +1, as Photoshop's
+    positive[0] = 0;
+    positive[1] = 1;
     auto block = [](const char *sig, const char *key, std::uint32_t length, const Bytes &data) {
         Out o;
         o.str(sig).str(key).u32(length).raw(data);
@@ -2129,12 +2275,18 @@ TEST(MinipsdReaderTest, LayersInAGlobalBlock)
         int         rc;
         std::size_t layers;
         Bytes       kept;   // the document's layer tail
+        int         alpha = -1;   // composite_has_alpha; -1: not checked
     };
     const Case cases[] = {
         {"behind another block", cat({mask, patt, block("8BIM", "Lr16", n, layers), pad, patt}), MINIPSD_OK, 1,
          cat({mask, patt, block("8BIM", "Lr16", 0, {}), patt})},
         {"'8B64', 'Lr32', last, its padding missing", cat({mask, block("8B64", "Lr32", n, layers)}), MINIPSD_OK, 1,
-         cat({mask, block("8B64", "Lr32", 0, {})})},
+         cat({mask, block("8B64", "Lr32", 0, {})}), 1},
+        {"a positive count: the composite has no transparency", cat({mask, block("8BIM", "Lr32", n, positive)}), MINIPSD_OK, 1,
+         cat({mask, block("8BIM", "Lr32", 0, {})}), 0},
+        {"a positive count after 'Mt32': transparency, as Photoshop's 32-bit files say it",
+         cat({mask, block("8BIM", "Mt32", 4, {0, 0, 0, 1}), block("8BIM", "Lr32", n, positive)}), MINIPSD_OK, 1,
+         cat({mask, block("8BIM", "Mt32", 4, {0, 0, 0, 1}), block("8BIM", "Lr32", 0, {})}), 1},
         {"empty", cat({mask, block("8BIM", "Lr16", 0, {})}), MINIPSD_OK, 0, {}},
         {"one byte long", cat({mask, block("8BIM", "Lr16", 1, {0, 0, 0, 0})}), MINIPSD_ERR_FORMAT, 0, {}},
         {"not a block", cat({mask, Bytes(12, 'x')}), MINIPSD_OK, 0, {}},
@@ -2152,6 +2304,9 @@ TEST(MinipsdReaderTest, LayersInAGlobalBlock)
         ASSERT_EQ(o.rc, c.rc);
         if (c.rc != MINIPSD_OK) continue;
         EXPECT_EQ(o.info.layer_count, c.layers);
+        if (c.alpha >= 0) {
+            EXPECT_EQ(o.info.composite_has_alpha, c.alpha);
+        }
         minipsd_layer_view v;
         if (c.layers) {
             ASSERT_EQ(minipsd_reader_next_layer(o.r, &v), MINIPSD_MORE);
@@ -2570,13 +2725,17 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
         SCOPED_TRACE(path.string());
         const Bytes file = readFile(path);
 
-        // Whole: every layer and the composite decode, when the file is 8- or 16-bit RGB, but for
-        // ZIP-compressed channels (Photoshop's at 16 bits), which minipsd copies, never decodes.
+        // Whole: every layer and the composite decode, in every mode and depth, but for
+        // ZIP-compressed channels (Photoshop's at 16 and 32 bits), which need the caller's inflate.
+        // The samples are compared with psd-tools' in tests/psd_tools/roundtrip.py.
         Open o(file);
         ASSERT_EQ(o.rc, MINIPSD_OK);
         const int depth = o.info.depth;
         const bool rgb = (depth == 8 || depth == 16) && o.info.color_mode == 3, psb = o.info.format == MINIPSD_PSB;
-        const std::size_t bytes = depth == 16 ? 2 : 1;
+        const std::size_t bytes = depth == 32 ? 4 : depth == 16 ? 2 : 1;
+        const unsigned    planes = std::min(o.info.color_channels + 1u, unsigned(MINIPSD_PLANES));
+        const minipsd_decode_opts asIs{0, 0, 0, depth};
+        minipsd_target t;
         const std::uint32_t w = o.info.width, h = o.info.height;
         std::size_t layers = 0;
         bool otherChannels = o.info.channels > 3u + (o.info.composite_has_alpha ? 1u : 0u), zip = false;
@@ -2596,10 +2755,10 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
             bool zipLayer = false;
             for (const minipsd_bytes &c : v.channel) zipLayer = zipLayer || zipped(c);
             zip = zip || zipLayer || zipped(v.mask.stored);
-            if (!rgb) continue;
             const auto lw = static_cast<std::uint32_t>(v.right - v.left), lh = static_cast<std::uint32_t>(v.bottom - v.top);
-            px.assign(std::size_t(lw) * lh * 4 * bytes, 0);
-            EXPECT_EQ(decodeRgba(o.r, v, lw, px, 0, 0, depth), zipLayer && lw && lh ? MINIPSD_ERR_UNSUPPORTED : MINIPSD_OK)
+            px.assign(std::size_t(lw) * lh * planes * bytes, 0);
+            minipsd_target_interleaved(&t, px.data(), std::size_t(lw) * planes * bytes, planes, depth);
+            EXPECT_EQ(minipsd_decode_layer(o.r, &v, &t, &asIs), zipLayer && lw && lh ? MINIPSD_ERR_UNSUPPORTED : MINIPSD_OK)
                 << "layer " << layers - 1;
         }
         EXPECT_EQ(layers, o.info.layer_count);
@@ -2611,6 +2770,9 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
             EXPECT_EQ(decodeComposite(o.r, w, composite), bad->composite) << bad->why;
             continue;
         }
+        px.assign(std::size_t(w) * h * planes * bytes, 0);
+        minipsd_target_interleaved(&t, px.data(), std::size_t(w) * planes * bytes, planes, depth);
+        EXPECT_EQ(minipsd_decode_composite(o.r, &t, &asIs), MINIPSD_OK) << "the composite, any mode";
         if (rgb) {
             EXPECT_EQ(decodeComposite(o.r, w, composite, 0, 0, 0, depth), MINIPSD_OK);
             EXPECT_EQ(decodeComposite(o.r, w, stored, 0, 0, 1, depth), MINIPSD_OK);

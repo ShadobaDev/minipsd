@@ -95,6 +95,8 @@ include/
     read.h                     minipsd_read: a whole file into one standalone document, on the reader
     detail/
       bytes.h                  big-endian put/get on uint8_t pointers, bounds-checked cursor
+      samples.h                samples per colour mode and depth: a mode's colour channels, row
+                               bytes, a stored byte's place in memory, ZIP prediction, 1-bit rows
       utf.h                    UTF-8 <-> UTF-16 for layer names
       packbits.h               PackBits encode, decode, size bound; strided source and target
       composite.h              blending one row "over", white matte and un-matte
@@ -299,7 +301,7 @@ typedef struct minipsd_plane {
     ptrdiff_t row_step;    /* bytes from a row to the next; may be negative (bottom-up) */
 } minipsd_plane;
 
-typedef struct minipsd_target { minipsd_plane channel[4]; } minipsd_target;   /* R, G, B, A */
+typedef struct minipsd_target { minipsd_plane channel[MINIPSD_PLANES]; } minipsd_target;   /* colours, then A */
 ```
 
 - **One shape covers every layout.**
@@ -308,15 +310,22 @@ typedef struct minipsd_target { minipsd_plane channel[4]; } minipsd_target;   /*
   - BGRA: swap two pointers. Planar: four buffers, `pixel_step` 1.
   - A sub-rectangle of a bigger canvas: offset `data`; the width and height come from the layer
     or the band, never from the target.
+- **Planes follow the mode.** The mode's colour channels come first, in file order, then
+  transparency at `minipsd_info.color_channels`: R, G, B, A in RGB (`MINIPSD_CH_*`), grey and A,
+  C, M, Y, K and A. Five planes (`MINIPSD_PLANES`) hold CMYK with transparency; planes past the
+  mode's are not read, so an RGBA target over a grey file gets grey and A in its first two.
+  `minipsd_target_interleaved` fills any count of interleaved planes.
 - **A `NULL` plane is skipped.** So a caller that wants RGB only, or one channel, leaves the
-  others `NULL`. If the file has no alpha and the target has an `A` plane, it is filled with 255.
+  others `NULL`. If the file has no alpha and the target has an `A` plane, it is filled with the
+  full sample (255, 65535, 1.0).
 - **The caller guarantees the memory**: the library cannot see the size of a buffer, so it writes
   `width * rows` samples per non-`NULL` plane and nothing else. `info`, the layer view and the
   band tell the caller how big that is before it allocates.
-- **Samples are of the file's depth**, 8 or 16 bits: `minipsd_decode_opts.depth` says which the
-  caller expects (0 and `NULL` options: 8), and another than the file's is
+- **Samples are of the file's depth**, 1, 8, 16 or 32 bits: `minipsd_decode_opts.depth` says
+  which the caller expects (0 and `NULL` options: 8), and another than the file's is
   `MINIPSD_ERR_UNSUPPORTED`; there is no conversion. A 16-bit sample is a `uint16_t` in host
-  order; steps count bytes either way, and `minipsd_target_rgba16` fills interleaved 16-bit RGBA.
+  order, a 32-bit one a `float`, a 1-bit one a byte of 0 or 1 (1 black, as stored); steps count
+  bytes, and `minipsd_target_rgba16` fills interleaved 16-bit RGBA.
   The depth sits in the options, not in the target: `minipsd_decode_mask` takes a bare plane, and
   a target filled by `minipsd_target_rgba` would leave a new field of its own undefined. So an
   8-bit caller handed a 16-bit file gets the same `MINIPSD_ERR_UNSUPPORTED` as before 16 bits,
@@ -448,8 +457,10 @@ while ((rc = minipsd_reader_init(&r, buf, have, ws, ws_size, NULL, &info)) == MI
   - A malformed file returns `MINIPSD_ERR_FORMAT`.
   - **What is described, and what is decoded.** `init` and `next_layer` describe any PSD or
     PSB, whatever its colour mode or depth, so a file manager can list a CMYK or 16-bit file
-    (`R1`). Only the pixel decoding is limited to 8- and 16-bit RGB (`MINIPSD_ERR_UNSUPPORTED`,
-    from `decode_*`), as is any feature it does not decode yet. ZIP is decoded through the
+    (`R1`), and decodes their pixels as stored, in every mode and depth, with no colour
+    conversion; a feature it does not decode yet is `MINIPSD_ERR_UNSUPPORTED` from `decode_*`.
+    The rules of samples (a mode's colour channels, row bytes, prediction, 1-bit rows) live in
+    `detail/samples.h`, which the writer shares. ZIP is decoded through the
     caller's inflate (`minipsd_inflate_fn`), into the caller's scratch of one channel, so the
     reader still allocates nothing and implements no deflate; without one it is unsupported.
   - **PSB is a layout, not a feature.** The reader keeps one flag, and every width that depends on

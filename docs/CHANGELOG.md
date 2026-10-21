@@ -15,11 +15,16 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   (`MINIPSD_ERR_SHORT` with `minipsd_reader_needed`); `minipsd_reader_next_resource`,
   `minipsd_reader_next_layer`, `minipsd_layer_name` and `minipsd_layer_next_block` walk its
   resources, layer records and their blocks as views, with no allocation and no copy.
-- `minipsd_decode_layer`: a layer's pixels, or a band of its rows, from an 8- or 16-bit RGB file
-  (raw or PackBits) into caller memory of any layout, described by `minipsd_target`
-  (`minipsd_target_rgba` for interleaved RGBA).
+- `minipsd_decode_layer`: a layer's pixels, or a band of its rows, into caller memory of any
+  layout, described by `minipsd_target` (`minipsd_target_rgba` for interleaved RGBA,
+  `minipsd_target_interleaved` for any mode). Every colour mode and depth decodes as stored, with
+  no colour conversion. A target's planes are the mode's colour channels, then transparency
+  (`minipsd_info.color_channels`, `MINIPSD_PLANES`). Samples are a byte of 0 or 1 at 1 bit, a
+  `float` at 32 bits. The palette or duotone data is `minipsd_info.color_data`.
 - `minipsd_decode_composite`: the merged image, or a band of its rows, un-matted to straight
-  alpha (or as stored, with `keep_matte`).
+  alpha in RGB (or as stored, with `keep_matte`). Photoshop's 16- and 32-bit files mark the
+  composite's transparency with a global `Mtrn`, `Mt16` or `Mt32` block rather than a negative
+  layer count; both count.
 - `examples/read_file.c`: a PSD described layer by layer, every layer and the composite decoded.
 - `examples/hello_write.c` and `examples/hello_read.c`: the shortest programs that write and read
   a PSD, which open a rewritten [MANUAL.md](MANUAL.md): call-order diagrams, a file read in

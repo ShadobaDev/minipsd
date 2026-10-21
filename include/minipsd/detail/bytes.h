@@ -49,7 +49,6 @@ static uint32_t mpsd__get16(const uint8_t *p) { return ((uint32_t)p[0] << 8) | p
 static uint32_t mpsd__get32(const uint8_t *p) { return (mpsd__get16(p) << 16) | mpsd__get16(p + 2); }
 static uint64_t mpsd__get64(const uint8_t *p) { return ((uint64_t)mpsd__get32(p) << 32) | mpsd__get32(p + 4); }
 
-
 /* Four bytes equal to a four-character tag. */
 static int mpsd__tag(const uint8_t *p, const char *tag)
 {
@@ -57,32 +56,6 @@ static int mpsd__tag(const uint8_t *p, const char *tag)
     for (i = 0; i < 4; ++i)
         if (p[i] != (uint8_t)tag[i]) return 0;
     return 1;
-}
-
-/* --- samples: one byte, or (wide) two in host order, a uint16_t --- */
-
-/* Where byte i of a row as the file stores it (big-endian) lies in memory, the samples step bytes
-   apart: a sample's high byte comes first in the file, second in memory on a little-endian host. */
-static ptrdiff_t mpsd__at(size_t i, ptrdiff_t step, unsigned wide)
-{
-    static const uint16_t one = 1;
-    const unsigned lane = wide & *(const uint8_t *)&one;
-    return (ptrdiff_t)(i >> wide) * step + (ptrdiff_t)((i & wide) ^ lane);
-}
-
-static uint32_t mpsd__sample(const uint8_t *p, unsigned wide)
-{
-    uint16_t v;
-    if (!wide) return *p;
-    memcpy(&v, p, 2);
-    return v;
-}
-
-static void mpsd__set_sample(uint8_t *p, unsigned wide, uint32_t v)
-{
-    const uint16_t s = (uint16_t)v;
-    if (wide) memcpy(p, &s, 2);
-    else      *p = (uint8_t)v;
 }
 
 #endif /* MPSD__BYTES_DONE */

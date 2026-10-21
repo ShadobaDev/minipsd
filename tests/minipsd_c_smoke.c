@@ -167,6 +167,10 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
             || minipsd_reader_next_layer(rd, &lv) != MINIPSD_MORE
             || minipsd_decode_layer(rd, &lv, &t, &deep) != MINIPSD_OK || memcmp(got16, px16, sizeof px16) != 0)
             return -111;
+        memset(got16, 0, sizeof got16);   /* the same pixels, through the target of any mode */
+        minipsd_target_interleaved(&t, got16, (size_t)3 * 8, 4, 16);
+        if (minipsd_decode_layer(rd, &lv, &t, &deep) != MINIPSD_OK || memcmp(got16, px16, sizeof px16) != 0)
+            return -115;
     }
     return MINIPSD_OK;
 }

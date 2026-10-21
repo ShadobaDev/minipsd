@@ -70,7 +70,6 @@ static void mpsd__putcount(mpsd__sink *s, uint32_t v, unsigned psb)
 
 #define MPSD__HEADER_SIZE  26
 #define MPSD__MAX_CHANNELS 56   /* in the file, the composite's */
-#define MPSD__MODE_RGB     3
 
 /* The largest width or height a format allows. */
 static uint32_t mpsd__max_side(unsigned psb) { return psb ? MINIPSD_MAX_SIDE_PSB : MINIPSD_MAX_SIDE; }
@@ -154,13 +153,23 @@ static uint64_t mpsd__record_size(uint32_t channels, unsigned psb)
 #define MPSD__MASK_PAD  2
 #define MPSD__REAL_RECT 2         /* where the real rectangle starts in the rest */
 
-/* A layer's channels by id: -1 transparency, 0 1 2 red green blue, -2 the mask, -3 the real mask;
-   other ids are alpha and spot channels.  minipsd keeps them in slots: MINIPSD_CH_*, then the
-   two masks. */
-#define MPSD__RGBA     4          /* the colour channels and transparency; samples a pixel */
+/* A layer's channels by id: -1 transparency, 0 .. colours - 1 the colour channels (0 1 2 red green
+   blue), -2 the mask, -3 the real mask; other ids are alpha and spot channels.  The writer writes
+   RGB's in this order: MINIPSD_CH_*, then the two masks. */
+#define MPSD__RGBA     4          /* RGB's colour channels and transparency; samples a pixel */
 #define MPSD__CH_MASK  4
 #define MPSD__CH_REAL  5
-#define MPSD__CHANNELS 6          /* the most slots a layer has */
+#define MPSD__CHANNELS 6          /* the most channels the writer writes a layer */
+#define MSPD__CH_1BIT 1           /* the 1-bit channel size */
+#define MPSD__CH_8BIT 8           /* the 8-bit channel size */
+#define MPSD__CH_16BIT 16         /* the 16-bit channel size */
+#define MPSD__CH_32BIT 32         /* the 32-bit channel size */
+
+/* The reader keeps a layer's channels in slots: the colour channels, then transparency, as a
+   target's planes (MINIPSD_PLANES), then the two masks. */
+#define MPSD__SLOT_MASK MINIPSD_PLANES
+#define MPSD__SLOT_REAL (MINIPSD_PLANES + 1)
+#define MPSD__SLOTS     (MINIPSD_PLANES + 2)
 
 /* A channel's data, and the composite's: a compression marker, then the rows.  RLE rows follow a
    table of their byte counts, one per row (mpsd__count_size), every channel's in the composite. */
