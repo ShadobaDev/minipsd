@@ -61,7 +61,7 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   bands, a scratch of every channel and `scratch_kept` inflate each channel once, not once a band.
 - The decode calls may run at once on one reader, from any number of threads, each with its own
   target and scratch, when the buffer holds the whole file
-  ([Memory and ownership](SPECIFICATION.md#memory-and-ownership)).
+  ([Threads](SPECIFICATION.md#threads), which says this for every call).
   `minipsd_read_opts` and `minipsd_decode_opts` grow by these fields: a caller that sets
   `stored` or `depth` on an uninitialised struct now passes garbage as `inflate`. Zero the whole
   struct first (`= {0}`, a designated initialiser, or `memset`), as every options struct asks.

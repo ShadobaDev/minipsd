@@ -219,13 +219,61 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
   another document (if large enough).
 - **No global or static mutable state.** Writers and readers in separate threads never interact;
   one workspace serves one writer, or one reader's walk, at a time.
-- **Decoding from several threads.** `minipsd_decode_layer`, `minipsd_decode_mask` and
-  `minipsd_decode_composite` only read the reader, so any number of them may run at once on one
-  reader, beside the one thread that walks it (`minipsd_reader_next_resource`,
-  `minipsd_reader_next_layer`). Each call needs its own target and scratch, and an inflate that is
-  safe to call at once (zlib's `uncompress` is). The exception is `MINIPSD_ERR_SHORT`, which
-  records how far the buffer must reach, so decode at once only when the buffer holds the whole
-  file; over a prefix, one thread decodes. No lock is taken, none is needed.
+- **Decoding from several threads:** the decode calls may run at once on one reader
+  ([Threads](#threads)).
+
+### Threads
+
+minipsd starts no threads and takes no locks. **Thread-safe** below means: may be called from
+several threads at once *on the same object* (the same reader, writer, document, PSD or view).
+**No** means one thread at a time per object; different objects in different threads never
+interact, whatever the table says.
+
+| Function | Thread-safe | Comment |
+|---|---|---|
+| `minipsd_error_string` | yes | returns a constant string |
+| `minipsd_writer_workspace_size` | yes | only reads the document |
+| `minipsd_reader_workspace_size` | yes | a constant |
+| `minipsd_doc_check` | yes | only reads the document |
+| `minipsd_write` | yes | its workspace is its own; `MINIPSD_MALLOC` and the deflate must be thread-safe |
+| `minipsd_writer_init` | no | fills the writer's workspace; several writers of one document at once are fine |
+| `minipsd_writer_fill` | no | advances the writer |
+| `minipsd_writer_total` | yes | reads what `minipsd_writer_init` set; safe beside `minipsd_writer_fill` |
+| `minipsd_reader_init` | no | fills the reader's workspace; several readers of one PSD at once are fine |
+| `minipsd_reader_needed` | yes | reads the reader; after a decode returned `MINIPSD_ERR_SHORT`, call it in that thread |
+| `minipsd_reader_next_resource` | no | advances the reader's walk |
+| `minipsd_reader_next_layer` | no | advances the reader's walk |
+| `minipsd_layer_name` | yes | reads the view; writes only the caller's buffer |
+| `minipsd_layer_next_block` | yes | each thread its own `pos` |
+| `minipsd_layer_blending_range` | yes | reads the view |
+| `minipsd_target_rgba`, `minipsd_target_rgba16`, `minipsd_target_interleaved` | yes | fill only the caller's `minipsd_target` |
+| `minipsd_decode_layer` | yes, with the whole file | each thread its own scratch; may run beside the walk (`next_layer`, `next_resource`) |
+| `minipsd_decode_mask` | yes, with the whole file | as `minipsd_decode_layer` |
+| `minipsd_decode_composite` | yes, with the whole file | as `minipsd_decode_layer` |
+| `minipsd_read_size` | yes | only reads the PSD |
+| `minipsd_read_into` | yes | only reads the PSD; each thread its own block |
+| `minipsd_read` | yes | only reads the PSD; `MINIPSD_MALLOC` and the inflate must be thread-safe |
+| `minipsd_doc_free` | no | frees the document: no thread may still use it |
+
+*With the whole file:* the decode calls write nothing in the reader unless they return
+`MINIPSD_ERR_SHORT`, which records in it how far the buffer must reach. A buffer holding the whole
+file never returns it; over a prefix, decode from one thread.
+
+| Resource | Thread-safe | Comment |
+|---|---|---|
+| the PSD's bytes | yes | only read, by any number of readers and `minipsd_read*` calls |
+| `minipsd_doc` and the pixels it points to | yes | only read, by any number of writers |
+| `minipsd_info`, `minipsd_layer_view`, `minipsd_resource`, `minipsd_block` | yes | views, only read; copy them freely |
+| `minipsd_decode_opts`, `minipsd_target` | yes | only read by the calls; a thread changes only its own copy |
+| a reader's workspace | yes, for decoding | the decode calls share it; its walk is one thread's at a time |
+| a writer's workspace | no | one thread at a time |
+| a target's planes | yes, disjoint samples | threads may decode bands of one layer into one image; one sample, one call |
+| a scratch (`minipsd_decode_opts.scratch`) | no | one per call in flight; `scratch_kept` needs the same thread's previous call |
+| the inflate and deflate, and their user pointers | must be | called from every thread that decodes or writes ZIP; zlib's `uncompress` and `compress2` are |
+| `MINIPSD_MALLOC`, `MINIPSD_FREE` | must be | `malloc` and `free` are |
+
+`linux-tsan` runs every test under ThreadSanitizer, among them bands of one layer decoded by
+several threads from one reader into one image.
 
 ## What goes into the file
 
