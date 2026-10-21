@@ -218,7 +218,14 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
   between calls: the writer ends with its workspace, which the caller may free or reuse for
   another document (if large enough).
 - **No global or static mutable state.** Writers and readers in separate threads never interact;
-  one workspace serves one writer or reader at a time.
+  one workspace serves one writer, or one reader's walk, at a time.
+- **Decoding from several threads.** `minipsd_decode_layer`, `minipsd_decode_mask` and
+  `minipsd_decode_composite` only read the reader, so any number of them may run at once on one
+  reader, beside the one thread that walks it (`minipsd_reader_next_resource`,
+  `minipsd_reader_next_layer`). Each call needs its own target and scratch, and an inflate that is
+  safe to call at once (zlib's `uncompress` is). The exception is `MINIPSD_ERR_SHORT`, which
+  records how far the buffer must reach, so decode at once only when the buffer holds the whole
+  file; over a prefix, one thread decodes. No lock is taken, none is needed.
 
 ## What goes into the file
 

@@ -59,6 +59,9 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   minipsd implements no deflate; zlib's `uncompress` fits in a line. Without one, decoding them
   stays `MINIPSD_ERR_UNSUPPORTED`; read with `stored`, they are copied as they are. Decoded in
   bands, a scratch of every channel and `scratch_kept` inflate each channel once, not once a band.
+- The decode calls may run at once on one reader, from any number of threads, each with its own
+  target and scratch, when the buffer holds the whole file
+  ([Memory and ownership](SPECIFICATION.md#memory-and-ownership)).
   `minipsd_read_opts` and `minipsd_decode_opts` grow by these fields: a caller that sets
   `stored` or `depth` on an uninitialised struct now passes garbage as `inflate`. Zero the whole
   struct first (`= {0}`, a designated initialiser, or `memset`), as every options struct asks.

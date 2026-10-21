@@ -407,9 +407,12 @@ feature; a supplied composite needs nothing. See
       each mode and depth that minipsd writes decode the same in psd-tools and in minipsd; the
       files that psd-tools lacks come from GIMP or Photopea, private fixtures checked by hand
       there.
-- [ ] **S6.14** Threads: the reader's decode calls stated thread-safe on one reader, or one
+- [x] **S6.14** Threads: the reader's decode calls stated thread-safe on one reader, or one
       reader a thread (its workspace is a few hundred bytes), whichever the code supports
       without a lock; a scratch is one per thread. In the spec's Memory and ownership.
+      As done: thread-safe on one reader, beside the thread that walks it, when the buffer
+      holds the whole file (only `MINIPSD_ERR_SHORT` writes the reader, its `needed`). CI's
+      `linux-tsan` runs every test under ThreadSanitizer.
       *Done when:* a test decodes the bands of one layer from several threads at once under
       ThreadSanitizer, or the spec says why it must not.
 - [ ] **S6.15** Streaming read (`R9`): the reader over a window of the file instead of the whole
