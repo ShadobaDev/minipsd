@@ -24,6 +24,7 @@ MINIPSDDEF const char *minipsd_error_string(int code)
     case MINIPSD_ERR_UNSUPPORTED: return "valid, but outside what minipsd handles yet";
     case MINIPSD_ERR_SHORT:       return "the buffer ends too soon: read more and call again";
     case MINIPSD_ERR_LIMIT:       return "over a limit set by the caller";
+    case MINIPSD_ERR_NOT_FOUND:   return "not found";
     default:                      return "unknown error";
     }
 }

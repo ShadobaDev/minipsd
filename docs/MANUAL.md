@@ -194,17 +194,17 @@ minipsd_layer logo = { .name = "Logo", .rgba = logo_rgba, .opacity = 255,
 ```
 
 A group is two records around its layers, bottom first: a divider, then the layers, then the
-group itself, which carries its name, visibility and mode (Pass Through unless `blend` says
+group itself, which carries its name, visibility and mode (Pass Through unless `blend_mode` says
 otherwise). A layer mask is one byte per pixel over a rectangle of its own, 255 where the layer
 shows:
 
 ```c
 minipsd_mask  fade   = { .top = 0, .left = 0, .bottom = 32, .right = 64, .pixels = ramp };
 minipsd_layer layers[4] = {
-    { .name = "</Layer group>", .opacity = 255, .kind = MINIPSD_KIND_GROUP_END },
+    { .name = "</Layer group>", .opacity = 255, .section_divider_type = MINIPSD_SECTION_GROUP_END },
     { .name = "Logo", .rgba = logo_rgba, .opacity = 255, .bottom = 32, .right = 64, .mask = &fade },
     { .name = "Shadow", .rgba = shadow_rgba, .opacity = 128, .bottom = 32, .right = 64 },
-    { .name = "Branding", .opacity = 255, .kind = MINIPSD_KIND_GROUP },
+    { .name = "Branding", .opacity = 255, .section_divider_type = MINIPSD_SECTION_GROUP },
 };
 ```
 
@@ -470,13 +470,13 @@ t.channel[MINIPSD_CH_B].data = bgra;
 ```
 
 A layer's mask, when `has_mask` is set, decodes the same way into one plane, over the mask's own
-rectangle: `minipsd_decode_mask(r, &layer, &plane, NULL)`. Groups need no decoding: `kind` says
+rectangle: `minipsd_decode_mask(r, &layer, &plane, NULL)`. Groups need no decoding: `section_divider_type` says
 which records open and close them.
 
 Pixels come as stored: straight alpha, the layer's opacity and visibility left in the view. A
 `minipsd_decode_opts` with `y_first` and `y_count` decodes a band of rows into the target's first
 row, so a huge layer can go through a small buffer in strips. Every colour mode and depth
-decodes, as stored: no colour is converted, the palette (`info.color_data`) or the ICC profile
+decodes, as stored: no colour is converted, the palette (`info.color_mode_data`) or the ICC profile
 says what samples mean. A 16-bit file decodes into 16-bit samples only, `uint16_t` in host order;
 say so in the options:
 
@@ -542,6 +542,50 @@ for the bytes as stored, for instance to show them on white as they are.
 [Read a PSD](#read-a-psd) above decodes it; [examples/read_file.c](../examples/read_file.c)
 goes further: every layer with its name, blend mode and blocks, and how many pixels of each are
 visible.
+
+### Metadata
+
+`info` has what most programs need: `dpi` and the ICC profile. For more, find a resource by its
+id and let a typed view parse it; none of them needs the reader again, so a document's
+`resources` work too:
+
+```c
+minipsd_resource res;
+minipsd_resolution_info ri;
+minipsd_version_info vi;
+if (minipsd_reader_find_resource(r, MINIPSD_RES_RESOLUTION_INFO, &res) == MINIPSD_OK
+    && minipsd_resource_resolution_info(&res, &ri) == MINIPSD_OK)
+    printf("%g x %g pixels per mm\n", ri.horizontal_resolution / 25.4, ri.vertical_resolution / 25.4);
+if (minipsd_reader_find_resource(r, MINIPSD_RES_VERSION_INFO, &res) == MINIPSD_OK
+    && minipsd_resource_version_info(&res, &vi) == MINIPSD_OK && !vi.has_real_merged_data)
+    puts("the composite is not the layers' image: flatten the layers instead");
+```
+
+A resolution is stored in pixels per inch whatever its unit; the unit (`horizontal_resolution_unit`,
+1 inch, 2 cm) is only how Photoshop shows it. A file without version info is older than Photoshop
+6 and its composite is real. The names in version info are UTF-16BE views:
+`minipsd_utf16be_to_utf8` converts them, measured first as `minipsd_layer_name` is. A missing
+resource is `MINIPSD_ERR_NOT_FOUND`; IPTC, EXIF, XMP and the thumbnail are found the same way and
+come as bytes, for a parser of their own. To list what a file holds, walk the resources and
+name each id:
+
+```c
+while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE) {
+    const char *name = minipsd_resource_id_name(res.id);   /* Adobe's name; NULL if unlisted */
+    printf("%u %s, %zu bytes\n", (unsigned)res.id, name ? name : "(unknown)", res.data.size);
+}
+```
+
+The same holds for guides (`minipsd_resource_grid_and_guides`, then `minipsd_resource_next_guide`),
+the alpha channels' names and identifiers, and an indexed file's transparency index; lists are
+walked with a cursor from 0, as a layer's blocks are. A layer's id, colour label, fill opacity,
+locks and knockout come from its blocks in one call:
+
+```c
+minipsd_block_settings s;
+if (minipsd_layer_block_settings(&layer, &s) == MINIPSD_OK && (s.present & MINIPSD_PRESENT_LAYER_ID))
+    printf("layer id %u, fill %u\n", (unsigned)s.layer_id, (unsigned)s.fill_opacity);
+```
 
 ### Untrusted files
 
@@ -664,8 +708,9 @@ Every function that can fail returns an `int`, in three groups:
 | `MINIPSD_MORE` (1) | not finished, and nothing is wrong: `writer_fill` has more bytes, an iterator returned an item, a name did not fit |
 | negative, `MINIPSD_ERR_*` | an error; `minipsd_error_string(rc)` gives a short English text |
 
-So `rc < 0` is the test for an error. `MINIPSD_ERR_SHORT` and `MINIPSD_ERR_LIMIT` are errors that
-need not mean a bad file: the first asks for more bytes, the second is your own limit. Which
+So `rc < 0` is the test for an error. `MINIPSD_ERR_SHORT`, `MINIPSD_ERR_LIMIT` and
+`MINIPSD_ERR_NOT_FOUND` are errors that need not mean a bad file: the first asks for more bytes,
+the second is your own limit, the third says a lookup found nothing. Which
 codes each function returns is listed with it in [minipsd.h](../include/minipsd.h).
 
 ## Configuration

@@ -111,10 +111,20 @@ The declarations, with every parameter and return code, are in
 | `minipsd_reader_init(&r, data, size, workspace, workspace_size, limits, &info)` | the file's description and its resources, from the whole file or a prefix of it |
 | `minipsd_reader_needed(r)` | after `MINIPSD_ERR_SHORT`: the least buffer size with which the call goes further |
 | `minipsd_reader_next_resource(r, &res)` | the image resources in file order, each a raw view: `MINIPSD_MORE` per resource, then `MINIPSD_OK` |
+| `minipsd_reader_find_resource(r, id, &res)` | the first image resource with an id (`MINIPSD_RES_*`), wherever the walk is: `MINIPSD_OK`, or `MINIPSD_ERR_NOT_FOUND` |
 | `minipsd_reader_next_layer(r, &layer)` | the layer records, bottom first, with views of their channel data: `MINIPSD_MORE` per layer, then `MINIPSD_OK` |
 | `minipsd_layer_name(layer, utf8, cap, &needed)` | a layer's name as UTF-8 (`luni`, else the legacy name as Latin-1) |
 | `minipsd_layer_next_block(layer, &pos, &block)` | a layer's additional-information blocks, each a raw view |
 | `minipsd_layer_blending_range(layer, i, &range)` | one of a layer's blending ranges ("Blend If"): the composite grey's, then each channel's |
+| `minipsd_resource_resolution_info(res, &out)` | resource 1005 parsed: both resolutions in pixels per inch, their units and the units Photoshop shows |
+| `minipsd_resource_version_info(res, &out)` | resource 1057 parsed: whether the composite is real (`has_real_merged_data`), the writer's and reader's names |
+| `minipsd_resource_grid_and_guides(res, &out)`, `minipsd_resource_next_guide(res, &pos, &guide)` | resource 1032: its header, then the guides one per call (`MINIPSD_MORE`, then `MINIPSD_OK`) |
+| `minipsd_resource_next_alpha_name(res, &pos, &name)` | the alpha channels' names, one per call, from 1045 (UTF-16BE) or 1006 (Pascal strings) |
+| `minipsd_resource_next_alpha_identifier(res, &pos, &id)` | the alpha channels' identifiers (1053), one per call |
+| `minipsd_resource_id_name(id)` | Adobe's name for a resource id ("Resolution info", "Path information"), to list what a file holds; `NULL` for an id Adobe does not list |
+| `minipsd_resource_transparency_index(res, &index)` | an indexed file's transparent palette entry (1047) |
+| `minipsd_layer_block_settings(layer, &out)` | a layer's fixed-layout blocks parsed: id, colour label, fill opacity, locks, knockout, blending of clipped and interior elements; `present` says which it has |
+| `minipsd_utf16be_to_utf8(text, utf8, cap, &needed)` | UTF-16BE text from a view (a version info's names) as UTF-8, as `minipsd_layer_name` gives a name |
 | `minipsd_target_rgba(&target, rgba, row_stride)` | a target for interleaved RGBA, the common case |
 | `minipsd_target_rgba16(&target, rgba, row_stride)` | the same for 16-bit samples, `uint16_t` |
 | `minipsd_target_interleaved(&target, pixels, row_stride, planes, depth)` | a target for interleaved pixels of any mode and depth: `planes` samples a pixel |
@@ -138,7 +148,7 @@ its layers and composite as stored: no colour is converted.
   stored), 8 (and 0, `NULL` opts) a byte, 16 a `uint16_t`, 32 a `float`, all in host order. It
   must be the file's depth; there is no conversion. The steps of a plane count bytes.
 - **What samples mean** is the file's to say: its ICC profile (`minipsd_info.icc`), or its colour
-  mode data (`minipsd_info.color_data`): an indexed file's palette, a duotone's inks.
+  mode data (`minipsd_info.color_mode_data`): an indexed file's palette, a duotone's inks.
 - **Un-matting.** An RGB file stores the composite's colour matted against white; the reader
   undoes it, `c = max - (max - s) * max / a` rounded and clamped (`max` is 255, or 65535 at 16
   bits), `0` where `a == 0`, and at 32 bits `1 - (1 - s) / a`. That is exact where `a == max`
@@ -161,6 +171,7 @@ its layers and composite as stored: no colour is converted.
 | `minipsd_info` | what the file says about itself: size, depth, colour mode and its colour channels, colour mode data, dpi, ICC profile, layer count, format (PSD or PSB) |
 | `minipsd_bytes` | a read-only view into the caller's buffer |
 | `minipsd_resource`, `minipsd_layer_view`, `minipsd_block` | an image resource, a layer record, an additional-information block, as views |
+| `minipsd_resolution_info`, `minipsd_version_info`, `minipsd_grid_and_guides`, `minipsd_guide`, `minipsd_block_settings` | typed views: what resources 1005, 1057 and 1032 and a layer's fixed-layout blocks store, parsed; strings stay views |
 | `minipsd_target`, `minipsd_plane` | where decoded samples go: per plane (the colour channels, then transparency) a pointer, a pixel step and a row step; any layout |
 | `minipsd_decode_opts` | the rows to decode, the target's `depth` and, for the composite, `keep_matte`; `NULL` for all rows, 8-bit, un-matted |
 
@@ -169,6 +180,27 @@ its layers and composite as stored: no colour is converted.
 - `opacity = 0` means a fully transparent layer; it is **not** "default opaque".
 - `rgba = NULL` is an empty layer; `name = NULL` is an empty name.
 - Layers are listed bottom first.
+
+**Names**
+- A field that holds something the file stores takes Adobe's descriptive name for it, in
+  snake_case, and its comment names the four-character key or the resource id: `blend_mode`
+  ("blend mode key"), `section_divider_type` (`lsct`'s type), `additional_info` ("additional
+  layer information"), a mask's `default_color`, `color_mode_data`.
+- Where Adobe gives no name, or an ambiguous one, psd-tools' name.
+- A constant follows its field: `MINIPSD_SECTION_*` for `section_divider_type`. Its values may
+  say what they mean to a program rather than repeat Adobe's words: `MINIPSD_SECTION_GROUP_END`
+  for Adobe's "bounding section divider".
+- Functions keep minipsd's verbs (`next_`, `decode_`, `find_`); their nouns follow the fields'.
+- Exceptions, which the file does not store as such and so keep minipsd's names:
+  - `hidden`: bit 0x02 of the record's flags, which Adobe calls "visible" though it is set when
+    the layer is hidden;
+  - `dpi`: the horizontal resolution of resource 1005 in pixels per inch, one number both read and
+    written;
+  - `format`: the header's version, `MINIPSD_PSD` 1 and `MINIPSD_PSB` 2 as Adobe numbers them;
+  - `name_pascal` and `name_unicode`: the record's Pascal name and `luni`, both of which Adobe
+    calls the layer name;
+  - what minipsd derives or adds: `composite_has_alpha` (a negative layer count), `layer_tail`,
+    `other_channels`, `channel_offset`, `mask_offset`, `stored`, `composite_*`, `color_channels`.
 
 **Return codes**: errors are negative, so `rc < 0` is the failure test for every function.
 
@@ -185,6 +217,7 @@ its layers and composite as stored: no colour is converted.
 | `MINIPSD_ERR_UNSUPPORTED` | -7 | reader: a valid file outside what minipsd reads: for decoding, a file of another depth than `opts->depth`, or a ZIP-compressed channel without `opts->inflate`; for `minipsd_read`, a file not 8- or 16-bit RGB; on a 32-bit platform, a PSB whose layer and mask section `size_t` cannot hold |
 | `MINIPSD_ERR_SHORT` | -8 | reader: the buffer ends inside data the call needs; read more, `minipsd_reader_needed` says how much |
 | `MINIPSD_ERR_LIMIT` | -9 | reader: over `minipsd_limits`: the canvas's or a layer's side, the layer count, or the bytes of a decode call; the file is not known to be bad |
+| `MINIPSD_ERR_NOT_FOUND` | -10 | a lookup found no such item: `minipsd_reader_find_resource` for an id the file lacks; not a fault of the file |
 
 ## Memory and ownership
 
@@ -195,7 +228,7 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
 | Name | Owner | Size | Must stay valid | May live in |
 |---|---|---|---|---|
 | `minipsd_doc`, `minipsd_layer[]` | caller; borrowed | `sizeof`; `layer_count` layers | the call; for the pull writer, from init for as long as the writer is used | stack, static, heap |
-| raw document data: layer pixels (`rgba`) or stored channels (`stored`), names, ICC profile, the supplied `composite`, kept `extra`, `resources` and `layer_tail` | caller; borrowed, read in place, never copied | a layer's rectangle times 4 samples, of 1 or 2 bytes (or its channels' stored size); `width * height * 4` samples for the composite | as `minipsd_doc` | wherever the application keeps it |
+| raw document data: layer pixels (`rgba`) or stored channels (`stored`), names, ICC profile, the supplied `composite`, kept `additional_info`, `resources` and `layer_tail` | caller; borrowed, read in place, never copied | a layer's rectangle times 4 samples, of 1 or 2 bytes (or its channels' stored size); `width * height * 4` samples for the composite | as `minipsd_doc` | wherever the application keeps it |
 | `minipsd_workspace` of the writer | caller; lent to the writer | `minipsd_writer_workspace_size()` | for as long as the writer is used | heap; stack or static sized for the largest document |
 | `minipsd_writer` | inside `minipsd_workspace`; opaque | part of the workspace | as the workspace | the caller keeps only the pointer |
 | raw PSD bytes | passed to the callback of `minipsd_write()` | pieces of up to 4 KiB, in order | the callback copies what it keeps | the callback decides |
@@ -243,9 +276,11 @@ interact, whatever the table says.
 | `minipsd_reader_needed` | yes | reads the reader; after a decode returned `MINIPSD_ERR_SHORT`, call it in that thread |
 | `minipsd_reader_next_resource` | no | advances the reader's walk |
 | `minipsd_reader_next_layer` | no | advances the reader's walk |
+| `minipsd_reader_find_resource` | yes | its own walk: only reads the reader; may run beside the walk |
 | `minipsd_layer_name` | yes | reads the view; writes only the caller's buffer |
 | `minipsd_layer_next_block` | yes | each thread its own `pos` |
 | `minipsd_layer_blending_range` | yes | reads the view |
+| `minipsd_resource_*`, `minipsd_layer_block_settings`, `minipsd_utf16be_to_utf8` | yes | read the view; write only the caller's struct, buffer or `pos` (each thread its own); `minipsd_resource_id_name` returns a constant string |
 | `minipsd_target_rgba`, `minipsd_target_rgba16`, `minipsd_target_interleaved` | yes | fill only the caller's `minipsd_target` |
 | `minipsd_decode_layer` | yes, with the whole file | each thread its own scratch; may run beside the walk (`next_layer`, `next_resource`) |
 | `minipsd_decode_mask` | yes, with the whole file | as `minipsd_decode_layer` |
@@ -318,15 +353,15 @@ several threads from one reader into one image.
   - the blend key as given, `norm` by default (the keys: [Blend modes](#blend-modes)), and
     clipping as given;
   - the writer's own blocks first, `luni` (a kept one as it is while it says the name) and the
-    group marker, then the blocks kept from a file (`extra`), as they are and in their order:
+    group marker, then the blocks kept from a file (`additional_info`), as they are and in their order:
     the name wins, and kept `luni` blocks go;
   - channel data encoded from `rgba`, or copied as it is from `stored` (any compression the
     file had, ZIP included), so a layer that was not changed is not encoded again; a stored
     layer without transparency is written without one (three colour channels);
-  - groups (`kind`), bottom first: a divider (`lsct` type 3), the group's layers, then the
+  - groups (`section_divider_type`), bottom first: a divider (`lsct` type 3), the group's layers, then the
     group's top record (type 1 open, 2 closed) with its name, visibility and mode in its `lsct`
-    block (`blend`, Pass Through by default; the record keeps `norm`). A kept `lsct` of the same
-    kind is written instead, as it is. Groups must nest;
+    block (`blend_mode`, Pass Through by default; the record keeps `norm`). A kept `lsct` of the same
+    type is written instead, as it is. Groups must nest;
   - a layer mask (`mask`): its rectangle, colour outside it and flags in the mask data, then
     what was kept after them (parameters, the real mask's rectangle) or two bytes of padding; its
     channel (id -2) encoded from `pixels` or copied from `stored`, and a kept real mask (id -3)
@@ -422,7 +457,41 @@ them; nothing is copied or allocated. Results on real files from other programs:
   - four wrong bytes at the start are `MINIPSD_ERR_FORMAT`.
 - **Header and resources:** size, channels, depth, colour mode; dpi from resource 1005
   (horizontal, 0 without it); the ICC profile from 1039. Every resource, these two included, is
-  also returned as a raw view, with its name, in file order.
+  also returned as a raw view, with its name, in file order, or found by id (the first of it).
+- **Typed views:** what a kept resource stores, parsed into plain values by a function that
+  takes the resource and needs no reader: nothing allocated, a string left as a view of its
+  UTF-16BE (`minipsd_utf16be_to_utf8` converts), a resource cut inside a field
+  `MINIPSD_ERR_FORMAT`, one of another id `MINIPSD_ERR_ARG`. Resolution info (1005): both
+  resolutions in pixels per inch and the four units Photoshop shows them in. Version info
+  (1057): `has_real_merged_data`, zero when the composite is not the layers' image (ImageMagick
+  then flattens the layers), and the writer's and reader's names. Grid and guides (1032): the
+  header, then each guide's location (pixels times 32, signed) and direction. The alpha
+  channels' names (1045, else 1006) and identifiers (1053), and an indexed file's transparency
+  index (1047). Lists are walked with a cursor, as a layer's blocks are. A layer's fixed-layout
+  blocks, the first of each key: `lyid`, `lclr`, `iOpa`, `lspf`, `knko`, `clbl`, `infx`, with a
+  bit each in `present`; without `iOpa` the fill is 255. IPTC, EXIF, XMP and the thumbnail stay
+  bytes: formats of their own. `roundtrip.py` checks every one against psd-tools on every file
+  of its set. Which resources a file has, `minipsd_reader_next_resource` lists, and
+  `minipsd_resource_id_name` names each by Adobe's "Image Resource IDs" table, its ranges
+  included (2000 to 2997 path information, 4000 to 4999 plug-in resources); an id the table
+  lacks has no name (psd-tools' test files hold 1092 and 1097, which neither Adobe nor psd-tools names).
+  What reads each:
+
+  | Resource | Constant | Read with |
+  |---|---|---|
+  | 1005 resolution info | `MINIPSD_RES_RESOLUTION_INFO` | `minipsd_resource_resolution_info`; `minipsd_info.dpi` |
+  | 1006 alpha names (Pascal) | `MINIPSD_RES_ALPHA_NAMES` | `minipsd_resource_next_alpha_name` |
+  | 1028 IPTC-NAA | `MINIPSD_RES_IPTC_NAA` | bytes |
+  | 1032 grid and guides | `MINIPSD_RES_GRID_AND_GUIDES` | `minipsd_resource_grid_and_guides`, `minipsd_resource_next_guide` |
+  | 1036 thumbnail | `MINIPSD_RES_THUMBNAIL` | bytes (a header, then JFIF) |
+  | 1039 ICC profile | `MINIPSD_RES_ICC_PROFILE` | `minipsd_info.icc` |
+  | 1045 alpha names (Unicode) | `MINIPSD_RES_UNICODE_ALPHA_NAMES` | `minipsd_resource_next_alpha_name` |
+  | 1047 transparency index | `MINIPSD_RES_TRANSPARENCY_INDEX` | `minipsd_resource_transparency_index` |
+  | 1053 alpha identifiers | `MINIPSD_RES_ALPHA_IDENTIFIERS` | `minipsd_resource_next_alpha_identifier` |
+  | 1057 version info | `MINIPSD_RES_VERSION_INFO` | `minipsd_resource_version_info` |
+  | 1058 EXIF | `MINIPSD_RES_EXIF_DATA_1` | bytes |
+  | 1060 XMP | `MINIPSD_RES_XMP_METADATA` | bytes (UTF-8 XML) |
+  | any other id | | bytes, from `minipsd_reader_next_resource` or `minipsd_reader_find_resource` |
 - **Layer records**, bottom first:
   - the rectangle; one stored inverted (Photoshop's fill layers) comes back empty;
   - opacity, visibility, the blend mode's key, clipping and the flag bits, as stored;
@@ -430,7 +499,7 @@ them; nothing is copied or allocated. Results on real files from other programs:
     an unpaired surrogate becomes U+FFFD and a U+0000 ends the name;
   - the channels red, green, blue and transparency as views of their stored data; any other
     channel (alpha, spot, a mask channel without mask data) is counted, not read;
-  - what the record is (`kind`, from its `lsct` block): a layer, a group's top record, a divider;
+  - what the record is (`section_divider_type`, from its `lsct` block): a layer, a group's top record, a divider;
   - its mask: rectangle, colour, flags, the rest of the mask data, the mask channel and the real
     mask channel as views; `minipsd_decode_mask` decodes the mask's pixels;
   - its blending ranges as a view and a count, read one at a time with
@@ -445,10 +514,10 @@ them; nothing is copied or allocated. Results on real files from other programs:
 - **The layer tail:** the global layer mask information and the global additional-information
   blocks that follow the layer info, as one raw view (`minipsd_info.layer_tail`), an `Lr16` the
   layers came from included. Global blocks are padded to four bytes past the length they state.
-- **The colour mode data:** as one raw view (`minipsd_info.color_data`): an indexed file's
+- **The colour mode data:** as one raw view (`minipsd_info.color_mode_data`): an indexed file's
   palette, a duotone's inks and curves.
 - **As a document** (`minipsd_read`): 8- and 16-bit RGB files, at their depth; each layer's
-  rectangle, name, opacity, visibility, blend key, clipping, flags, kind, mask, blending ranges, decoded pixels
+  rectangle, name, opacity, visibility, blend key, clipping, flags, section divider type, mask, blending ranges, decoded pixels
   (or, with `opts->stored`, its channels as stored, ZIP ones too) and blocks, the composite as
   stored (`composite_matted`; with `opts->stored`, every channel's bytes in `composite_stored`), the dpi (72 when none is stored), the ICC profile, every resource
   and the layer tail, the `Lr16` its layers came from in it, empty, all copied into one block. A
@@ -470,8 +539,8 @@ them; nothing is copied or allocated. Results on real files from other programs:
 
 ## Blend modes
 
-A layer's blend mode is a four-character key in its record. minipsd writes `minipsd_layer.blend`
-as given and reads it into `minipsd_layer_view.blend`; it does not blend with it: the composite
+A layer's blend mode is a four-character key in its record. minipsd writes `minipsd_layer.blend_mode`
+as given and reads it into `minipsd_layer_view.blend_mode`; it does not blend with it: the composite
 it composes draws every mode as Normal (supply the composite for the real result). Photoshop's
 keys, in its menu order; the tests write each and read it back with `psd-tools` (`pass` on a
 group, where it belongs):

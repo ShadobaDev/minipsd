@@ -147,7 +147,7 @@ int main(int argc, char **argv)
     while ((rc = minipsd_reader_next_layer(r, &layer)) == MINIPSD_MORE) {
         if (minipsd_layer_name(&layer, name, sizeof name, NULL) != MINIPSD_OK) snprintf(name, sizeof name, "(longer than %u bytes)", (unsigned)sizeof name);
         printf("  %u '%s': (%d, %d)-(%d, %d), opacity %u, %s, blend %s\n", i++, name, (int)layer.left, (int)layer.top,
-               (int)layer.right, (int)layer.bottom, (unsigned)layer.opacity, layer.hidden ? "hidden" : "visible", layer.blend);
+               (int)layer.right, (int)layer.bottom, (unsigned)layer.opacity, layer.hidden ? "hidden" : "visible", layer.blend_mode);
         printf("      blocks:");
         for (pos = 0; minipsd_layer_next_block(&layer, &pos, &block) == MINIPSD_MORE;) {
             printf(" %s", block.key);

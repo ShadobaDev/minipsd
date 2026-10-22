@@ -1,6 +1,7 @@
 /**
  * \file
- * \brief Tests for minipsd/detail/utf.h: UTF-8 in, UTF-16 out, malformed input replaced.
+ * \brief Tests for minipsd/detail/utf.h and minipsd_utf16be_to_utf8: UTF-8 to UTF-16 and back,
+ *        malformed input replaced.
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
@@ -61,6 +62,39 @@ TEST(MinipsdUtfTest, Utf16BeDecodesPairsAndReplacesUnpairedSurrogates)
         EXPECT_EQ(mpsd__utf16be(&p, end), cp);
     }
     EXPECT_EQ(p, end);
+
+    // The public converter gives the same code points as UTF-8, measured first; a cap one short is
+    // MINIPSD_MORE with the text empty.
+    std::string utf8;
+    for (std::uint32_t cp : expected) {
+        std::uint8_t out[4];
+        utf8.append(out, out + mpsd__put_utf8(out, cp));
+    }
+    const minipsd_bytes text{bytes, sizeof bytes};
+    std::size_t needed = 0;
+    EXPECT_EQ(minipsd_utf16be_to_utf8(&text, nullptr, 0, &needed), MINIPSD_MORE);
+    ASSERT_EQ(needed, utf8.size() + 1);
+    std::string got(needed, 'x');
+    EXPECT_EQ(minipsd_utf16be_to_utf8(&text, got.data(), needed - 1, nullptr), MINIPSD_MORE);
+    EXPECT_EQ(got[0], '\0');
+    EXPECT_EQ(minipsd_utf16be_to_utf8(&text, got.data(), needed, nullptr), MINIPSD_OK);
+    EXPECT_EQ(got, utf8 + '\0');
+
+    // A U+0000 ends the text; an odd last byte is dropped; empty is empty.
+    const std::uint8_t ended[] = {0x00, 0x41, 0x00, 0x00, 0x00, 0x42}, odd[] = {0x00, 0x41, 0x00};
+    char small[4];
+    const minipsd_bytes endedText{ended, sizeof ended}, oddText{odd, sizeof odd}, empty{nullptr, 0};
+    EXPECT_EQ(minipsd_utf16be_to_utf8(&endedText, small, sizeof small, nullptr), MINIPSD_OK);
+    EXPECT_STREQ(small, "A");
+    EXPECT_EQ(minipsd_utf16be_to_utf8(&oddText, small, sizeof small, nullptr), MINIPSD_OK);
+    EXPECT_STREQ(small, "A");
+    EXPECT_EQ(minipsd_utf16be_to_utf8(&empty, small, sizeof small, &needed), MINIPSD_OK);
+    EXPECT_EQ(needed, 1u);
+
+    const minipsd_bytes noData{nullptr, 2};
+    EXPECT_EQ(minipsd_utf16be_to_utf8(nullptr, small, sizeof small, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_utf16be_to_utf8(&noData, small, sizeof small, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_utf16be_to_utf8(&text, nullptr, 1, nullptr), MINIPSD_ERR_ARG);
 }
 
 TEST(MinipsdUtfTest, Utf8IsEncodedOneToFourBytesOrOnlyCounted)

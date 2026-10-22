@@ -20,7 +20,7 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   `minipsd_target_interleaved` for any mode). Every colour mode and depth decodes as stored, with
   no colour conversion. A target's planes are the mode's colour channels, then transparency
   (`minipsd_info.color_channels`, `MINIPSD_PLANES`). Samples are a byte of 0 or 1 at 1 bit, a
-  `float` at 32 bits. The palette or duotone data is `minipsd_info.color_data`.
+  `float` at 32 bits. The palette or duotone data is `minipsd_info.color_mode_data`.
 - `minipsd_decode_composite`: the merged image, or a band of its rows, un-matted to straight
   alpha in RGB (or as stored, with `keep_matte`). Photoshop's 16- and 32-bit files mark the
   composite's transparency with a global `Mtrn`, `Mt16` or `Mt32` block rather than a negative
@@ -40,7 +40,7 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   is, every byte copied into one block so the file can be freed at once; `minipsd_doc_free`;
   `minipsd_read_size` and `minipsd_read_into` for the caller's own memory. `lost`
   (`MINIPSD_LOST_*`) says what the document could not carry: extra channels.
-- Layer groups: `kind` on `minipsd_layer` and the layer view (`MINIPSD_KIND_*`), written as
+- Layer groups: `section_divider_type` on `minipsd_layer` and the layer view (`MINIPSD_SECTION_*`), written as
   `lsct` blocks with the group's mode, nesting checked by `minipsd_doc_check`.
 - Blending ranges ("Blend If"): `minipsd_blend_range` and `minipsd_blending_range`, as the
   file stores them; `blending_ranges` and `blending_range_count` on `minipsd_layer`, written as
@@ -59,6 +59,16 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   minipsd implements no deflate; zlib's `uncompress` fits in a line. Without one, decoding them
   stays `MINIPSD_ERR_UNSUPPORTED`; read with `stored`, they are copied as they are. Decoded in
   bands, a scratch of every channel and `scratch_kept` inflate each channel once, not once a band.
+- Metadata: `minipsd_reader_find_resource` finds a resource by id (`MINIPSD_RES_*`, or
+  `MINIPSD_ERR_NOT_FOUND`, a new code); `minipsd_resource_resolution_info` and
+  `minipsd_resource_version_info` parse resources 1005 and 1057 (both resolutions with their
+  units; whether the composite is real, `has_real_merged_data`); `minipsd_utf16be_to_utf8`
+  converts their names; `minipsd_resource_id_name` gives Adobe's name for any resource id, to
+  list what a file holds. The grid and guides (1032), the alpha channels' names (1045, 1006) and
+  identifiers (1053) and the transparency index (1047) are parsed too, lists walked with a
+  cursor; `minipsd_layer_block_settings` gives a layer's id, colour label, fill opacity, locks,
+  knockout and blending of clipped and interior elements. Public fields follow one naming rule, Adobe's names
+  ([API](SPECIFICATION.md#api), Names).
 - The decode calls may run at once on one reader, from any number of threads, each with its own
   target and scratch, when the buffer holds the whole file
   ([Threads](SPECIFICATION.md#threads), which says this for every call).
@@ -82,7 +92,7 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   stores them (`minipsd_layer.stored`), and the writer copies them instead of encoding pixels, so
   changing one layer encodes only that one. A stored layer without transparency gets an opaque
   transparency channel.
-- Content kept from a file and written back as it is: `blend`, `clipping`, `flags` and `extra`
+- Content kept from a file and written back as it is: `blend_mode`, `clipping`, `flags` and `additional_info`
   (additional-information blocks: text, effects, groups, smart objects) on `minipsd_layer`;
   `resources` and `layer_tail` (global layer mask and blocks) on `minipsd_doc`. The document's
   own fields win over kept data that says the same (`name`, `dpi`, `icc`). The reader gives

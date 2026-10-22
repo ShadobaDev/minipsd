@@ -86,7 +86,7 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
     d = docOf(2, 2, &layer, 1); d.layer_tail = {nullptr, 4};
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "a layer tail size without data";
     for (const minipsd_bytes extra : {minipsd_bytes{nullptr, 12}, minipsd_bytes{one, 1}}) {
-        const minipsd_layer bad{.name = "L", .rgba = px.data(), .opacity = 255, .extra = extra};
+        const minipsd_layer bad{.name = "L", .rgba = px.data(), .opacity = 255, .additional_info = extra};
         d = docOf(2, 2, &bad, 1);
         EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "extra of " << extra.size << " bytes";
     }
@@ -114,15 +114,15 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
     // Groups nest bottom first: a divider, the layers, the top record.
     auto groups = [&](std::initializer_list<std::uint8_t> kinds) {
         std::vector<minipsd_layer> ls;
-        for (std::uint8_t k : kinds) ls.push_back({.name = "G", .rgba = nullptr, .opacity = 255, .kind = k});
+        for (std::uint8_t k : kinds) ls.push_back({.name = "G", .rgba = nullptr, .opacity = 255, .section_divider_type = k});
         const minipsd_doc g = docOf(2, 2, ls.data(), ls.size());
         return minipsd_doc_check(&g, nullptr);
     };
-    EXPECT_EQ(groups({MINIPSD_KIND_GROUP_END, MINIPSD_KIND_LAYER, MINIPSD_KIND_GROUP}), MINIPSD_OK);
-    EXPECT_EQ(groups({MINIPSD_KIND_GROUP_END, MINIPSD_KIND_GROUP_END, MINIPSD_KIND_GROUP_CLOSED, MINIPSD_KIND_GROUP}), MINIPSD_OK) << "nested";
-    EXPECT_EQ(groups({MINIPSD_KIND_GROUP}), MINIPSD_ERR_ARG) << "a top record without its divider";
-    EXPECT_EQ(groups({MINIPSD_KIND_GROUP_END}), MINIPSD_ERR_ARG) << "a divider never closed";
-    EXPECT_EQ(groups({MINIPSD_KIND_GROUP, MINIPSD_KIND_GROUP_END}), MINIPSD_ERR_ARG) << "upside down";
+    EXPECT_EQ(groups({MINIPSD_SECTION_GROUP_END, MINIPSD_SECTION_LAYER, MINIPSD_SECTION_GROUP}), MINIPSD_OK);
+    EXPECT_EQ(groups({MINIPSD_SECTION_GROUP_END, MINIPSD_SECTION_GROUP_END, MINIPSD_SECTION_GROUP_CLOSED, MINIPSD_SECTION_GROUP}), MINIPSD_OK) << "nested";
+    EXPECT_EQ(groups({MINIPSD_SECTION_GROUP}), MINIPSD_ERR_ARG) << "a top record without its divider";
+    EXPECT_EQ(groups({MINIPSD_SECTION_GROUP_END}), MINIPSD_ERR_ARG) << "a divider never closed";
+    EXPECT_EQ(groups({MINIPSD_SECTION_GROUP, MINIPSD_SECTION_GROUP_END}), MINIPSD_ERR_ARG) << "upside down";
     EXPECT_EQ(groups({4}), MINIPSD_ERR_ARG) << "an unknown kind";
 
     // Masks: a rectangle not inverted, pixels for an area, a side PSD can count.

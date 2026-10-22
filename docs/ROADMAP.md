@@ -226,7 +226,7 @@ whatever cannot be carried is reported.
       through `minipsd_read`); every 8-bit RGB file of psd-tools' set reads, and its `lost`
       matches what `examples/read_file.c` shows of it; the test frees the file's buffer before
       writing, under ASan.
-- [x] **S5.5** Unknown content kept (`E2`): `blend`, `clipping` and `extra` on the layer,
+- [x] **S5.5** Unknown content kept (`E2`): `blend_mode`, `clipping` and `additional_info` on the layer,
       `resources` and `layer_tail` on the document, written back as given; the reader gains
       `clipping` in the view and `layer_tail` in `minipsd_info`; the document's fields win over
       kept data with the same key (`luni`, 1005, 1039). `MINIPSD_LOST_EXTRA` goes: no release had
@@ -253,12 +253,12 @@ feature; a supplied composite needs nothing. See
 
 - [x] **S6.1** Layers smaller than the canvas: moved to S5.2, which the round trip needs first.
 - [x] **S6.2** Blend modes. Each mode is a four-character key in the layer record: the reader
-      returns it in `minipsd_layer_view.blend`, the writer writes `minipsd_layer.blend` as given
+      returns it in `minipsd_layer_view.blend_mode`, the writer writes `minipsd_layer.blend_mode` as given
       (S5.5); the composed composite draws them all as `norm`. Photoshop's keys are in the
       spec's [Blend modes](SPECIFICATION.md#blend-modes).
       *Done when:* a document with a layer in every mode reads back with every key from
       `psd-tools` (`roundtrip.py`, "blend-modes"); GIMP shows each mode, checked by hand once.
-- [x] **S6.3** Layer groups (`lsct`): `kind` on the layer and in the view; the writer writes
+- [x] **S6.3** Layer groups (`lsct`): `section_divider_type` on the layer and in the view; the writer writes
       the `lsct` block with the group's mode (`pass` by default), or a kept one of the same kind
       as it is; `minipsd_doc_check` checks the nesting.
       *Done when:* nested groups, one closed, written from scratch read back by `psd-tools` with
@@ -395,7 +395,7 @@ feature; a supplied composite needs nothing. See
       - **Read.** The composite first, then layers: grey, CMYK, Lab, multichannel and duotone
         of 8 and 16 bits; grey and RGB of 32; bitmap of 1; indexed of 8.
         As done: `MINIPSD_PLANES` (5) planes, the mode's colour channels then transparency at
-        `color_channels`; 1-bit samples as bytes (no packed form); `color_data` a view; the
+        `color_channels`; 1-bit samples as bytes (no packed form); `color_mode_data` a view; the
         composite un-matted in RGB only (psd-tools does the same; no file shows other modes);
         Photoshop's `Mtrn`/`Mt16`/`Mt32` say the composite has transparency. `roundtrip.py`
         checks every psd-tools file's layers and composite against psd-tools. `minipsd_read`
@@ -432,12 +432,16 @@ feature; a supplied composite needs nothing. See
         budget is refused before a byte is read. Units: the resources whole at init, the
         records whole, one channel or one layer for a decode; decoding by offset, not by a
         view's pointer.
-- [ ] **S6.16** Names, before 0.3.0 (S4.10) freezes them: fields take Adobe's descriptive names in
+- [x] **S6.16** Names, before 0.3.0 (S4.10) freezes them: fields take Adobe's descriptive names in
       snake_case, the four-character key in their comment; where Adobe gives none or an
       ambiguous one, psd-tools'. `kind` and `MINIPSD_KIND_*` (psd-tools' name for `lsct`'s
       "type") become `section_type` and `MINIPSD_SECTION_*`, or stay, decided here.
+      As done: the rule in the spec's API (Names), with its exceptions. `kind` became
+      `section_divider_type` and `MINIPSD_KIND_*` `MINIPSD_SECTION_*`, keeping their group
+      words; `blend` `blend_mode`, `extra` `additional_info`, a mask's `color` `default_color`,
+      `color_data` `color_mode_data`. `dpi`, `format` and the two names stay.
       *Done when:* the rule is in the spec, and every public field follows it or says why not.
-- [ ] **S6.17** Typed views of kept data: what the file's own bytes say, parsed into plain values;
+- [x] **S6.17** Typed views of kept data: what the file's own bytes say, parsed into plain values;
       what needs another tool stays out. No allocation, no tree built: a view in, a small
       struct or one scalar out, as `minipsd_layer_blending_range` does. ImageMagick parses
       only the resolution, the "has merged image" flag and four profiles; psd-tools nearly
@@ -446,24 +450,34 @@ feature; a supplied composite needs nothing. See
         IPTC 1028, thumbnail 1036, version info 1057, alpha names 1006 and 1045, alpha ids
         1053, transparency index 1047, guides 1032) and `minipsd_reader_find_resource`. EXIF,
         XMP and IPTC stay bytes: other formats, parsed by libexif and expat.
+        *Done:* `MINIPSD_RES_*`, and `minipsd_reader_find_resource` returns the first of an id
+        or `MINIPSD_ERR_NOT_FOUND` (a new code).
       - **What libvips needs (P1).** Version info's "has real merged data" (whether the
         composite can be trusted; ImageMagick flattens the layers without it); the resolution
         whole, horizontal and vertical with their units.
+        *Done:* `minipsd_resource_resolution_info` and `minipsd_resource_version_info` (in
+        `views.h`; a resource in, no reader), `minipsd_utf16be_to_utf8` for the names.
+        `roundtrip.py` checks both against psd-tools on its whole set.
       - **Fixed-layout layer blocks (P2):** `lyid` layer id, `lclr` colour label, `iOpa` fill
         opacity, `lspf` protection, `knko` knockout, `clbl` and `infx` blend clipped and
         interior elements.
+        *Done:* `minipsd_layer_block_settings`, one struct with a `present` bit a block.
       - **Fixed-layout resources (P2):** guides, alpha channel names and ids, an indexed file's
         transparency index.
-      - **Old fixed-layout adjustments (P3):** `levl`, `curv`, `brit`, `hue2` and the like.
-      - *design (P3).* One-level descriptor reader: one item a call (key, type, a scalar, or a
-        nested descriptor or list as a view, never descended into). Descriptor items carry no
-        length, so skipping a nested one walks its shape (depth-limited) without building it;
-        decide whether that is acceptable. It would give a text layer's text (`TySh`, key
-        `Txt `), a smart object's name, effects' flags.
+        *Done:* `minipsd_resource_grid_and_guides` and the walks `next_guide`,
+        `next_alpha_name` (1045 or 1006), `next_alpha_identifier`; `transparency_index`.
       - **Out:** EngineData (text styling, a nested text format), rendering effects,
         adjustments, blend modes and vectors, parsing EXIF, XMP or IPTC, colour conversion.
       *Done when:* each step's values match psd-tools' on its test files; the P1 ones are
       what S7.3 sets as libvips metadata.
+- [ ] **S6.18** Typed views, further (S6.17's P3, split out until a consumer asks):
+      - **Old fixed-layout adjustments:** `levl`, `curv`, `brit`, `hue2` and the like.
+      - *design.* One-level descriptor reader: one item a call (key, type, a scalar, or a
+        nested descriptor or list as a view, never descended into). Descriptor items carry no
+        length, so skipping a nested one walks its shape (depth-limited) without building it;
+        decide whether that is acceptable. It would give a text layer's text (`TySh`, key
+        `Txt `), a smart object's name, effects' flags.
+      *Done when:* as S6.17's.
 
 ## 7. Interoperability
 

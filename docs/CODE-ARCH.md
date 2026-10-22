@@ -93,13 +93,14 @@ include/
   minipsd/
     base.h                     return-code texts
     writer.h                   the encoder (pull), plus the 0.1-compatible minipsd_write (push)
+    views.h                    typed views: a kept resource or a layer's blocks parsed into plain values
     reader.h                   the decoder: views into the caller's bytes
     read.h                     minipsd_read: a whole file into one standalone document, on the reader
     detail/
       bytes.h                  big-endian put/get on uint8_t pointers, bounds-checked cursor
       samples.h                samples per colour mode and depth: a mode's colour channels, row
                                bytes, a stored byte's place in memory, ZIP prediction, 1-bit rows
-      utf.h                    UTF-8 <-> UTF-16 for layer names
+      utf.h                    UTF-8 <-> UTF-16 for layer names and other text
       packbits.h               PackBits encode, decode, size bound; strided source and target
       composite.h              blending one row "over", white matte and un-matte
       format.h                 the file's layout: each structure's fields and sizes, and what PSD and PSB
@@ -122,10 +123,11 @@ tools/
 
 | Module (section of `minipsd.h`) | Struct | Functions (sketch) | Implementation |
 |---|---|---|---|
-| Version, linkage, return codes | `minipsd_bytes { const uint8_t *data; size_t size; }` | `minipsd_error_string`; new codes, added never renumbered: `MINIPSD_MORE = 1` (positive: not an error, call again), `MINIPSD_ERR_FORMAT = -6`, `MINIPSD_ERR_UNSUPPORTED = -7`, `MINIPSD_ERR_SHORT = -8`, `MINIPSD_ERR_LIMIT = -9` | `base.h` |
+| Version, linkage, return codes | `minipsd_bytes { const uint8_t *data; size_t size; }` | `minipsd_error_string`; new codes, added never renumbered: `MINIPSD_MORE = 1` (positive: not an error, call again), `MINIPSD_ERR_FORMAT = -6`, `MINIPSD_ERR_UNSUPPORTED = -7`, `MINIPSD_ERR_SHORT = -8`, `MINIPSD_ERR_LIMIT = -9`, `MINIPSD_ERR_NOT_FOUND = -10` | `base.h` |
 | Document | `minipsd_doc`, `minipsd_layer` (unchanged from 0.1) | `minipsd_doc_check(doc, NULL)`: the validation `minipsd_write` does today, now callable on its own | `writer.h` today; its own file if the reader shares it |
 | Writer | `minipsd_writer` (opaque, built in the workspace) | `minipsd_writer_workspace_size`, `_init`, `_total`, `_fill`; `minipsd_write` | `writer.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
-| Reader | `minipsd_reader` (opaque, like the writer), `minipsd_info`, `minipsd_resource`, `minipsd_layer_view`, `minipsd_target` (of `minipsd_plane`), `minipsd_decode_opts`, `minipsd_limits` | `minipsd_reader_workspace_size`, `_init`, `_needed`, `_next_resource`, `_next_layer`, `minipsd_layer_name`, `minipsd_decode_layer`, `minipsd_decode_composite`, `minipsd_decode_mask`, `minipsd_target_rgba`, `minipsd_target_rgba16` | `reader.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
+| Reader | `minipsd_reader` (opaque, like the writer), `minipsd_info`, `minipsd_resource`, `minipsd_layer_view`, `minipsd_target` (of `minipsd_plane`), `minipsd_decode_opts`, `minipsd_limits` | `minipsd_reader_workspace_size`, `_init`, `_needed`, `_next_resource`, `_find_resource`, `_next_layer`, `minipsd_layer_name`, `minipsd_decode_layer`, `minipsd_decode_composite`, `minipsd_decode_mask`, `minipsd_target_rgba`, `minipsd_target_rgba16` | `reader.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
+| Typed views | `minipsd_resolution_info`, `minipsd_version_info`, `minipsd_grid_and_guides`, `minipsd_guide`, `minipsd_block_settings`; `MINIPSD_RES_*`, `MINIPSD_PRESENT_*` | `minipsd_resource_*` (a resource from the reader or a document in, a struct out; lists walked with a cursor), `minipsd_layer_block_settings` (a layer view in), `minipsd_utf16be_to_utf8`, `minipsd_resource_id_name` (Adobe's table of ids, looked up from index id - 1000 down); no reader | `views.h`; detail: `bytes`, `format`, `utf` |
 | Document from a file | `MINIPSD_LOST_*` | `minipsd_read_size`, `minipsd_read_into`, `minipsd_read`, `minipsd_doc_free` | `read.h`, on the public reader (and its record offsets, to tell what is lost) |
 
 Rules for the split:
@@ -546,12 +548,12 @@ int            composite_matted;   /* non-zero: composite is already matted, wri
 | Field | Zero means | Notes |
 |---|---|---|
 | `int32_t top, left, bottom, right` | all four zero: the full canvas (with `rgba`; stored channels take the rectangle as it is) | the fields of `minipsd_layer_view`, in its order. `rgba` holds `(right - left) * (bottom - top) * 4` bytes. A rectangle may reach past the canvas; an inverted one, or an area without `rgba`, is `MINIPSD_ERR_ARG`; a side above `MINIPSD_MAX_SIDE` is `MINIPSD_ERR_SIZE` (RLE row counts are 16 bits). Row tables and channel sizes follow the rectangle; the composed composite blends at the offset and clips to the canvas |
-| `char blend[4]` | `norm` | written as given |
+| `char blend_mode[4]` | `norm` | written as given |
 | `uint8_t clipping` | not clipped | written as given |
 | `uint8_t flags` | none | the record's other flag bits (0x01 transparency locked, 0x08 and 0x10 pixel data irrelevant), written as given; 0x02 comes from `hidden` |
 | `minipsd_bytes name_pascal` | the writer's own names | the legacy name kept from a file (`minipsd_read` sets it); while `name` says what the kept names say (a kept `luni`, else this one as Latin-1), both are written as they are, otherwise the writer's own |
-| `minipsd_bytes extra` | no extra blocks | the layer's additional-information blocks as one blob, in the format of the reader's `extra` view; written after the writer's own blocks. `minipsd_doc_check` walks them: a malformed run is `MINIPSD_ERR_ARG` |
-| `const minipsd_bytes *stored` | encode `rgba` | four channel blobs (R, G, B, A, as `minipsd_layer_view.channel`), each the stored data with its compression marker and row counts; transparency of size 0 is none. The writer copies each as one piece instead of encoding `rgba`, and writes no transparency channel where none is stored; the sizing pass takes their sizes. `minipsd_doc_check` checks each against the rectangle (raw rows, or RLE counts adding up within the blob; ZIP passes as it is); a layer with `stored` and no `rgba` needs a supplied `composite`, since nothing could compose it. Name, opacity, visibility, blend, clipping and `extra` still come from the layer |
+| `minipsd_bytes additional_info` | no extra blocks | the layer's additional-information blocks as one blob, in the format of the reader's `additional_info` view; written after the writer's own blocks. `minipsd_doc_check` walks them: a malformed run is `MINIPSD_ERR_ARG` |
+| `const minipsd_bytes *stored` | encode `rgba` | four channel blobs (R, G, B, A, as `minipsd_layer_view.channel`), each the stored data with its compression marker and row counts; transparency of size 0 is none. The writer copies each as one piece instead of encoding `rgba`, and writes no transparency channel where none is stored; the sizing pass takes their sizes. `minipsd_doc_check` checks each against the rectangle (raw rows, or RLE counts adding up within the blob; ZIP passes as it is); a layer with `stored` and no `rgba` needs a supplied `composite`, since nothing could compose it. Name, opacity, visibility, `blend_mode`, clipping and `additional_info` still come from the layer |
 
 `minipsd_doc`, at the end, after `composite` and `composite_matted`:
 
@@ -566,7 +568,7 @@ ends before it). `minipsd_bytes`, `minipsd_resource` and `minipsd_block` are dec
 document, which uses them.
 
 **When the document and kept data both say something, the document's field wins** and the kept
-data with that key is skipped: `name` over the `luni` block in `extra`, `dpi` over resource 1005,
+data with that key is skipped: `name` over the `luni` block in `additional_info`, `dpi` over resource 1005,
 `icc` over resource 1039. So a layer is renamed by changing `name` alone, and kept blocks and
 resources pass through whole, unfiltered. One refinement: a kept 1005 that says the same dpi is
 written in place of the writer's own, so its units (centimetres) and vertical resolution
@@ -613,7 +615,7 @@ typedef struct minipsd_read_opts {
   | names, UTF-8 with their NUL | each name's `needed` |
   | each layer's pixels, or with `opts->stored` its stored channels | `w * h * 4`, or the channels' stored size |
   | the composite, as stored (matted), `composite_matted` set; with `opts->stored`, its bytes | `width * height * 4`, or its stored size |
-  | `extra` blobs, resources, `layer_tail`, the ICC profile | their stored size |
+  | `additional_info` blobs, resources, `layer_tail`, the ICC profile | their stored size |
 
   Non-pixel data is usually kilobytes (text, effects, a thumbnail); an embedded smart object can
   reach megabytes and is copied too, the price of a document that stands alone. One function
@@ -679,10 +681,10 @@ feature is serialization: written and read as data. The composite composed as a 
 | **`minipsd_write_file` to `examples/`** | — | removed | — | — | the only **breaking** item: 0.2.0 |
 | **Reader, own subset** | — | — | new | `bytes`, `utf`, `packbits`, `composite` (un-matte) | 8-bit RGB, full-canvas or empty layers |
 | **Layers smaller than the canvas** | done: `top, left, bottom, right` on `minipsd_layer`, as in the view; all zero = full canvas | done: bounds, row tables | done: the view's rectangle | done: `composite`: offset blend, clipped to the canvas | |
-| **Blend modes** | done: `blend[4]`; zero = `norm` | done: key in the record | done: the view's key | — | the composed composite draws every mode as `norm` |
+| **Blend modes** | done: `blend_mode[4]`; zero = `norm` | done: key in the record | done: the view's key | — | the composed composite draws every mode as `norm` |
 | **Supplied composite** | done: `composite`, `composite_matted`; NULL = composed | done: matted unless marked, composing skipped | — | `composite`: the row source | `W7` |
-| **Round trip** | done: `blend`, `clipping`, `flags`, `extra`, `stored`; `resources`, `layer_tail` | done: kept data written back, stored channels copied | done: `clipping`, `flags`, resource names, `layer_tail`; `minipsd_read` with `opts->stored` | `bytes`: the block walker, shared | see [Round trip](#round-trip) |
-| **Layer groups (`lsct`)** | done: `kind` (`MINIPSD_KIND_*`); zero = layer | done: the `lsct` block, the group's mode in it; a kept one of the same kind as it is; nesting checked | done: `kind` in the view | — | the composed composite draws groups flat |
+| **Round trip** | done: `blend_mode`, `clipping`, `flags`, `additional_info`, `stored`; `resources`, `layer_tail` | done: kept data written back, stored channels copied | done: `clipping`, `flags`, resource names, `layer_tail`; `minipsd_read` with `opts->stored` | `bytes`: the block walker, shared | see [Round trip](#round-trip) |
+| **Layer groups (`lsct`)** | done: `section_divider_type` (`MINIPSD_SECTION_*`); zero = layer | done: the `lsct` block, the group's mode in it; a kept one of the same type as it is; nesting checked | done: `section_divider_type` in the view | — | the composed composite draws groups flat |
 | **Layer masks** | done: `mask` (`minipsd_mask`: rectangle, colour, flags, pixels or stored, kept real mask and rest) | done: mask data, channels -2 and -3 | done: the view's mask, `minipsd_decode_mask` | — | the composed composite ignores masks |
 | **16-bit channels** | done: `depth` on `minipsd_doc`; zero = 8 | done: 2-byte samples, big-endian, in the layer info | done: `depth` in `minipsd_decode_opts`, layers from `Lr16`, `minipsd_read` | done: `bytes` (`mpsd__at`, samples), `packbits` over a row's bytes, `composite` against 65535 | ZIP channels decode through the caller's inflate (S6.9), or pass as stored |
 | **PSB (version 2)** | done: `format` on `minipsd_doc` (`MINIPSD_PSD`, `MINIPSD_PSB`; zero = PSD): the layout of everything in the document, set by `minipsd_read`; the output format a write option, zero = the document's (decided over two document fields and over a converting copy: one field never describes a wish, and a translating writer stays zero-copy, as `tiffsave`'s `bigtiff` does) | done: 8-byte lengths, 4-byte RLE counts; `minipsd_write_opts.format` on the write calls, kept bytes translated while streaming (RLE count tables, long keys' lengths), by a policy per long key in `format.h` | done: both versions, `format` in the info and the view, `minipsd_read` sets the document's | `format`: widths, long keys, blocks | sides up to 300 000 px |

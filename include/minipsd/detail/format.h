@@ -85,13 +85,22 @@ static uint32_t mpsd__max_side(unsigned psb) { return psb ? MINIPSD_MAX_SIDE_PSB
 
 #define MPSD__RES_NAME 6   /* where the name starts: after the signature and id */
 
-#define MPSD__RES_RESOLUTION 1005
-#define MPSD__RES_ICC        1039
-
 /* Resolution info: horizontal resolution (16.16 fixed point, pixels per inch), its unit, the
    width's unit (4 + 2 + 2), then the same three for the vertical. */
 #define MPSD__RESOLUTION_SIZE 16
 #define MPSD__FIXED_ONE       65536.0   /* 1.0 in 16.16 fixed point */
+
+/* Version info: its version (4), "has real merged data" (1), the writer's and the reader's names
+   (Unicode strings: a count of UTF-16 units in four bytes, then the units), the file version (4). */
+#define MPSD__VERSION_INFO_HEAD 5
+
+/* Grid and guides: version, two grid values and the guide count (4 each), then each guide: its
+   location (4) and direction (1). */
+#define MPSD__GUIDES_HEAD 16
+#define MPSD__GUIDE_SIZE  5
+
+#define MPSD__TRANSPARENCY_INDEX_SIZE 2   /* one palette entry, two bytes */
+#define MPSD__FILL_OPAQUE             255 /* a layer's fill without an 'iOpa' block */
 
 static uint64_t mpsd__resource_size(size_t name, size_t data)
 {

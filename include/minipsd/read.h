@@ -193,7 +193,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
             for (k = 0; k < MPSD__RGBA; ++k) copies[k] = mpsd__copy(a, v.channel[k]);
         }
         pixels = w && h && !keep ? (uint8_t *)mpsd__take(a, w * h * MPSD__RGBA << wide, (int)wide) : NULL;
-        extra  = mpsd__copy(a, v.extra);                        /* every block, 'luni' too */
+        extra  = mpsd__copy(a, v.additional_info);              /* every block, 'luni' too */
         pascal = mpsd__copy(a, v.name_pascal);
         ranges = (minipsd_blending_range *)mpsd__take(a, (uint64_t)v.blending_range_count * sizeof *ranges, 1);
         if (pixels) decoded += w * h * MPSD__RGBA << wide;
@@ -232,12 +232,12 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         layers[i].hidden  = v.hidden;
         layers[i].top     = v.top;    layers[i].left  = v.left;
         layers[i].bottom  = v.bottom; layers[i].right = v.right;
-        memcpy(layers[i].blend, v.blend, 4);
+        memcpy(layers[i].blend_mode, v.blend_mode, 4);
         layers[i].clipping = v.clipping;
         layers[i].flags    = (uint8_t)(v.flags & ~MPSD__FLAG_HIDDEN);
-        layers[i].extra    = extra;
+        layers[i].additional_info = extra;
         layers[i].name_pascal = pascal;
-        layers[i].kind     = v.kind;
+        layers[i].section_divider_type = v.section_divider_type;
         layers[i].mask     = mask;
         for (j = 0; j < v.blending_range_count; ++j) (void)minipsd_layer_blending_range(&v, j, &ranges[j]);
         layers[i].blending_ranges      = v.blending_range_count ? ranges : NULL;

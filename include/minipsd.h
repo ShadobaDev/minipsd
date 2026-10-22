@@ -63,8 +63,8 @@
  *
  * Channel data is PackBits RLE by default (small for flat art), or raw.
  *
- * Groups (minipsd_layer.kind) and layer masks (minipsd_layer.mask) are written; text and effects
- * only as blocks kept from a file.  Not written: 32-bit, other colour modes.
+ * Groups (minipsd_layer.section_divider_type) and layer masks (minipsd_layer.mask) are written;
+ * text and effects only as blocks kept from a file.  Not written: 32-bit, other colour modes.
  * PSD caps each side at 30000 px, PSB at 300000; larger documents are refused (MINIPSD_ERR_SIZE).
  *
  * \par Output
@@ -145,7 +145,9 @@ enum {
     MINIPSD_ERR_SHORT   = -8,       /*!< Reader: the buffer ends inside data the call needs;
                                         the file may be fine.  minipsd_reader_needed says 
                                         how much more.                                          */
-    MINIPSD_ERR_LIMIT   = -9        /*!< Reader: a value is over a limit (minipsd_limits).      */
+    MINIPSD_ERR_LIMIT   = -9,       /*!< Reader: a value is over a limit (minipsd_limits).      */
+    MINIPSD_ERR_NOT_FOUND = -10     /*!< A lookup found no such item (a resource of that id);
+                                        not a fault of the file.                                */
 };
 
 /**
@@ -219,6 +221,114 @@ typedef struct minipsd_resource {
     minipsd_bytes name; /*!< Its name, raw bytes of a Pascal string; usually empty.     */
 } minipsd_resource;
 
+/**
+ * \brief The ids of standard image resources, named as Adobe's "Image Resource IDs" names them.
+ *
+ * Each comment says what reads the resource: a minipsd function that takes it, or, for formats of
+ * their own (IPTC, EXIF, XMP, the thumbnail's JFIF), its bytes for their own parsers.  Which ones
+ * a file has: minipsd_reader_next_resource lists them all, minipsd_reader_find_resource finds one.
+ * Any other id is a resource too, returned as bytes.
+ */
+enum {
+    MINIPSD_RES_RESOLUTION_INFO     = 1005, /*!< Resolution info: minipsd_resource_resolution_info
+                                                 (and minipsd_info.dpi).                          */
+    MINIPSD_RES_ALPHA_NAMES         = 1006, /*!< The alpha channels' names, Pascal strings:
+                                                 minipsd_resource_next_alpha_name.                */
+    MINIPSD_RES_IPTC_NAA            = 1028, /*!< The IPTC-NAA record: bytes.                      */
+    MINIPSD_RES_GRID_AND_GUIDES     = 1032, /*!< Grid and guides: minipsd_resource_grid_and_guides,
+                                                 minipsd_resource_next_guide.                     */
+    MINIPSD_RES_THUMBNAIL           = 1036, /*!< The thumbnail, a JFIF image after a header: bytes. */
+    MINIPSD_RES_ICC_PROFILE         = 1039, /*!< The ICC profile: minipsd_info.icc.               */
+    MINIPSD_RES_UNICODE_ALPHA_NAMES = 1045, /*!< The alpha channels' names, Unicode strings:
+                                                 minipsd_resource_next_alpha_name.                */
+    MINIPSD_RES_TRANSPARENCY_INDEX  = 1047, /*!< An indexed file's transparent colour:
+                                                 minipsd_resource_transparency_index.             */
+    MINIPSD_RES_ALPHA_IDENTIFIERS   = 1053, /*!< The alpha channels' identifiers:
+                                                 minipsd_resource_next_alpha_identifier.          */
+    MINIPSD_RES_VERSION_INFO        = 1057, /*!< Version info: minipsd_resource_version_info.     */
+    MINIPSD_RES_EXIF_DATA_1         = 1058, /*!< EXIF data: bytes.                                */
+    MINIPSD_RES_XMP_METADATA        = 1060  /*!< XMP metadata, UTF-8 XML: bytes.                  */
+};
+
+/**
+ * \brief Resource 1005, ResolutionInfo, as stored.
+ *
+ * Both resolutions are in pixels per inch whatever their unit: the unit is only how Photoshop
+ * shows them.  libvips wants pixels per millimetre (divide by 25.4) and a unit name.
+ */
+typedef struct minipsd_resolution_info {
+    double   horizontal_resolution;      /*!< hRes: pixels per inch.                               */
+    uint16_t horizontal_resolution_unit; /*!< hResUnit: 1 pixels per inch, 2 pixels per cm.        */
+    uint16_t width_unit;                 /*!< widthUnit: 1 inches, 2 cm, 3 points, 4 picas, 5 columns. */
+    double   vertical_resolution;        /*!< vRes: pixels per inch.                               */
+    uint16_t vertical_resolution_unit;   /*!< vResUnit, as hResUnit.                               */
+    uint16_t height_unit;                /*!< heightUnit, as widthUnit.                            */
+} minipsd_resolution_info;
+
+/**
+ * \brief Resource 1057, version info, as stored.
+ *
+ * A file without it (older than Photoshop 6) has a real composite.
+ */
+typedef struct minipsd_version_info {
+    uint32_t      version;              /*!< The resource's own version, as stored.                 */
+    uint8_t       has_real_merged_data; /*!< Zero: the composite is not the layers' image (saved
+                                             without "Maximize Compatibility"); ImageMagick then
+                                             flattens the layers instead.                         */
+    minipsd_bytes writer_name;          /*!< UTF-16BE, without its length ("Adobe Photoshop");
+                                             minipsd_utf16be_to_utf8 converts.                    */
+    minipsd_bytes reader_name;          /*!< UTF-16BE, as writer_name.                            */
+    uint32_t      file_version;         /*!< The file version, as stored.                          */
+} minipsd_version_info;
+
+/** \brief Resource 1032, grid and guides information: its header; minipsd_resource_next_guide walks the guides. */
+typedef struct minipsd_grid_and_guides {
+    uint32_t version;         /*!< As stored.                                                      */
+    uint32_t horizontal_grid; /*!< Adobe's "future implementation of document-specific grids", as */
+    uint32_t vertical_grid;   /*!< stored, horizontal then vertical.                             */
+    uint32_t guide_count;     /*!< How many guides follow.                                         */
+} minipsd_grid_and_guides;
+
+/** \brief One guide of resource 1032. */
+typedef struct minipsd_guide {
+    int32_t location;  /*!< Where it lies, in document coordinates (pixels) times 32; may lie past
+                            the canvas.                                                         */
+    uint8_t direction; /*!< 0: vertical (a column), 1: horizontal (a row).                      */
+} minipsd_guide;
+
+/** \brief Which of a layer's blocks minipsd_layer_block_settings found: bits of its present field. */
+enum {
+    MINIPSD_PRESENT_LAYER_ID                = 0x01, /*!< 'lyid'. */
+    MINIPSD_PRESENT_SHEET_COLOR             = 0x02, /*!< 'lclr'. */
+    MINIPSD_PRESENT_FILL_OPACITY            = 0x04, /*!< 'iOpa'. */
+    MINIPSD_PRESENT_PROTECTION_FLAGS        = 0x08, /*!< 'lspf'. */
+    MINIPSD_PRESENT_KNOCKOUT                = 0x10, /*!< 'knko'. */
+    MINIPSD_PRESENT_BLEND_CLIPPED_ELEMENTS  = 0x20, /*!< 'clbl'. */
+    MINIPSD_PRESENT_BLEND_INTERIOR_ELEMENTS = 0x40  /*!< 'infx'. */
+};
+
+/**
+ * \brief What a layer's fixed-layout blocks say, as stored; the first block of each key counts.
+ *
+ * A value whose block is missing is 0, its bit in present clear; fill_opacity is then 255, the
+ * fill a layer without it has.
+ */
+typedef struct minipsd_block_settings {
+    uint32_t layer_id;                /*!< 'lyid': the layer's id.                                  */
+    uint16_t sheet_color;             /*!< 'lclr': the colour label in the layers panel, 0 none, 1 red,
+                                           2 orange, 3 yellow, 4 green, 5 blue, 6 violet, 7 grey, and
+                                           newer ones above (psd-tools' list).                       */
+    uint8_t  fill_opacity;            /*!< 'iOpa': the fill opacity, 255 opaque; unlike opacity, it
+                                           leaves the layer's effects alone.                        */
+    uint32_t protection_flags;        /*!< 'lspf': 0x01 transparency, 0x02 composite (pixels), 0x04
+                                           position locked; 0x08 nesting and 0x80000000 all, by
+                                           psd-tools.                                               */
+    uint8_t  knockout;                /*!< 'knko': 0 none, 1 shallow, 2 deep (psd-tools').         */
+    uint8_t  blend_clipped_elements;  /*!< 'clbl': non-zero blends clipped layers as a group.      */
+    uint8_t  blend_interior_elements; /*!< 'infx': non-zero blends interior effects as a group.    */
+    uint8_t  present;                 /*!< MINIPSD_PRESENT_*: the blocks the layer has.            */
+} minipsd_block_settings;
+
 /** \brief One tagged block of a layer's additional information ('luni', 'lsct', 'tySh', ...). */
 typedef struct minipsd_block {
     char          key[5]; /*!< The four-character key, then a NUL.  */
@@ -248,12 +358,16 @@ typedef struct minipsd_blending_range {
     minipsd_blend_range destination; /*!< "Underlying Layer". */
 } minipsd_blending_range;
 
-/** \brief What a layer record is: a layer, or one end of a group (the type of its 'lsct' block). */
+/**
+ * \brief What a layer record is: a layer, or one end of a group.  The type of its 'lsct' block,
+ *        Adobe's "section divider setting" (any other layer, open folder, closed folder, bounding
+ *        section divider).
+ */
 enum {
-    MINIPSD_KIND_LAYER        = 0, /*!< A layer with pixels, or an empty one.                     */
-    MINIPSD_KIND_GROUP        = 1, /*!< A group, shown open in the layers panel: its top record.  */
-    MINIPSD_KIND_GROUP_CLOSED = 2, /*!< A group, shown closed: its top record.                    */
-    MINIPSD_KIND_GROUP_END    = 3  /*!< Where a group starts, below its layers: the divider.      */
+    MINIPSD_SECTION_LAYER        = 0, /*!< A layer with pixels, or an empty one.                     */
+    MINIPSD_SECTION_GROUP        = 1, /*!< A group, shown open in the layers panel: its top record.  */
+    MINIPSD_SECTION_GROUP_CLOSED = 2, /*!< A group, shown closed: its top record.                    */
+    MINIPSD_SECTION_GROUP_END    = 3  /*!< Where a group starts, below its layers: the divider.      */
 };
 
 /**
@@ -264,7 +378,7 @@ enum {
 typedef struct minipsd_mask {
     int32_t        top, left, bottom, right; /*!< The mask's rectangle on the canvas; may differ from
                                                   the layer's, and may have no area.                */
-    uint8_t        color;                    /*!< Its value outside the rectangle: 0 or 255.        */
+    uint8_t        default_color;            /*!< Its value outside the rectangle: 0 or 255.        */
     uint8_t        flags;                    /*!< As stored: 0x01 position relative to the layer,
                                                   0x02 disabled, 0x08 made by rendering other data,
                                                   0x10 parameters follow (in rest).                 */
@@ -298,17 +412,17 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
                                     minipsd_layer_view; all four zero, with rgba and no stored: the
                                     full canvas.  It may reach past the canvas, or lie wholly
                                     outside it.  An empty layer's has no area.                     */
-    char           blend[4];    /*!< The blend mode's four-character key, such as "mul "; all zero:
+    char           blend_mode[4]; /*!< The blend mode's four-character key, such as "mul "; all zero:
                                     "norm".  Written as given; the composed composite draws every
                                     mode as normal.                                                */
     uint8_t        clipping;    /*!< Non-zero: clipped to the layer below.  Written as given.        */
     uint8_t        flags;       /*!< The record's other flag bits, written as given: 0x01 transparency
                                     locked, 0x08 and 0x10 pixel data irrelevant (groups' markers).
                                     Bit 0x02 is ignored: hidden says it.                           */
-    minipsd_bytes  extra;       /*!< Additional-information blocks kept from a file (text, effects,
-                                    groups, ...), as minipsd_layer_view.extra holds them: written
-                                     after the layer's own name, except a 'luni' block, since name
-                                    wins.                                                          */
+    minipsd_bytes  additional_info; /*!< Additional layer information blocks kept from a file (text,
+                                    effects, groups, ...), as minipsd_layer_view.additional_info
+                                    holds them: written after the layer's own name, except a
+                                    'luni' block, since name wins.                                 */
     const minipsd_bytes *stored; /*!< NULL: rgba is encoded.  Otherwise four channels as a file
                                     stores them (R, G, B, transparency, as minipsd_layer_view.channel:
                                     the compression marker, then the rows), copied as they are
@@ -316,11 +430,11 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
                                     again.  Each is checked against the rectangle; transparency of
                                     size 0 is none, and written as none.  rgba may then be NULL, as long
                                     as the document supplies its composite.                       */
-    uint8_t        kind;        /*!< MINIPSD_KIND_*: a layer, or a group's top record or divider.
-                                    Groups nest bottom first: a divider, the group's layers, then
-                                    its top record, which carries the group's name, visibility and
-                                    mode (blend; zero: pass through).  Written as an 'lsct' block,
-                                    or a kept one of the same kind as it is.                       */
+    uint8_t        section_divider_type; /*!< MINIPSD_SECTION_*: a layer, or a group's top record or
+                                    divider.  Groups nest bottom first: a divider, the group's
+                                    layers, then its top record, which carries the group's name,
+                                    visibility and mode (blend_mode; zero: pass through).  Written
+                                    as an 'lsct' block, or a kept one of the same type as it is.   */
     const minipsd_mask *mask;   /*!< The layer mask; NULL: none.                                   */
     const minipsd_blending_range *blending_ranges; /*!< blending_range_count ranges, written as given:
                                     the composite grey's, then each channel's.  NULL with a count
@@ -380,7 +494,7 @@ typedef struct minipsd_doc {
                                               host order, 0 .. 65535.                         */
     uint16_t             format;         /*!< MINIPSD_PSD (or 0) or MINIPSD_PSB: what the
                                               document is.  Everything kept from a file
-                                              (stored channels, masks' stored and real, extra,
+                                              (stored channels, masks' stored and real, additional_info,
                                               layer_tail) is laid out as this format lays it
                                               out; minipsd_read sets it to the file's.  It is
                                               written as this format unless
@@ -456,8 +570,8 @@ typedef struct minipsd_write_opts {
  * \retval MINIPSD_ERR_ARG  doc is NULL, a format is neither 0, MINIPSD_PSD nor MINIPSD_PSB (the
  *                          document's or opts'), there are no layers and no composite (or more than 32767 layers), dpi is outside
  *                          (0, 65536), depth is not 0, 8 or 16, a size is set without its data (icc, a resource, a name,
- *                          extra, layer_tail), a layer's rectangle is inverted, an empty layer's
- *                          has an area, extra is not a run of well-formed blocks, a stored
+ *                          additional_info, layer_tail), a layer's rectangle is inverted, an empty layer's
+ *                          has an area, additional_info is not a run of well-formed blocks, a stored
  *                          channel does not match its rectangle, a layer has only stored
  *                          channels while the composite is to be composed, groups do not nest
  *                          (every group's top record needs its divider below it), or a mask's
@@ -619,8 +733,8 @@ typedef struct minipsd_info {
     uint16_t      depth;               /*!< Bits per channel: 1, 8, 16 or 32.                          */
     uint16_t      color_mode;          /*!< As stored: 0 bitmap, 1 grey, 2 indexed, 3 RGB, 4 CMYK,
                                             7 multichannel, 8 duotone, 9 Lab.                          */
-    double        dpi;                 /*!< Horizontal pixels per inch; 0 without a resolution resource. */
-    minipsd_bytes icc;                 /*!< The ICC profile; size 0 when the file has none.            */
+    double        dpi;                 /*!< Horizontal pixels per inch (resource 1005); 0 without it.   */
+    minipsd_bytes icc;                 /*!< The ICC profile (resource 1039); size 0 when none.        */
     size_t        layer_count;         /*!< Layers in the file.                                        */
     int           composite_has_alpha; /*!< Non-zero: the composite's first extra channel is transparency
                                             (the file's layer count is negative).                      */
@@ -637,7 +751,7 @@ typedef struct minipsd_info {
                                             and in multichannel every channel but the composite's
                                             transparency.  Transparency has the plane after them in a
                                             target and in a layer view.                               */
-    minipsd_bytes color_data;          /*!< The colour mode data, as stored: an indexed file's palette
+    minipsd_bytes color_mode_data;     /*!< The colour mode data, as stored: an indexed file's palette
                                             (256 reds, 256 greens, 256 blues), a duotone file's
                                             inks and curves; size 0 for none.  minipsd converts no
                                             colour: this, or the ICC profile, says what samples mean. */
@@ -673,13 +787,13 @@ typedef struct minipsd_layer_view {
                                                  layers) comes back empty, bottom = top, right = left. */
     uint8_t       opacity;                  /*!< 255 is opaque.                                        */
     uint8_t       hidden;                   /*!< Non-zero: the layer is hidden.                        */
-    char          blend[5];                 /*!< The blend mode's four-character key ("norm"), then a NUL. */
+    char          blend_mode[5];            /*!< The blend mode's four-character key ("norm"), then a NUL. */
     minipsd_bytes name_pascal;              /*!< The legacy name, raw bytes (non-ASCII characters are
                                                  whatever code page the writer used).                  */
     minipsd_bytes name_unicode;             /*!< The 'luni' name, raw UTF-16BE; data is NULL when the
                                                  record has none.  minipsd_layer_name converts.        */
-    minipsd_bytes extra;                    /*!< All the layer's additional-information blocks, walked
-                                                 with minipsd_layer_next_block.                        */
+    minipsd_bytes additional_info;          /*!< All the layer's additional layer information blocks,
+                                                 walked with minipsd_layer_next_block.                 */
     minipsd_bytes channel[MINIPSD_PLANES];  /*!< The colour channels, then transparency (MINIPSD_PLANES;
                                                  RGB's MINIPSD_CH_*): the channel's stored data, its
                                                  compression marker first.  size 0: the layer has no
@@ -692,8 +806,8 @@ typedef struct minipsd_layer_view {
     uint16_t      other_channels;           /*!< Channels the reader does not read (alpha, spot, ...). */
     uint8_t       clipping;                 /*!< Non-zero: clipped to the layer below.                 */
     uint8_t       flags;                    /*!< The record's flag bits as stored (0x02 is hidden).    */
-    uint8_t       kind;                     /*!< MINIPSD_KIND_*, from the record's 'lsct' block; a
-                                                 group's own mode is in that block (blend is the
+    uint8_t       section_divider_type;     /*!< MINIPSD_SECTION_*, from the record's 'lsct' block; a
+                                                 group's own mode is in that block (blend_mode is the
                                                  record's).                                           */
     uint8_t       has_mask;                 /*!< Non-zero: mask holds the layer mask.                  */
     minipsd_mask  mask;                     /*!< The layer mask: its rectangle, colour and flags, its
@@ -701,7 +815,7 @@ typedef struct minipsd_layer_view {
                                                  buffer ends before it), real and rest as views;
                                                  pixels is NULL: minipsd_decode_mask decodes.          */
     uint64_t      mask_offset;              /*!< Where the mask's channel starts in the file (0: none). */
-    uint8_t       format;                   /*!< MINIPSD_PSD or MINIPSD_PSB, the file's: how extra's
+    uint8_t       format;                   /*!< MINIPSD_PSD or MINIPSD_PSB, the file's: how additional_info's
                                                  blocks and the channels' row counts are laid out.
                                                  0 in a view built by hand is MINIPSD_PSD.             */
     minipsd_bytes blending_ranges;          /*!< The blending ranges as stored, eight bytes each; size
@@ -837,6 +951,137 @@ MINIPSDDEF int minipsd_layer_next_block(const minipsd_layer_view *layer, size_t 
  * \return MINIPSD_OK; or MINIPSD_ERR_ARG for a NULL argument or i past the layer's ranges.
  */
 MINIPSDDEF int minipsd_layer_blending_range(const minipsd_layer_view *layer, uint32_t i, minipsd_blending_range *range);
+
+/**
+ * \brief The first image resource with an id, wherever it is.
+ *
+ * Its own walk from the first resource: next_resource's place is untouched, and it only reads the
+ * reader, so it may run beside any other call (see the spec's Threads).
+ *
+ * \param r   A reader from minipsd_reader_init.
+ * \param id  The resource's number, such as MINIPSD_RES_VERSION_INFO.
+ * \param res Receives the resource.
+ * \return MINIPSD_OK when found; MINIPSD_ERR_NOT_FOUND when the file has none (res is untouched);
+ *         MINIPSD_ERR_ARG when r (never initialised) or res is NULL.
+ */
+MINIPSDDEF int minipsd_reader_find_resource(const minipsd_reader *r, uint16_t id, minipsd_resource *res);
+
+/* --- Typed views: what a kept resource or block says, parsed; they need no reader ------------ */
+
+/**
+ * \brief UTF-16BE text as UTF-8, as minipsd_layer_name gives a name.
+ *
+ * An unpaired surrogate becomes U+FFFD, a U+0000 ends the text, and an odd last byte is dropped.
+ *
+ * \param utf16  The text, such as minipsd_version_info.writer_name.
+ * \param utf8   Receives the text and a terminating NUL; may be NULL when cap is 0.
+ * \param cap    The size of utf8 in bytes.
+ * \param needed Receives the bytes the text takes with its NUL; may be NULL.
+ * \return MINIPSD_OK when it fits; MINIPSD_MORE when cap is too small (utf8 is then empty);
+ *         or MINIPSD_ERR_ARG for a NULL utf16, a view with a size and no data, or utf8 NULL with
+ *         cap above 0.
+ */
+MINIPSDDEF int minipsd_utf16be_to_utf8(const minipsd_bytes *utf16, char *utf8, size_t cap, size_t *needed);
+
+/**
+ * \brief Resource 1005, ResolutionInfo.
+ *
+ * \param res A resource from the reader or a document, its id MINIPSD_RES_RESOLUTION_INFO.
+ * \param out Receives the values.
+ * \return MINIPSD_OK; MINIPSD_ERR_FORMAT when the data is shorter than its 16 bytes;
+ *         MINIPSD_ERR_ARG for a NULL argument or another id.
+ */
+MINIPSDDEF int minipsd_resource_resolution_info(const minipsd_resource *res, minipsd_resolution_info *out);
+
+/**
+ * \brief Resource 1057, version info.
+ *
+ * \param res A resource from the reader or a document, its id MINIPSD_RES_VERSION_INFO.
+ * \param out Receives the values; the names point into res's data.
+ * \return MINIPSD_OK; MINIPSD_ERR_FORMAT when the data ends inside a field or a name;
+ *         MINIPSD_ERR_ARG for a NULL argument or another id.
+ */
+MINIPSDDEF int minipsd_resource_version_info(const minipsd_resource *res, minipsd_version_info *out);
+
+/**
+ * \brief Resource 1032, grid and guides information: the header.
+ *
+ * \param res A resource, its id MINIPSD_RES_GRID_AND_GUIDES.
+ * \param out Receives the header.
+ * \return MINIPSD_OK; MINIPSD_ERR_FORMAT when the data ends inside the header or the guides it
+ *         counts; MINIPSD_ERR_ARG for a NULL argument or another id.
+ */
+MINIPSDDEF int minipsd_resource_grid_and_guides(const minipsd_resource *res, minipsd_grid_and_guides *out);
+
+/**
+ * \brief The next guide of resource 1032, in stored order.
+ *
+ * \param res   A resource, its id MINIPSD_RES_GRID_AND_GUIDES.
+ * \param pos   The caller's cursor: start at 0; moved past the guide returned.
+ * \param guide Receives the guide.
+ * \return MINIPSD_MORE when a guide was written; MINIPSD_OK at the end; MINIPSD_ERR_FORMAT as
+ *         minipsd_resource_grid_and_guides; MINIPSD_ERR_ARG for a NULL argument, another id, or a
+ *         pos this function did not give.
+ */
+MINIPSDDEF int minipsd_resource_next_guide(const minipsd_resource *res, size_t *pos, minipsd_guide *guide);
+
+/**
+ * \brief The next alpha channel's name: resource 1045 (Unicode) or 1006 (Pascal strings).
+ *
+ * Photoshop writes both; find 1045 first, 1006 for files without it.
+ *
+ * \param res  A resource, its id MINIPSD_RES_UNICODE_ALPHA_NAMES or MINIPSD_RES_ALPHA_NAMES.
+ * \param pos  The caller's cursor: start at 0; moved past the name returned.
+ * \param name Receives the name: UTF-16BE for 1045 (minipsd_utf16be_to_utf8 converts), raw bytes
+ *             in the writer's code page for 1006.
+ * \return MINIPSD_MORE when a name was written; MINIPSD_OK at the end; MINIPSD_ERR_FORMAT when a
+ *         name runs past the data; MINIPSD_ERR_ARG for a NULL argument or another id.
+ */
+MINIPSDDEF int minipsd_resource_next_alpha_name(const minipsd_resource *res, size_t *pos, minipsd_bytes *name);
+
+/**
+ * \brief The next alpha channel's identifier, resource 1053.
+ *
+ * \param res A resource, its id MINIPSD_RES_ALPHA_IDENTIFIERS.
+ * \param pos The caller's cursor: start at 0; moved past the identifier returned.
+ * \param id  Receives the identifier.
+ * \return MINIPSD_MORE when one was written; MINIPSD_OK at the end; MINIPSD_ERR_FORMAT when the
+ *         data is not whole identifiers (four bytes each); MINIPSD_ERR_ARG for a NULL argument or
+ *         another id.
+ */
+MINIPSDDEF int minipsd_resource_next_alpha_identifier(const minipsd_resource *res, size_t *pos, uint32_t *id);
+
+/**
+ * \brief Resource 1047: which palette entry of an indexed file is transparent.
+ *
+ * \param res   A resource, its id MINIPSD_RES_TRANSPARENCY_INDEX.
+ * \param index Receives the entry, 0 to 255.
+ * \return MINIPSD_OK; MINIPSD_ERR_FORMAT when the data is shorter than two bytes; MINIPSD_ERR_ARG
+ *         for a NULL argument or another id.
+ */
+MINIPSDDEF int minipsd_resource_transparency_index(const minipsd_resource *res, uint16_t *index);
+
+/**
+ * \brief Adobe's name for an image resource id, for listing what a file holds.
+ *
+ * Every id of Adobe's "Image Resource IDs" table has one, its ranges included (2000 to 2997 path
+ * information, 4000 to 4999 plug-in resources).  The text is a constant, in English.
+ *
+ * \param id A resource's number, such as minipsd_resource.id.
+ * \return The name, such as "Resolution info"; NULL for an id Adobe does not list.
+ */
+MINIPSDDEF const char *minipsd_resource_id_name(uint16_t id);
+
+/**
+ * \brief What a layer's fixed-layout blocks say: id, colour label, fill, locks, knockout, blending
+ *        of clipped and interior elements.
+ *
+ * \param layer A record from minipsd_reader_next_layer, or a view built by hand.
+ * \param out   Receives the values.
+ * \return MINIPSD_OK; MINIPSD_ERR_FORMAT for a malformed run of blocks or one of these shorter than
+ *         its value; MINIPSD_ERR_ARG for a NULL argument.
+ */
+MINIPSDDEF int minipsd_layer_block_settings(const minipsd_layer_view *layer, minipsd_block_settings *out);
 
 /**
  * \brief Where one channel's samples go: the first sample, and the steps to the next one.
@@ -1139,6 +1384,7 @@ MINIPSDDEF void minipsd_doc_free(minipsd_doc *doc);
 #ifdef MINIPSD_IMPLEMENTATION
 #include "minipsd/base.h"
 #include "minipsd/writer.h"
+#include "minipsd/views.h"
 #include "minipsd/reader.h"
 #include "minipsd/read.h"
 #endif
