@@ -141,7 +141,10 @@ int main(int argc, char **argv)
     rgb = (info.depth == 8 || info.depth == 16) && info.color_mode == 3;   /* what minipsd_read takes */
 
     printf("resources:");
-    while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE) printf(" %u (%lu)", (unsigned)res.id, (unsigned long)res.data.size);
+    for (pos = 0; minipsd_reader_next_resource(r, &pos, &res) == MINIPSD_MORE;) {
+        const char *res_name = minipsd_resource_id_name(res.id);   /* Adobe's name; NULL for others */
+        printf(" %u %s (%lu)", (unsigned)res.id, res_name ? res_name : "?", (unsigned long)res.data.size);
+    }
     printf("\n%lu layers, bottom first:\n", (unsigned long)info.layer_count);
 
     while ((rc = minipsd_reader_next_layer(r, &layer)) == MINIPSD_MORE) {

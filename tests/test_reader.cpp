@@ -501,22 +501,30 @@ TEST(MinipsdReaderTest, ResourcesAreListedInFileOrderWithTheirBytes)
     ASSERT_EQ(o.rc, MINIPSD_OK);
 
     minipsd_resource res;
-    ASSERT_EQ(minipsd_reader_next_resource(o.r, &res), MINIPSD_MORE);
+    std::size_t pos = 0;
+    ASSERT_EQ(minipsd_reader_next_resource(o.r, &pos, &res), MINIPSD_MORE);
     EXPECT_EQ(res.id, 1005);
     EXPECT_EQ(res.data.size, 16u);
     EXPECT_TRUE(inside(o.blob, res.data));
-    ASSERT_EQ(minipsd_reader_next_resource(o.r, &res), MINIPSD_MORE);
+    const std::size_t second = pos;
+    ASSERT_EQ(minipsd_reader_next_resource(o.r, &pos, &res), MINIPSD_MORE);
     EXPECT_EQ(res.id, 1039);
     EXPECT_EQ(Bytes(res.data.data, res.data.data + res.data.size), icc) << "without the pad byte";
     res.id = 7777;
-    EXPECT_EQ(minipsd_reader_next_resource(o.r, &res), MINIPSD_OK);
+    EXPECT_EQ(minipsd_reader_next_resource(o.r, &pos, &res), MINIPSD_OK);
     EXPECT_EQ(res.id, 7777) << "untouched at the end";
 
-    // init again: the list starts over.
-    Open again(file);
-    ASSERT_EQ(again.rc, MINIPSD_OK);
-    EXPECT_EQ(minipsd_reader_next_resource(again.r, &res), MINIPSD_MORE);
+    // The cursor is the caller's: the list starts over from 0, or from any place it gave, as often
+    // as asked; a place it did not give is refused.
+    std::size_t again = 0;
+    EXPECT_EQ(minipsd_reader_next_resource(o.r, &again, &res), MINIPSD_MORE);
     EXPECT_EQ(res.id, 1005);
+    again = second;
+    EXPECT_EQ(minipsd_reader_next_resource(o.r, &again, &res), MINIPSD_MORE);
+    EXPECT_EQ(res.id, 1039);
+    again = 1;
+    EXPECT_EQ(minipsd_reader_next_resource(o.r, &again, &res), MINIPSD_ERR_FORMAT) << "inside a resource";
+    EXPECT_EQ(again, 1u) << "the cursor stays";
 }
 
 TEST(MinipsdReaderTest, ResourcesWithNamesAndOddSizesAreWalkedCorrectly)
@@ -577,9 +585,10 @@ TEST(MinipsdReaderTest, ResourcesWithNamesAndOddSizesAreWalkedCorrectly)
 
     const std::tuple<int, std::size_t, std::string> expected[] = {
         {1036, 7, "ab"}, {2000, 4, "abc"}, {1005, 16, ""}, {1039, 3, ""}, {1005, 16, ""}, {1039, 9, ""}};
+    std::size_t pos = 0;
     for (const auto &[id, size, name] : expected) {
         minipsd_resource res;
-        ASSERT_EQ(minipsd_reader_next_resource(o.r, &res), MINIPSD_MORE);
+        ASSERT_EQ(minipsd_reader_next_resource(o.r, &pos, &res), MINIPSD_MORE);
         EXPECT_EQ(res.id, id);
         EXPECT_EQ(res.data.size, size);
         EXPECT_EQ(std::string(reinterpret_cast<const char *>(res.name.data), res.name.size), name);
@@ -596,7 +605,8 @@ TEST(MinipsdReaderTest, AFileWithoutResourcesHasNoDpiAndNoProfile)
     EXPECT_EQ(o.info.dpi, 0.0);
     EXPECT_EQ(o.info.icc.size, 0u);
     minipsd_resource res;
-    EXPECT_EQ(minipsd_reader_next_resource(o.r, &res), MINIPSD_OK);
+    std::size_t pos = 0;
+    EXPECT_EQ(minipsd_reader_next_resource(o.r, &pos, &res), MINIPSD_OK);
     EXPECT_EQ(minipsd_reader_find_resource(o.r, MINIPSD_RES_RESOLUTION_INFO, &res), MINIPSD_ERR_NOT_FOUND);
 }
 
@@ -1260,14 +1270,16 @@ TEST(MinipsdReaderTest, ACallOnAReaderThatNeverStartedIsRefused)
     minipsd_layer_view v;
     minipsd_resource res;
     EXPECT_EQ(minipsd_reader_next_layer(cut.r, &v), MINIPSD_ERR_ARG);
-    EXPECT_EQ(minipsd_reader_next_resource(cut.r, &res), MINIPSD_ERR_ARG);
+    std::size_t pos = 0;
+    EXPECT_EQ(minipsd_reader_next_resource(cut.r, &pos, &res), MINIPSD_ERR_ARG);
     EXPECT_EQ(minipsd_reader_find_resource(cut.r, MINIPSD_RES_RESOLUTION_INFO, &res), MINIPSD_ERR_ARG);
 
     Open ok(f.bytes);
     EXPECT_EQ(minipsd_reader_next_layer(nullptr, &v), MINIPSD_ERR_ARG);
     EXPECT_EQ(minipsd_reader_next_layer(ok.r, nullptr), MINIPSD_ERR_ARG);
-    EXPECT_EQ(minipsd_reader_next_resource(nullptr, &res), MINIPSD_ERR_ARG);
-    EXPECT_EQ(minipsd_reader_next_resource(ok.r, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_reader_next_resource(nullptr, &pos, &res), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_reader_next_resource(ok.r, nullptr, &res), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_reader_next_resource(ok.r, &pos, nullptr), MINIPSD_ERR_ARG);
     EXPECT_EQ(minipsd_reader_find_resource(nullptr, MINIPSD_RES_RESOLUTION_INFO, &res), MINIPSD_ERR_ARG);
     EXPECT_EQ(minipsd_reader_find_resource(ok.r, MINIPSD_RES_RESOLUTION_INFO, nullptr), MINIPSD_ERR_ARG);
 }
@@ -2881,7 +2893,8 @@ void expectKeptAlike(const Bytes &before, const Bytes &after)
     auto resources = [](minipsd_reader *r) {
         std::vector<std::tuple<int, Bytes, Bytes>> out;
         minipsd_resource res;
-        while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE)
+        std::size_t pos = 0;
+        while (minipsd_reader_next_resource(r, &pos, &res) == MINIPSD_MORE)
             if (res.id != 1005 && res.id != 1039)
                 out.emplace_back(res.id, Bytes(res.data.data, res.data.data + res.data.size),
                                  Bytes(res.name.data, res.name.data + res.name.size));

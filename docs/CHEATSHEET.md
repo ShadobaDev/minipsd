@@ -11,6 +11,7 @@ consumers, so there is nothing to ship from a build.
 | `linux-gcc` | Linux / WSL | GCC + Ninja |
 | `linux-clang` | Linux / WSL | Clang + Ninja |
 | `linux-asan` | Linux / WSL | GCC + AddressSanitizer and UBSan (no round trip) |
+| `linux-tsan` | Linux / WSL | Clang + ThreadSanitizer; on new kernels it needs `sudo sysctl vm.mmap_rnd_bits=28` |
 | `linux-tidy` | Linux / WSL | Clang + clang-tidy on the tests and the header |
 | `linux-coverage` | Linux / WSL | GCC + `--coverage`; report with gcovr below |
 | `linux-fuzz` | Linux / WSL | Clang + libFuzzer, ASan and UBSan; local only, see [Fuzzing](#fuzzing) |
@@ -152,7 +153,7 @@ paths also check the SBOM fragment's version and that it lists the headers.
 | `MINIPSD_BUILD_TESTS` | ON only as the top-level project | the tests above |
 | `MINIPSD_INSTALL` | ON only as the top-level project | install rules |
 | `MINIPSD_REQUIRE_PSD_TOOLS` | OFF (CI: ON) | fail the configure instead of skipping the round trip |
-| `MINIPSD_PSD_TOOLS_FILES` | OFF (CI: OFF) | fetch psd-tools' 279 test PSDs (v1.25.0, about 22 MB, pinned by hash) and read every one |
+| `MINIPSD_PSD_TOOLS_FILES` | OFF (CI: OFF) | fetch psd-tools' 315 test files, 278 PSD and 37 PSB (v1.25.0, about 22 MB, pinned by hash) and read every one |
 | `MINIPSD_TEST_FIXTURES` | ON (`linux-coverage`: OFF) | read the local PSDs in `tests/fixtures/` too; off, a local coverage run measures what CI's does |
 | `MINIPSD_CLANG_TIDY` | empty (`linux-tidy`: `clang-tidy`) | run clang-tidy on the test targets |
 

@@ -237,7 +237,7 @@ int    minipsd_reader_init (minipsd_reader **r, const void *data, size_t size,
                             minipsd_info *info);
 uint64_t minipsd_reader_needed(const minipsd_reader *r);           /* after MINIPSD_ERR_SHORT */
 
-int minipsd_reader_next_resource(minipsd_reader *r, minipsd_resource   *res);    /* MORE: got one; OK: no more */
+int minipsd_reader_next_resource(const minipsd_reader *r, size_t *pos, minipsd_resource *res);  /* MORE / OK */
 int minipsd_reader_next_layer   (minipsd_reader *r, minipsd_layer_view *layer);  /* MORE: got one; OK: no more */
 int minipsd_layer_name          (const minipsd_layer_view *layer, char *utf8, size_t cap, size_t *needed);
 int minipsd_layer_next_block    (const minipsd_layer_view *layer, size_t *pos, minipsd_block *block);  /* MORE / OK */
@@ -687,6 +687,7 @@ feature is serialization: written and read as data. The composite composed as a 
 | **Layer groups (`lsct`)** | done: `section_divider_type` (`MINIPSD_SECTION_*`); zero = layer | done: the `lsct` block, the group's mode in it; a kept one of the same type as it is; nesting checked | done: `section_divider_type` in the view | — | the composed composite draws groups flat |
 | **Layer masks** | done: `mask` (`minipsd_mask`: rectangle, colour, flags, pixels or stored, kept real mask and rest) | done: mask data, channels -2 and -3 | done: the view's mask, `minipsd_decode_mask` | — | the composed composite ignores masks |
 | **16-bit channels** | done: `depth` on `minipsd_doc`; zero = 8 | done: 2-byte samples, big-endian, in the layer info | done: `depth` in `minipsd_decode_opts`, layers from `Lr16`, `minipsd_read` | done: `bytes` (`mpsd__at`, samples), `packbits` over a row's bytes, `composite` against 65535 | ZIP channels decode through the caller's inflate (S6.9), or pass as stored |
+| **Typed views** | — (output only: `minipsd_resolution_info`, `minipsd_version_info`, `minipsd_grid_and_guides`, `minipsd_guide`, `minipsd_block_settings`) | — | `views.h`: a resource or a layer view in, a struct out; `find_resource`, `next_resource` with the caller's `pos` | `format`, `utf` | the writer keeps resources and blocks as bytes; nothing to write |
 | **PSB (version 2)** | done: `format` on `minipsd_doc` (`MINIPSD_PSD`, `MINIPSD_PSB`; zero = PSD): the layout of everything in the document, set by `minipsd_read`; the output format a write option, zero = the document's (decided over two document fields and over a converting copy: one field never describes a wish, and a translating writer stays zero-copy, as `tiffsave`'s `bigtiff` does) | done: 8-byte lengths, 4-byte RLE counts; `minipsd_write_opts.format` on the write calls, kept bytes translated while streaming (RLE count tables, long keys' lengths), by a policy per long key in `format.h` | done: both versions, `format` in the info and the view, `minipsd_read` sets the document's | `format`: widths, long keys, blocks | sides up to 300 000 px |
 
 ## Distribution of a multi-file library

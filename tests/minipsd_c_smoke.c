@@ -88,13 +88,13 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
         uint8_t            got[sizeof px];
         uint8_t            rws[256];
         char               name[16];
-        size_t             rneed, pos = 0, resources = 0, blocks = 0;
+        size_t             rneed, pos = 0, rpos = 0, resources = 0, blocks = 0;
 
         if (minipsd_reader_workspace_size(&rneed) != MINIPSD_OK || rneed > sizeof rws
             || minipsd_reader_init(&rd, b.data, b.size, rws, rneed, NULL, &info) != MINIPSD_OK
             || info.width != 3 || info.height != 2 || info.layer_count != 2 || minipsd_reader_needed(rd) != 0)
             return -103;
-        while (minipsd_reader_next_resource(rd, &res) == MINIPSD_MORE) ++resources;
+        while (minipsd_reader_next_resource(rd, &rpos, &res) == MINIPSD_MORE) ++resources;
         if (resources != 1)
             return -104;
         {   /* the resource the writer wrote, found and parsed; a version info built by hand */

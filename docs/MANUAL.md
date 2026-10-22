@@ -401,7 +401,8 @@ Only `init` is required. Every step below it is independent of the others, so sk
 do not need: a file manager stops after `init`; a viewer goes straight to the composite, as
 [Read a PSD](#read-a-psd) could; a layer exporter never decodes the composite. Resources and
 layers are iterators: each call returns `MINIPSD_MORE` with one item, then `MINIPSD_OK` when
-there are no more. Calling `init` again restarts both.
+there are no more. The resources' cursor is yours (`pos`, from 0), as a layer's blocks' is: walk
+them as often as you like. The layers' is the reader's: calling `init` again restarts it.
 
 A PSB (Photoshop's large document format, sides up to 300 000 px) reads through the same calls.
 `info.format` is `MINIPSD_PSB` then; the decoded pixels, names and rectangles are no different,
@@ -570,7 +571,8 @@ come as bytes, for a parser of their own. To list what a file holds, walk the re
 name each id:
 
 ```c
-while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE) {
+size_t pos = 0;
+while (minipsd_reader_next_resource(r, &pos, &res) == MINIPSD_MORE) {
     const char *name = minipsd_resource_id_name(res.id);   /* Adobe's name; NULL if unlisted */
     printf("%u %s, %zu bytes\n", (unsigned)res.id, name ? name : "(unknown)", res.data.size);
 }

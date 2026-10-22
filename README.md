@@ -70,7 +70,10 @@ Not written (yet): 32-bit, other colour modes. The full contract is in [docs/SPE
 ## What it reads
 
 Any PSD or PSB: its size, colour mode, depth, dpi, ICC profile, resources, and every layer
-with its name, rectangle, opacity, visibility, blend mode and raw additional data. Pixels of
+with its name, rectangle, opacity, visibility, blend mode and raw additional data. Metadata
+parsed into plain values: resources found by id and named by Adobe's table, the resolution,
+version info (whether the composite is real), guides, alpha channel names, and a layer's id,
+colour label, fill opacity and locks. Pixels of
 every colour mode and depth (1, 8, 16, 32 bits) decode as stored, layers and composite, into
 memory of any layout; 8- and 16-bit RGB files also whole into a document that `minipsd_write`
 takes back. ZIP-compressed channels (Photoshop's 16- and 32-bit layers)

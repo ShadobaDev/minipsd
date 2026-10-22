@@ -110,7 +110,7 @@ The declarations, with every parameter and return code, are in
 | `minipsd_reader_workspace_size(&size)` | the reader's workspace: fixed, known before the file |
 | `minipsd_reader_init(&r, data, size, workspace, workspace_size, limits, &info)` | the file's description and its resources, from the whole file or a prefix of it |
 | `minipsd_reader_needed(r)` | after `MINIPSD_ERR_SHORT`: the least buffer size with which the call goes further |
-| `minipsd_reader_next_resource(r, &res)` | the image resources in file order, each a raw view: `MINIPSD_MORE` per resource, then `MINIPSD_OK` |
+| `minipsd_reader_next_resource(r, &pos, &res)` | the image resources in file order, each a raw view, the cursor the caller's: `MINIPSD_MORE` per resource, then `MINIPSD_OK` |
 | `minipsd_reader_find_resource(r, id, &res)` | the first image resource with an id (`MINIPSD_RES_*`), wherever the walk is: `MINIPSD_OK`, or `MINIPSD_ERR_NOT_FOUND` |
 | `minipsd_reader_next_layer(r, &layer)` | the layer records, bottom first, with views of their channel data: `MINIPSD_MORE` per layer, then `MINIPSD_OK` |
 | `minipsd_layer_name(layer, utf8, cap, &needed)` | a layer's name as UTF-8 (`luni`, else the legacy name as Latin-1) |
@@ -191,6 +191,14 @@ its layers and composite as stored: no colour is converted.
   say what they mean to a program rather than repeat Adobe's words: `MINIPSD_SECTION_GROUP_END`
   for Adobe's "bounding section divider".
 - Functions keep minipsd's verbs (`next_`, `decode_`, `find_`); their nouns follow the fields'.
+- Types follow where a value comes from: what the file stores keeps the width it has there
+  (`uint8_t` flags such as `hidden`, `clipping`, `has_real_merged_data`; `uint16_t` depth and
+  colour mode in `minipsd_info` and `minipsd_doc`); what the caller asks or states is an `int`
+  (`keep_matte`, `scratch_kept`, `stored`, `composite_matted`, `minipsd_decode_opts.depth`).
+- Walks give the caller the cursor (`size_t *pos`, from 0), so a list can be walked again and
+  from several threads: resources, a layer's blocks, guides, alpha names and identifiers.
+  `minipsd_reader_next_layer` keeps its own, since each layer's data offset follows from the
+  layers before it.
 - Exceptions, which the file does not store as such and so keep minipsd's names:
   - `hidden`: bit 0x02 of the record's flags, which Adobe calls "visible" though it is set when
     the layer is hidden;
@@ -274,7 +282,7 @@ interact, whatever the table says.
 | `minipsd_writer_total` | yes | reads what `minipsd_writer_init` set; safe beside `minipsd_writer_fill` |
 | `minipsd_reader_init` | no | fills the reader's workspace; several readers of one PSD at once are fine |
 | `minipsd_reader_needed` | yes | reads the reader; after a decode returned `MINIPSD_ERR_SHORT`, call it in that thread |
-| `minipsd_reader_next_resource` | no | advances the reader's walk |
+| `minipsd_reader_next_resource` | yes | each thread its own `pos`; only reads the reader |
 | `minipsd_reader_next_layer` | no | advances the reader's walk |
 | `minipsd_reader_find_resource` | yes | its own walk: only reads the reader; may run beside the walk |
 | `minipsd_layer_name` | yes | reads the view; writes only the caller's buffer |
@@ -282,7 +290,7 @@ interact, whatever the table says.
 | `minipsd_layer_blending_range` | yes | reads the view |
 | `minipsd_resource_*`, `minipsd_layer_block_settings`, `minipsd_utf16be_to_utf8` | yes | read the view; write only the caller's struct, buffer or `pos` (each thread its own); `minipsd_resource_id_name` returns a constant string |
 | `minipsd_target_rgba`, `minipsd_target_rgba16`, `minipsd_target_interleaved` | yes | fill only the caller's `minipsd_target` |
-| `minipsd_decode_layer` | yes, with the whole file | each thread its own scratch; may run beside the walk (`next_layer`, `next_resource`) |
+| `minipsd_decode_layer` | yes, with the whole file | each thread its own scratch; may run beside the walk (`next_layer`) |
 | `minipsd_decode_mask` | yes, with the whole file | as `minipsd_decode_layer` |
 | `minipsd_decode_composite` | yes, with the whole file | as `minipsd_decode_layer` |
 | `minipsd_read_size` | yes | only reads the PSD |

@@ -256,7 +256,8 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     EXPECT_EQ(Bytes(info.layer_tail.data, info.layer_tail.data + info.layer_tail.size), tail);
     minipsd_resource res{};
     std::vector<int> ids;
-    while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE) {
+    std::size_t at = 0;
+    while (minipsd_reader_next_resource(r, &at, &res) == MINIPSD_MORE) {
         ids.push_back(res.id);
         if (res.id == 1005) {
             EXPECT_EQ(Bytes(res.data.data, res.data.data + 16), cm) << "the same dpi: kept, units too";
@@ -285,8 +286,7 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     const Bytes other = write(d);
     ASSERT_EQ(minipsd_reader_init(&r, other.data(), other.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
     EXPECT_EQ(info.dpi, 72.0);
-    while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE && res.id != 1005) {}
-    ASSERT_EQ(res.id, 1005);
+    ASSERT_EQ(minipsd_reader_find_resource(r, MINIPSD_RES_RESOLUTION_INFO, &res), MINIPSD_OK);
     EXPECT_EQ(res.data.data[7], 1) << "shown in inches";
 
     // An 'Lr32' block says where the layers go too; a tail that is not blocks after its mask
@@ -311,7 +311,7 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     ASSERT_EQ(minipsd_reader_init(&r, noIcc.data(), noIcc.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
     EXPECT_EQ(info.icc.size, 0u);
     ids.clear();
-    while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE) ids.push_back(res.id);
+    for (at = 0; minipsd_reader_next_resource(r, &at, &res) == MINIPSD_MORE;) ids.push_back(res.id);
     EXPECT_EQ(ids, (std::vector<int>{1005, 1036}));
 }
 

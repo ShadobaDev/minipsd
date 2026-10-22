@@ -183,7 +183,8 @@ Additive. See [Reader](CODE-ARCH.md#reader).
       - Extensibility rules: the reader needs no opt-in macro;
       - README (what it reads), the header's brief, the CMake description (SBOM, `.pc`,
         packages), USE-CASES (what is done), CODE-ARCH (stages).
-- [ ] **S4.10** Release **0.3.0** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md), with stages 4 to 6:
+- [ ] **S4.10** Release **0.3.0** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md), with stages 4 to 6
+      and S7.1, the API frozen from then:
       `minipsd_write_opts` became a parameter of the write calls, a break, so it is a MINOR under
       the pre-1.0 rules. Before it: regenerate [COMPATIBILITY.md](COMPATIBILITY.md) with the new
       version, and have one CI job fetch psd-tools' files (`MINIPSD_PSD_TOOLS_FILES`), so that
@@ -401,7 +402,8 @@ feature; a supplied composite needs nothing. See
         checks every psd-tools file's layers and composite against psd-tools. `minipsd_read`
         stays 8- and 16-bit RGB until the writer takes the other modes.
       - **Write.** The same modes at 1, 8, 16 and 32 bits, each where Photoshop allows it; the
-        palette and the duotone data written as given.
+        palette and the duotone data written as given. *Moved to S6.19*: S6.13 is done for
+        reading.
       *Done when:* psd-tools' files of every mode and depth decode to the samples psd-tools
       gives, and COMPATIBILITY.md has no file described for its mode or depth; documents of
       each mode and depth that minipsd writes decode the same in psd-tools and in minipsd; the
@@ -478,6 +480,13 @@ feature; a supplied composite needs nothing. See
         decide whether that is acceptable. It would give a text layer's text (`TySh`, key
         `Txt `), a smart object's name, effects' flags.
       *Done when:* as S6.17's.
+- [ ] **S6.19** Every colour mode and depth written (S6.13's Write half): grey, CMYK, Lab,
+      multichannel and duotone at 8 and 16 bits, grey and RGB at 32, bitmap at 1, indexed at 8,
+      each where Photoshop's files have layers (bitmap, indexed and multichannel have none); the
+      palette and the duotone data written as given. `minipsd_read` then takes every mode. The
+      saver (S7.4) needs it for images that are not RGB.
+      *Done when:* documents of each mode and depth that minipsd writes decode the same in
+      psd-tools and in minipsd, and `minipsd_read` round-trips psd-tools' files of every mode.
 
 ## 7. Interoperability
 
@@ -497,7 +506,7 @@ the loader and saver; how they reach libvips is not this roadmap's.
         format.
       - **Access.** Strips from several threads (S6.12, S6.14).
       - **Saving.** One image as a layer with its composite, or pages as layers.
-      - **What minipsd still needs.** Every colour mode and depth (S6.13); the row provider (S7.5);
+      - **What minipsd still needs.** Every colour mode and depth written (S6.19); the row provider (S7.5);
         the metadata ImageMagick gives (S6.17, P1).
       - **Building.** The build dependency: pkg-config, a meson wrap.
 - [ ] **S7.3** Loader: a PSD or PSB as a libvips image, the composite or a layer, decoded in

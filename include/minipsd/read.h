@@ -87,22 +87,15 @@ static minipsd_bytes mpsd__copy_tail(mpsd__arena *a, const minipsd_reader *r, mi
     return out;
 }
 
-/* Every image resource, copied, in file order: counted on one pass, placed on a second, the reader
-   started again in between. */
-static int mpsd__read_resources(minipsd_reader **r, const void *data, size_t size, uint8_t *workspace,
-                                size_t workspace_size, const minipsd_limits *limits, mpsd__arena *a,
-                                minipsd_doc *d)
+/* Every image resource, copied, in file order: counted on one pass, placed on a second. */
+static void mpsd__read_resources(const minipsd_reader *r, mpsd__arena *a, minipsd_doc *d)
 {
     minipsd_resource  res, *out;
-    minipsd_info      info;
-    size_t            count = 0, i;
-    int               rc;
-    while (minipsd_reader_next_resource(*r, &res) == MINIPSD_MORE) ++count;
-    if (!count) return MINIPSD_OK;
-    rc = minipsd_reader_init(r, data, size, workspace, workspace_size, limits, &info);
-    if (rc != MINIPSD_OK) return rc;
+    size_t            count = 0, pos = 0, i;
+    while (minipsd_reader_next_resource(r, &pos, &res) == MINIPSD_MORE) ++count;
+    if (!count) return;
     out = (minipsd_resource *)mpsd__take(a, (uint64_t)count * sizeof *out, 1);
-    for (i = 0; minipsd_reader_next_resource(*r, &res) == MINIPSD_MORE; ++i) {
+    for (i = 0, pos = 0; minipsd_reader_next_resource(r, &pos, &res) == MINIPSD_MORE; ++i) {
         const minipsd_bytes copied = mpsd__copy(a, res.data), name = mpsd__copy(a, res.name);
         if (!out) continue;
         out[i].id   = res.id;
@@ -113,7 +106,6 @@ static int mpsd__read_resources(minipsd_reader **r, const void *data, size_t siz
         d->resources      = out;
         d->resource_count = count;
     }
-    return MINIPSD_OK;
 }
 
 /* The document in a, measured or placed; on MINIPSD_OK with a block, *out and *lost are set. */
@@ -141,7 +133,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
 
     rc = minipsd_reader_init(&r, data, size, workspace, sizeof workspace, limits, &info);
     if (rc != MINIPSD_OK) return rc;
-    if (!r->rgb || (r->depth != MPSD__CH_8BIT && r->depth != MPSD__CH_16BIT)) return MINIPSD_ERR_UNSUPPORTED;   /* TODO(S6.13): every mode */
+    if (!r->rgb || (r->depth != MPSD__CH_8BIT && r->depth != MPSD__CH_16BIT)) return MINIPSD_ERR_UNSUPPORTED;   /* TODO(S6.19): every mode */
     wide = r->shift;                                           /* 16-bit samples, aligned for a uint16_t */
     side = mpsd__max_side(r->psb);
     memset(&all, 0, sizeof all);                               /* every row, un-matted; new fields zero */
@@ -164,8 +156,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         memset(d, 0, sizeof *d);
         memset(layers, 0, count * sizeof *layers);
     }
-    rc = mpsd__read_resources(&r, data, size, workspace, sizeof workspace, limits, a, d);
-    if (rc != MINIPSD_OK) return rc;
+    mpsd__read_resources(r, a, d);
 
     for (i = 0; i < info.layer_count; ++i) {
         uint64_t       w, h;
@@ -178,7 +169,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         int            k, keep;
         rc = minipsd_reader_next_layer(r, &v);
         if (rc != MINIPSD_MORE) return rc == MINIPSD_OK ? MINIPSD_ERR_FORMAT : rc;
-        if (v.other_channels) loss |= MINIPSD_LOST_CHANNELS;    /* TODO(S6.8): alpha and spot channels */
+        if (v.other_channels) loss |= MINIPSD_LOST_CHANNELS;    /* TODO: alpha and spot channels (ROADMAP, Not scheduled) */
         w = (uint64_t)((int64_t)v.right - v.left);
         h = (uint64_t)((int64_t)v.bottom - v.top);
         if (w > side || h > side) return MINIPSD_ERR_UNSUPPORTED;   /* the writer's limit */
