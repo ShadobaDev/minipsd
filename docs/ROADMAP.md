@@ -480,7 +480,9 @@ feature; a supplied composite needs nothing. See
         decide whether that is acceptable. It would give a text layer's text (`TySh`, key
         `Txt `), a smart object's name, effects' flags.
       *Done when:* as S6.17's.
-- [ ] **S6.19** Every colour mode and depth written (S6.13's Write half): grey, CMYK, Lab,
+- [ ] **S6.19** Every colour mode and depth written (S6.13's Write half). Reading them is done
+      (S6.13): any mode and depth is described and decoded. The writer takes 8- and 16-bit RGB
+      only (`minipsd_doc` has no colour mode), so this step is writing grey, CMYK, Lab,
       multichannel and duotone at 8 and 16 bits, grey and RGB at 32, bitmap at 1, indexed at 8,
       each where Photoshop's files have layers (bitmap, indexed and multichannel have none); the
       palette and the duotone data written as given. `minipsd_read` then takes every mode. The
@@ -492,7 +494,10 @@ feature; a supplied composite needs nothing. See
 
 libvips is where minipsd is meant to be used: as a loader and saver of PSD and PSB, and in
 programs that render a composite with libvips and write the layers with minipsd. Steps 7.2 on are
-the loader and saver; how they reach libvips is not this roadmap's.
+the loader and saver, built first as a plugin in this repository (`libvips-plugin/`): libvips
+foreign classes registered by the program that links them, then, if libvips' prebuilt builds
+load modules, a loadable module. Platemaker uses it, which is the proof; a pull request to libvips
+comes at the end of stage 7, or of 8, with the same files.
 
 - [x] **S7.1** `examples/vips_composite.c`: a document's composite rendered with libvips
       (`vips_composite`, blend keys mapped as in the spec's

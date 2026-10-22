@@ -3,7 +3,7 @@
 Changes between releases, for users of minipsd. Versioning follows the pre-1.0 rules in
 [TODO.md](TODO.md): breaking changes bump the MINOR, additions and fixes the PATCH.
 
-## [Unreleased]
+## [0.3.0] — 2026-10-23
 
 **Breaking:** `minipsd_write`, `minipsd_writer_workspace_size`, `minipsd_writer_init` and
 `minipsd_doc_check` take a `const minipsd_write_opts *` after the document. To migrate, pass
