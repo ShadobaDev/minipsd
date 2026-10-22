@@ -450,9 +450,14 @@ feature; a supplied composite needs nothing. See
         IPTC 1028, thumbnail 1036, version info 1057, alpha names 1006 and 1045, alpha ids
         1053, transparency index 1047, guides 1032) and `minipsd_reader_find_resource`. EXIF,
         XMP and IPTC stay bytes: other formats, parsed by libexif and expat.
+        *Done:* `MINIPSD_RES_*`, and `minipsd_reader_find_resource` returns the first of an id
+        or `MINIPSD_ERR_NOT_FOUND` (a new code).
       - **What libvips needs (P1).** Version info's "has real merged data" (whether the
         composite can be trusted; ImageMagick flattens the layers without it); the resolution
         whole, horizontal and vertical with their units.
+        *Done:* `minipsd_resource_resolution_info` and `minipsd_resource_version_info` (in
+        `views.h`; a resource in, no reader), `minipsd_utf16be_to_utf8` for the names.
+        `roundtrip.py` checks both against psd-tools on its whole set.
       - **Fixed-layout layer blocks (P2):** `lyid` layer id, `lclr` colour label, `iOpa` fill
         opacity, `lspf` protection, `knko` knockout, `clbl` and `infx` blend clipped and
         interior elements.

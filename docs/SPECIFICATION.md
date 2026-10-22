@@ -111,10 +111,14 @@ The declarations, with every parameter and return code, are in
 | `minipsd_reader_init(&r, data, size, workspace, workspace_size, limits, &info)` | the file's description and its resources, from the whole file or a prefix of it |
 | `minipsd_reader_needed(r)` | after `MINIPSD_ERR_SHORT`: the least buffer size with which the call goes further |
 | `minipsd_reader_next_resource(r, &res)` | the image resources in file order, each a raw view: `MINIPSD_MORE` per resource, then `MINIPSD_OK` |
+| `minipsd_reader_find_resource(r, id, &res)` | the first image resource with an id (`MINIPSD_RES_*`), wherever the walk is: `MINIPSD_OK`, or `MINIPSD_ERR_NOT_FOUND` |
 | `minipsd_reader_next_layer(r, &layer)` | the layer records, bottom first, with views of their channel data: `MINIPSD_MORE` per layer, then `MINIPSD_OK` |
 | `minipsd_layer_name(layer, utf8, cap, &needed)` | a layer's name as UTF-8 (`luni`, else the legacy name as Latin-1) |
 | `minipsd_layer_next_block(layer, &pos, &block)` | a layer's additional-information blocks, each a raw view |
 | `minipsd_layer_blending_range(layer, i, &range)` | one of a layer's blending ranges ("Blend If"): the composite grey's, then each channel's |
+| `minipsd_resource_resolution_info(res, &out)` | resource 1005 parsed: both resolutions in pixels per inch, their units and the units Photoshop shows |
+| `minipsd_resource_version_info(res, &out)` | resource 1057 parsed: whether the composite is real (`has_real_merged_data`), the writer's and reader's names |
+| `minipsd_utf16be_to_utf8(text, utf8, cap, &needed)` | UTF-16BE text from a view (a version info's names) as UTF-8, as `minipsd_layer_name` gives a name |
 | `minipsd_target_rgba(&target, rgba, row_stride)` | a target for interleaved RGBA, the common case |
 | `minipsd_target_rgba16(&target, rgba, row_stride)` | the same for 16-bit samples, `uint16_t` |
 | `minipsd_target_interleaved(&target, pixels, row_stride, planes, depth)` | a target for interleaved pixels of any mode and depth: `planes` samples a pixel |
@@ -161,6 +165,7 @@ its layers and composite as stored: no colour is converted.
 | `minipsd_info` | what the file says about itself: size, depth, colour mode and its colour channels, colour mode data, dpi, ICC profile, layer count, format (PSD or PSB) |
 | `minipsd_bytes` | a read-only view into the caller's buffer |
 | `minipsd_resource`, `minipsd_layer_view`, `minipsd_block` | an image resource, a layer record, an additional-information block, as views |
+| `minipsd_resolution_info`, `minipsd_version_info` | typed views: what resources 1005 and 1057 store, parsed; strings stay views |
 | `minipsd_target`, `minipsd_plane` | where decoded samples go: per plane (the colour channels, then transparency) a pointer, a pixel step and a row step; any layout |
 | `minipsd_decode_opts` | the rows to decode, the target's `depth` and, for the composite, `keep_matte`; `NULL` for all rows, 8-bit, un-matted |
 
@@ -206,6 +211,7 @@ its layers and composite as stored: no colour is converted.
 | `MINIPSD_ERR_UNSUPPORTED` | -7 | reader: a valid file outside what minipsd reads: for decoding, a file of another depth than `opts->depth`, or a ZIP-compressed channel without `opts->inflate`; for `minipsd_read`, a file not 8- or 16-bit RGB; on a 32-bit platform, a PSB whose layer and mask section `size_t` cannot hold |
 | `MINIPSD_ERR_SHORT` | -8 | reader: the buffer ends inside data the call needs; read more, `minipsd_reader_needed` says how much |
 | `MINIPSD_ERR_LIMIT` | -9 | reader: over `minipsd_limits`: the canvas's or a layer's side, the layer count, or the bytes of a decode call; the file is not known to be bad |
+| `MINIPSD_ERR_NOT_FOUND` | -10 | a lookup found no such item: `minipsd_reader_find_resource` for an id the file lacks; not a fault of the file |
 
 ## Memory and ownership
 
@@ -264,9 +270,11 @@ interact, whatever the table says.
 | `minipsd_reader_needed` | yes | reads the reader; after a decode returned `MINIPSD_ERR_SHORT`, call it in that thread |
 | `minipsd_reader_next_resource` | no | advances the reader's walk |
 | `minipsd_reader_next_layer` | no | advances the reader's walk |
+| `minipsd_reader_find_resource` | yes | its own walk: only reads the reader; may run beside the walk |
 | `minipsd_layer_name` | yes | reads the view; writes only the caller's buffer |
 | `minipsd_layer_next_block` | yes | each thread its own `pos` |
 | `minipsd_layer_blending_range` | yes | reads the view |
+| `minipsd_resource_resolution_info`, `minipsd_resource_version_info`, `minipsd_utf16be_to_utf8` | yes | read the view; write only the caller's struct or buffer |
 | `minipsd_target_rgba`, `minipsd_target_rgba16`, `minipsd_target_interleaved` | yes | fill only the caller's `minipsd_target` |
 | `minipsd_decode_layer` | yes, with the whole file | each thread its own scratch; may run beside the walk (`next_layer`, `next_resource`) |
 | `minipsd_decode_mask` | yes, with the whole file | as `minipsd_decode_layer` |
@@ -443,7 +451,16 @@ them; nothing is copied or allocated. Results on real files from other programs:
   - four wrong bytes at the start are `MINIPSD_ERR_FORMAT`.
 - **Header and resources:** size, channels, depth, colour mode; dpi from resource 1005
   (horizontal, 0 without it); the ICC profile from 1039. Every resource, these two included, is
-  also returned as a raw view, with its name, in file order.
+  also returned as a raw view, with its name, in file order, or found by id (the first of it).
+- **Typed views:** what a kept resource stores, parsed into plain values by a function that
+  takes the resource and needs no reader: nothing allocated, a string left as a view of its
+  UTF-16BE (`minipsd_utf16be_to_utf8` converts), a resource cut inside a field
+  `MINIPSD_ERR_FORMAT`, one of another id `MINIPSD_ERR_ARG`. Resolution info (1005): both
+  resolutions in pixels per inch and the four units Photoshop shows them in. Version info
+  (1057): `has_real_merged_data`, zero when the composite is not the layers' image (ImageMagick
+  then flattens the layers), and the writer's and reader's names. IPTC, EXIF, XMP and the
+  thumbnail stay bytes: formats of their own. `roundtrip.py` checks both against psd-tools on
+  every file of its set.
 - **Layer records**, bottom first:
   - the rectangle; one stored inverted (Photoshop's fill layers) comes back empty;
   - opacity, visibility, the blend mode's key, clipping and the flag bits, as stored;

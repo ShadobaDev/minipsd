@@ -65,6 +65,21 @@ class Mask(ctypes.Structure):
                 ("stored", Bytes), ("real", Bytes), ("rest", Bytes)]
 
 
+class Resource(ctypes.Structure):
+    _fields_ = [("id", ctypes.c_uint16), ("data", Bytes), ("name", Bytes)]
+
+
+class ResolutionInfo(ctypes.Structure):
+    _fields_ = [("horizontal_resolution", ctypes.c_double), ("horizontal_resolution_unit", ctypes.c_uint16),
+                ("width_unit", ctypes.c_uint16), ("vertical_resolution", ctypes.c_double),
+                ("vertical_resolution_unit", ctypes.c_uint16), ("height_unit", ctypes.c_uint16)]
+
+
+class VersionInfo(ctypes.Structure):
+    _fields_ = [("version", ctypes.c_uint32), ("has_real_merged_data", ctypes.c_uint8),
+                ("writer_name", Bytes), ("reader_name", Bytes), ("file_version", ctypes.c_uint32)]
+
+
 class BlendRange(ctypes.Structure):
     _fields_ = [("black", ctypes.c_uint8 * 2), ("white", ctypes.c_uint8 * 2)]
 
@@ -773,6 +788,55 @@ def color_channels(header, alpha):
     return {3: 3, 9: 3, 4: 4, 7: header.channels - alpha}.get(int(header.color_mode), 1)
 
 
+RES_RESOLUTION_INFO, RES_VERSION_INFO, ERR_NOT_FOUND = 1005, 1057, -10
+
+
+def utf8(lib, text):
+    """A UTF-16BE view as minipsd converts it: measured, then converted."""
+    need = ctypes.c_size_t()
+    lib.minipsd_utf16be_to_utf8(ctypes.byref(text), None, 0, ctypes.byref(need))
+    out = ctypes.create_string_buffer(need.value)
+    lib.minipsd_utf16be_to_utf8(ctypes.byref(text), out, need.value, None)
+    return out.value.decode()
+
+
+def check_resources(lib, reader, psd, name):
+    """The typed views of resources: what minipsd finds and parses is what psd-tools reads, a name up
+    to its first U+0000 as minipsd ends it."""
+    lib.minipsd_reader_find_resource.argtypes = [ctypes.c_void_p, ctypes.c_uint16, ctypes.POINTER(Resource)]
+    lib.minipsd_resource_resolution_info.argtypes = [ctypes.POINTER(Resource), ctypes.POINTER(ResolutionInfo)]
+    lib.minipsd_resource_version_info.argtypes = [ctypes.POINTER(Resource), ctypes.POINTER(VersionInfo)]
+    lib.minipsd_utf16be_to_utf8.argtypes = [ctypes.POINTER(Bytes), ctypes.c_char_p, ctypes.c_size_t,
+                                            ctypes.POINTER(ctypes.c_size_t)]
+    errors = []
+    for rid in (RES_RESOLUTION_INFO, RES_VERSION_INFO):
+        res = Resource()
+        rc = lib.minipsd_reader_find_resource(reader, rid, ctypes.byref(res))
+        theirs = psd.image_resources.get_data(rid)
+        if rc != (MINIPSD_OK if theirs is not None else ERR_NOT_FOUND):
+            errors.append(f"{name}: resource {rid}: minipsd_reader_find_resource returned {rc}")
+            continue
+        if theirs is None:
+            continue
+        if rid == RES_RESOLUTION_INFO:
+            ri = ResolutionInfo()
+            rc = lib.minipsd_resource_resolution_info(ctypes.byref(res), ctypes.byref(ri))
+            got = (round(ri.horizontal_resolution * 65536), ri.horizontal_resolution_unit, ri.width_unit,
+                   round(ri.vertical_resolution * 65536), ri.vertical_resolution_unit, ri.height_unit)
+            want = (theirs.horizontal, int(theirs.horizontal_unit), int(theirs.width_unit),
+                    theirs.vertical, int(theirs.vertical_unit), int(theirs.height_unit))
+        else:
+            vi = VersionInfo()
+            rc = lib.minipsd_resource_version_info(ctypes.byref(res), ctypes.byref(vi))
+            got = (vi.version, bool(vi.has_real_merged_data), utf8(lib, vi.writer_name), utf8(lib, vi.reader_name),
+                   vi.file_version)
+            want = (theirs.version, bool(theirs.has_composite), theirs.writer.split("\0")[0],
+                    theirs.reader.split("\0")[0], theirs.file_version)
+        if rc != MINIPSD_OK or got != want:
+            errors.append(f"{name}: resource {rid} is {got} (rc {rc}), psd-tools says {want}")
+    return errors
+
+
 def check_decoded(lib, path):
     """The reader over a file of any mode and depth: each layer and the composite (as stored, with
     its matte) decode to what psd-tools decompresses from the same file, the mode's colour channels
@@ -793,7 +857,7 @@ def check_decoded(lib, path):
         return [f"{path.name}: minipsd_reader_init returned {rc}"]
     psd = PSDImage.open(path)
     record = psd._record
-    header, errors = record.header, []
+    header, errors = record.header, check_resources(lib, reader, psd, path.name)
     depth, version = header.depth, header.version
     sample = max(depth // 8, 1)
     opts = DecodeOpts(0, 0, 1, depth, inflate)

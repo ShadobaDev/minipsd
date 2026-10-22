@@ -1,7 +1,7 @@
 /**
  * \file minipsd/detail/utf.h
- * \brief Internal: UTF-8 to UTF-16 (the writer) and UTF-16BE to UTF-8 (the reader), for layer
- *        names.
+ * \brief Internal: UTF-8 to UTF-16 (the writer) and UTF-16BE to UTF-8 (the reader, the typed
+ *        views), for layer names and other text.
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
@@ -79,6 +79,22 @@ static size_t mpsd__put_utf8(uint8_t *out, uint32_t cp)
     else                   { b[0] = (uint8_t)(0xF0 | (cp >> 18)); b[1] = (uint8_t)(0x80 | ((cp >> 12) & 0x3F));
                              b[2] = (uint8_t)(0x80 | ((cp >> 6) & 0x3F)); b[3] = (uint8_t)(0x80 | (cp & 0x3F)); n = 4; }
     if (out) for (i = 0; i < n; ++i) out[i] = b[i];
+    return n;
+}
+
+/* UTF-16BE [p, p + size) as UTF-8 into out, or only its length when out is NULL: up to a U+0000,
+   an odd last byte dropped. */
+static size_t mpsd__utf16be_utf8(const uint8_t *p, size_t size, uint8_t *out)
+{
+    const uint8_t *end;
+    size_t         n = 0;
+    if (!size) return 0;
+    end = p + size;
+    while (end - p >= 2) {
+        const uint32_t cp = mpsd__utf16be(&p, end);
+        if (cp == 0) break;                                    /* some writers count a final NUL */
+        n += mpsd__put_utf8(out ? out + n : NULL, cp);
+    }
     return n;
 }
 

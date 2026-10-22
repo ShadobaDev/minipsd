@@ -537,6 +537,18 @@ TEST(MinipsdReaderTest, ResourcesWithNamesAndOddSizesAreWalkedCorrectly)
     EXPECT_DOUBLE_EQ(o.info.dpi, 150.25);
     EXPECT_EQ(o.info.icc.size, 3u);
 
+    // Found by id, the first of two, before the walk: the walk still starts at the first resource.
+    minipsd_resource found;
+    ASSERT_EQ(minipsd_reader_find_resource(o.r, MINIPSD_RES_RESOLUTION_INFO, &found), MINIPSD_OK);
+    minipsd_resolution_info ri;
+    ASSERT_EQ(minipsd_resource_resolution_info(&found, &ri), MINIPSD_OK);
+    EXPECT_DOUBLE_EQ(ri.horizontal_resolution, 150.25);
+    EXPECT_EQ(minipsd_reader_find_resource(o.r, 2000, &found), MINIPSD_OK);
+    EXPECT_EQ(std::string(reinterpret_cast<const char *>(found.name.data), found.name.size), "abc");
+    found.id = 7777;
+    EXPECT_EQ(minipsd_reader_find_resource(o.r, MINIPSD_RES_VERSION_INFO, &found), MINIPSD_ERR_NOT_FOUND);
+    EXPECT_EQ(found.id, 7777) << "untouched when not found";
+
     const std::tuple<int, std::size_t, std::string> expected[] = {
         {1036, 7, "ab"}, {2000, 4, "abc"}, {1005, 16, ""}, {1039, 3, ""}, {1005, 16, ""}, {1039, 9, ""}};
     for (const auto &[id, size, name] : expected) {
@@ -559,6 +571,7 @@ TEST(MinipsdReaderTest, AFileWithoutResourcesHasNoDpiAndNoProfile)
     EXPECT_EQ(o.info.icc.size, 0u);
     minipsd_resource res;
     EXPECT_EQ(minipsd_reader_next_resource(o.r, &res), MINIPSD_OK);
+    EXPECT_EQ(minipsd_reader_find_resource(o.r, MINIPSD_RES_RESOLUTION_INFO, &res), MINIPSD_ERR_NOT_FOUND);
 }
 
 TEST(MinipsdReaderTest, MalformedResourcesAreRefused)
@@ -597,6 +610,59 @@ TEST(MinipsdReaderTest, ResourcesNeedToBeWholeInTheBuffer)
     Open o(f.bytes, resStart + 50);
     EXPECT_EQ(o.rc, MINIPSD_ERR_SHORT);
     EXPECT_EQ(minipsd_reader_needed(o.r), f.resourcesEnd) << "the whole section: a profile or a thumbnail is data";
+}
+
+// Typed views of resources: the stored fields, whole; a resource cut inside a field is refused, as
+// one of another id, and nothing is written then.
+TEST(MinipsdReaderTest, ResolutionAndVersionInfoAreParsedFieldByField)
+{
+    const auto resolution = [](std::uint16_t id, const Bytes &data, minipsd_resolution_info *out) {
+        const minipsd_resource res{id, {data.data(), data.size()}, {nullptr, 0}};
+        return minipsd_resource_resolution_info(&res, out);
+    };
+    const auto version = [](std::uint16_t id, const Bytes &data, minipsd_version_info *out) {
+        const minipsd_resource res{id, {data.data(), data.size()}, {nullptr, 0}};
+        return minipsd_resource_version_info(&res, out);
+    };
+
+    Out ro;   // 72.5 ppi shown in pixels per cm and centimetres, 300 ppi shown in inches
+    ro.u32(72 * 65536 + 32768).u16(2).u16(2).u32(300 * 65536).u16(1).u16(1);
+    minipsd_resolution_info ri{};
+    ASSERT_EQ(resolution(MINIPSD_RES_RESOLUTION_INFO, ro.b, &ri), MINIPSD_OK);
+    EXPECT_DOUBLE_EQ(ri.horizontal_resolution, 72.5);
+    EXPECT_EQ(std::tie(ri.horizontal_resolution_unit, ri.width_unit), std::make_tuple(2, 2));
+    EXPECT_DOUBLE_EQ(ri.vertical_resolution, 300.0);
+    EXPECT_EQ(std::tie(ri.vertical_resolution_unit, ri.height_unit), std::make_tuple(1, 1));
+
+    Out vo;   // version 1, no real merged data, writer "Ps" with a final NUL counted, reader "", file 1
+    vo.u32(1).u8(0).u32(3).u16('P').u16('s').u16(0).u32(0).u32(1);
+    minipsd_version_info vi{};
+    ASSERT_EQ(version(MINIPSD_RES_VERSION_INFO, vo.b, &vi), MINIPSD_OK);
+    EXPECT_EQ(std::tie(vi.version, vi.has_real_merged_data, vi.file_version), std::make_tuple(1u, 0, 1u));
+    EXPECT_EQ(vi.writer_name.size, 6u);
+    EXPECT_EQ(vi.reader_name.size, 0u);
+    char text[8];
+    EXPECT_EQ(minipsd_utf16be_to_utf8(&vi.writer_name, text, sizeof text, nullptr), MINIPSD_OK);
+    EXPECT_STREQ(text, "Ps") << "the NUL counted in the name ends it";
+
+    for (std::size_t cut = 0; cut < vo.b.size(); ++cut) {   // every prefix ends inside a field
+        const Bytes part(vo.b.begin(), vo.b.begin() + static_cast<std::ptrdiff_t>(cut));
+        minipsd_version_info untouched{};
+        untouched.version = 77;
+        EXPECT_EQ(version(MINIPSD_RES_VERSION_INFO, part, &untouched), MINIPSD_ERR_FORMAT) << cut;
+        EXPECT_EQ(untouched.version, 77u) << cut;
+    }
+    Bytes longName = vo.b;
+    longName[8] = 4;   // a writer name of four units, past the data
+    EXPECT_EQ(version(MINIPSD_RES_VERSION_INFO, longName, &vi), MINIPSD_ERR_FORMAT);
+    EXPECT_EQ(resolution(MINIPSD_RES_RESOLUTION_INFO, Bytes(15, 0), &ri), MINIPSD_ERR_FORMAT);
+
+    EXPECT_EQ(resolution(MINIPSD_RES_VERSION_INFO, ro.b, &ri), MINIPSD_ERR_ARG) << "another id";
+    EXPECT_EQ(version(MINIPSD_RES_RESOLUTION_INFO, vo.b, &vi), MINIPSD_ERR_ARG) << "another id";
+    EXPECT_EQ(minipsd_resource_resolution_info(nullptr, &ri), MINIPSD_ERR_ARG);
+    EXPECT_EQ(version(MINIPSD_RES_VERSION_INFO, vo.b, nullptr), MINIPSD_ERR_ARG);
+    const minipsd_resource noData{MINIPSD_RES_RESOLUTION_INFO, {nullptr, 16}, {nullptr, 0}};
+    EXPECT_EQ(minipsd_resource_resolution_info(&noData, &ri), MINIPSD_ERR_ARG) << "a size without data";
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -1027,12 +1093,15 @@ TEST(MinipsdReaderTest, ACallOnAReaderThatNeverStartedIsRefused)
     minipsd_resource res;
     EXPECT_EQ(minipsd_reader_next_layer(cut.r, &v), MINIPSD_ERR_ARG);
     EXPECT_EQ(minipsd_reader_next_resource(cut.r, &res), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_reader_find_resource(cut.r, MINIPSD_RES_RESOLUTION_INFO, &res), MINIPSD_ERR_ARG);
 
     Open ok(f.bytes);
     EXPECT_EQ(minipsd_reader_next_layer(nullptr, &v), MINIPSD_ERR_ARG);
     EXPECT_EQ(minipsd_reader_next_layer(ok.r, nullptr), MINIPSD_ERR_ARG);
     EXPECT_EQ(minipsd_reader_next_resource(nullptr, &res), MINIPSD_ERR_ARG);
     EXPECT_EQ(minipsd_reader_next_resource(ok.r, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_reader_find_resource(nullptr, MINIPSD_RES_RESOLUTION_INFO, &res), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_reader_find_resource(ok.r, MINIPSD_RES_RESOLUTION_INFO, nullptr), MINIPSD_ERR_ARG);
 }
 
 // ---------------------------------------------------------------------------------------------------

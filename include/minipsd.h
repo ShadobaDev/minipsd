@@ -145,7 +145,9 @@ enum {
     MINIPSD_ERR_SHORT   = -8,       /*!< Reader: the buffer ends inside data the call needs;
                                         the file may be fine.  minipsd_reader_needed says 
                                         how much more.                                          */
-    MINIPSD_ERR_LIMIT   = -9        /*!< Reader: a value is over a limit (minipsd_limits).      */
+    MINIPSD_ERR_LIMIT   = -9,       /*!< Reader: a value is over a limit (minipsd_limits).      */
+    MINIPSD_ERR_NOT_FOUND = -10     /*!< A lookup found no such item (a resource of that id);
+                                        not a fault of the file.                                */
 };
 
 /**
@@ -218,6 +220,58 @@ typedef struct minipsd_resource {
     minipsd_bytes data; /*!< Its bytes, without the padding.                           */
     minipsd_bytes name; /*!< Its name, raw bytes of a Pascal string; usually empty.     */
 } minipsd_resource;
+
+/**
+ * \brief The ids of standard image resources, named as Adobe's "Image Resource IDs" names them.
+ *
+ * Those minipsd parses have a function that takes the resource; the rest (IPTC, EXIF, XMP, the
+ * thumbnail) are formats of their own, left as bytes for their own parsers.
+ */
+enum {
+    MINIPSD_RES_RESOLUTION_INFO     = 1005, /*!< ResolutionInfo: minipsd_resource_resolution_info. */
+    MINIPSD_RES_ALPHA_NAMES         = 1006, /*!< The alpha channels' names, Pascal strings.        */
+    MINIPSD_RES_IPTC_NAA            = 1028, /*!< The IPTC-NAA record.                              */
+    MINIPSD_RES_GRID_AND_GUIDES     = 1032, /*!< Grid and guides information.                      */
+    MINIPSD_RES_THUMBNAIL           = 1036, /*!< The thumbnail, a JFIF image after a header.       */
+    MINIPSD_RES_ICC_PROFILE         = 1039, /*!< The ICC profile (minipsd_info.icc).                */
+    MINIPSD_RES_UNICODE_ALPHA_NAMES = 1045, /*!< The alpha channels' names, Unicode strings.       */
+    MINIPSD_RES_TRANSPARENCY_INDEX  = 1047, /*!< An indexed file's transparent colour.             */
+    MINIPSD_RES_ALPHA_IDENTIFIERS   = 1053, /*!< The alpha channels' identifiers.                  */
+    MINIPSD_RES_VERSION_INFO        = 1057, /*!< Version info: minipsd_resource_version_info.      */
+    MINIPSD_RES_EXIF_DATA_1         = 1058, /*!< EXIF data.                                        */
+    MINIPSD_RES_XMP_METADATA        = 1060  /*!< XMP metadata, UTF-8 XML.                          */
+};
+
+/**
+ * \brief Resource 1005, ResolutionInfo, as stored.
+ *
+ * Both resolutions are in pixels per inch whatever their unit: the unit is only how Photoshop
+ * shows them.  libvips wants pixels per millimetre (divide by 25.4) and a unit name.
+ */
+typedef struct minipsd_resolution_info {
+    double   horizontal_resolution;      /*!< hRes: pixels per inch.                               */
+    uint16_t horizontal_resolution_unit; /*!< hResUnit: 1 pixels per inch, 2 pixels per cm.        */
+    uint16_t width_unit;                 /*!< widthUnit: 1 inches, 2 cm, 3 points, 4 picas, 5 columns. */
+    double   vertical_resolution;        /*!< vRes: pixels per inch.                               */
+    uint16_t vertical_resolution_unit;   /*!< vResUnit, as hResUnit.                               */
+    uint16_t height_unit;                /*!< heightUnit, as widthUnit.                            */
+} minipsd_resolution_info;
+
+/**
+ * \brief Resource 1057, version info, as stored.
+ *
+ * A file without it (older than Photoshop 6) has a real composite.
+ */
+typedef struct minipsd_version_info {
+    uint32_t      version;              /*!< The resource's own version, as stored.                 */
+    uint8_t       has_real_merged_data; /*!< Zero: the composite is not the layers' image (saved
+                                             without "Maximize Compatibility"); ImageMagick then
+                                             flattens the layers instead.                         */
+    minipsd_bytes writer_name;          /*!< UTF-16BE, without its length ("Adobe Photoshop");
+                                             minipsd_utf16be_to_utf8 converts.                    */
+    minipsd_bytes reader_name;          /*!< UTF-16BE, as writer_name.                            */
+    uint32_t      file_version;         /*!< The file version, as stored.                          */
+} minipsd_version_info;
 
 /** \brief One tagged block of a layer's additional information ('luni', 'lsct', 'tySh', ...). */
 typedef struct minipsd_block {
@@ -843,6 +897,57 @@ MINIPSDDEF int minipsd_layer_next_block(const minipsd_layer_view *layer, size_t 
 MINIPSDDEF int minipsd_layer_blending_range(const minipsd_layer_view *layer, uint32_t i, minipsd_blending_range *range);
 
 /**
+ * \brief The first image resource with an id, wherever it is.
+ *
+ * Its own walk from the first resource: next_resource's place is untouched, and it only reads the
+ * reader, so it may run beside any other call (see the spec's Threads).
+ *
+ * \param r   A reader from minipsd_reader_init.
+ * \param id  The resource's number, such as MINIPSD_RES_VERSION_INFO.
+ * \param res Receives the resource.
+ * \return MINIPSD_OK when found; MINIPSD_ERR_NOT_FOUND when the file has none (res is untouched);
+ *         MINIPSD_ERR_ARG when r (never initialised) or res is NULL.
+ */
+MINIPSDDEF int minipsd_reader_find_resource(const minipsd_reader *r, uint16_t id, minipsd_resource *res);
+
+/* --- Typed views: what a kept resource or block says, parsed; they need no reader ------------ */
+
+/**
+ * \brief UTF-16BE text as UTF-8, as minipsd_layer_name gives a name.
+ *
+ * An unpaired surrogate becomes U+FFFD, a U+0000 ends the text, and an odd last byte is dropped.
+ *
+ * \param utf16  The text, such as minipsd_version_info.writer_name.
+ * \param utf8   Receives the text and a terminating NUL; may be NULL when cap is 0.
+ * \param cap    The size of utf8 in bytes.
+ * \param needed Receives the bytes the text takes with its NUL; may be NULL.
+ * \return MINIPSD_OK when it fits; MINIPSD_MORE when cap is too small (utf8 is then empty);
+ *         or MINIPSD_ERR_ARG for a NULL utf16, a view with a size and no data, or utf8 NULL with
+ *         cap above 0.
+ */
+MINIPSDDEF int minipsd_utf16be_to_utf8(const minipsd_bytes *utf16, char *utf8, size_t cap, size_t *needed);
+
+/**
+ * \brief Resource 1005, ResolutionInfo.
+ *
+ * \param res A resource from the reader or a document, its id MINIPSD_RES_RESOLUTION_INFO.
+ * \param out Receives the values.
+ * \return MINIPSD_OK; MINIPSD_ERR_FORMAT when the data is shorter than its 16 bytes;
+ *         MINIPSD_ERR_ARG for a NULL argument or another id.
+ */
+MINIPSDDEF int minipsd_resource_resolution_info(const minipsd_resource *res, minipsd_resolution_info *out);
+
+/**
+ * \brief Resource 1057, version info.
+ *
+ * \param res A resource from the reader or a document, its id MINIPSD_RES_VERSION_INFO.
+ * \param out Receives the values; the names point into res's data.
+ * \return MINIPSD_OK; MINIPSD_ERR_FORMAT when the data ends inside a field or a name;
+ *         MINIPSD_ERR_ARG for a NULL argument or another id.
+ */
+MINIPSDDEF int minipsd_resource_version_info(const minipsd_resource *res, minipsd_version_info *out);
+
+/**
  * \brief Where one channel's samples go: the first sample, and the steps to the next one.
  *
  * The library cannot see the size of the memory behind data: it writes exactly the samples of the
@@ -1143,6 +1248,7 @@ MINIPSDDEF void minipsd_doc_free(minipsd_doc *doc);
 #ifdef MINIPSD_IMPLEMENTATION
 #include "minipsd/base.h"
 #include "minipsd/writer.h"
+#include "minipsd/views.h"
 #include "minipsd/reader.h"
 #include "minipsd/read.h"
 #endif

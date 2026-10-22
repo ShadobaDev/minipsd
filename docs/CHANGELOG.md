@@ -59,6 +59,12 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   minipsd implements no deflate; zlib's `uncompress` fits in a line. Without one, decoding them
   stays `MINIPSD_ERR_UNSUPPORTED`; read with `stored`, they are copied as they are. Decoded in
   bands, a scratch of every channel and `scratch_kept` inflate each channel once, not once a band.
+- Metadata: `minipsd_reader_find_resource` finds a resource by id (`MINIPSD_RES_*`, or
+  `MINIPSD_ERR_NOT_FOUND`, a new code); `minipsd_resource_resolution_info` and
+  `minipsd_resource_version_info` parse resources 1005 and 1057 (both resolutions with their
+  units; whether the composite is real, `has_real_merged_data`); `minipsd_utf16be_to_utf8`
+  converts their names. Public fields follow one naming rule, Adobe's names
+  ([API](SPECIFICATION.md#api), Names).
 - The decode calls may run at once on one reader, from any number of threads, each with its own
   target and scratch, when the buffer holds the whole file
   ([Threads](SPECIFICATION.md#threads), which says this for every call).

@@ -97,6 +97,22 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
         while (minipsd_reader_next_resource(rd, &res) == MINIPSD_MORE) ++resources;
         if (resources != 1)
             return -104;
+        {   /* the resource the writer wrote, found and parsed; a version info built by hand */
+            static const uint8_t vi[] = { 0, 0, 0, 1,  1,  0, 0, 0, 1, 0, 'A',  0, 0, 0, 0,  0, 0, 0, 1 };
+            minipsd_resolution_info resolution;
+            minipsd_version_info    version;
+            minipsd_resource        made;
+            made.id = MINIPSD_RES_VERSION_INFO; made.data.data = vi; made.data.size = sizeof vi;
+            made.name.data = NULL; made.name.size = 0;
+            if (minipsd_reader_find_resource(rd, MINIPSD_RES_RESOLUTION_INFO, &res) != MINIPSD_OK
+                || minipsd_resource_resolution_info(&res, &resolution) != MINIPSD_OK
+                || resolution.vertical_resolution != 300.0
+                || minipsd_reader_find_resource(rd, MINIPSD_RES_VERSION_INFO, &res) != MINIPSD_ERR_NOT_FOUND
+                || minipsd_resource_version_info(&made, &version) != MINIPSD_OK || !version.has_real_merged_data
+                || minipsd_utf16be_to_utf8(&version.writer_name, name, sizeof name, NULL) != MINIPSD_OK
+                || memcmp(name, "A", 2) != 0)
+                return -116;
+        }
         if (minipsd_reader_next_layer(rd, &lv) != MINIPSD_MORE
             || minipsd_layer_name(&lv, name, sizeof name, &rneed) != MINIPSD_OK
             || rneed != 9 || memcmp(name, "Template", 9) != 0 || lv.channel[MINIPSD_CH_R].size == 0)

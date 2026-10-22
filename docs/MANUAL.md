@@ -543,6 +543,31 @@ for the bytes as stored, for instance to show them on white as they are.
 goes further: every layer with its name, blend mode and blocks, and how many pixels of each are
 visible.
 
+### Metadata
+
+`info` has what most programs need: `dpi` and the ICC profile. For more, find a resource by its
+id and let a typed view parse it; none of them needs the reader again, so a document's
+`resources` work too:
+
+```c
+minipsd_resource res;
+minipsd_resolution_info ri;
+minipsd_version_info vi;
+if (minipsd_reader_find_resource(r, MINIPSD_RES_RESOLUTION_INFO, &res) == MINIPSD_OK
+    && minipsd_resource_resolution_info(&res, &ri) == MINIPSD_OK)
+    printf("%g x %g pixels per mm\n", ri.horizontal_resolution / 25.4, ri.vertical_resolution / 25.4);
+if (minipsd_reader_find_resource(r, MINIPSD_RES_VERSION_INFO, &res) == MINIPSD_OK
+    && minipsd_resource_version_info(&res, &vi) == MINIPSD_OK && !vi.has_real_merged_data)
+    puts("the composite is not the layers' image: flatten the layers instead");
+```
+
+A resolution is stored in pixels per inch whatever its unit; the unit (`horizontal_resolution_unit`,
+1 inch, 2 cm) is only how Photoshop shows it. A file without version info is older than Photoshop
+6 and its composite is real. The names in version info are UTF-16BE views:
+`minipsd_utf16be_to_utf8` converts them, measured first as `minipsd_layer_name` is. A missing
+resource is `MINIPSD_ERR_NOT_FOUND`; IPTC, EXIF, XMP and the thumbnail are found the same way and
+come as bytes, for a parser of their own.
+
 ### Untrusted files
 
 Every length is checked; a malformed file is `MINIPSD_ERR_FORMAT`. Pass a `minipsd_limits` to
@@ -664,8 +689,9 @@ Every function that can fail returns an `int`, in three groups:
 | `MINIPSD_MORE` (1) | not finished, and nothing is wrong: `writer_fill` has more bytes, an iterator returned an item, a name did not fit |
 | negative, `MINIPSD_ERR_*` | an error; `minipsd_error_string(rc)` gives a short English text |
 
-So `rc < 0` is the test for an error. `MINIPSD_ERR_SHORT` and `MINIPSD_ERR_LIMIT` are errors that
-need not mean a bad file: the first asks for more bytes, the second is your own limit. Which
+So `rc < 0` is the test for an error. `MINIPSD_ERR_SHORT`, `MINIPSD_ERR_LIMIT` and
+`MINIPSD_ERR_NOT_FOUND` are errors that need not mean a bad file: the first asks for more bytes,
+the second is your own limit, the third says a lookup found nothing. Which
 codes each function returns is listed with it in [minipsd.h](../include/minipsd.h).
 
 ## Configuration

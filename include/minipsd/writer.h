@@ -425,7 +425,7 @@ static void mpsd__layer_record(mpsd__sink *s, const minipsd_doc *d, const minips
 static uint64_t mpsd__max_layers_section(unsigned psb) { return psb ? MPSD__FAR - 1 : MPSD__MAX_SECTION; }
 
 /* A kept resource is written unless the document's own field says the same: dpi, icc. */
-static int mpsd__kept_resource(const minipsd_resource *r) { return r->id != MPSD__RES_RESOLUTION && r->id != MPSD__RES_ICC; }
+static int mpsd__kept_resource(const minipsd_resource *r) { return r->id != MINIPSD_RES_RESOLUTION_INFO && r->id != MINIPSD_RES_ICC_PROFILE; }
 
 /* The dpi as stored: 16.16 fixed point. */
 static uint32_t mpsd__dpi_fixed(const minipsd_doc *d) { return (uint32_t)(d->dpi * MPSD__FIXED_ONE + 0.5); }
@@ -437,7 +437,7 @@ static const uint8_t *mpsd__kept_resolution(const minipsd_doc *d)
     size_t i;
     for (i = 0; i < d->resource_count; ++i) {
         const minipsd_resource *r = &d->resources[i];
-        if (r->id == MPSD__RES_RESOLUTION)
+        if (r->id == MINIPSD_RES_RESOLUTION_INFO)
             return r->data.size == MPSD__RESOLUTION_SIZE && r->data.data && mpsd__get32(r->data.data) == mpsd__dpi_fixed(d) ? r->data.data : NULL;
     }
     return NULL;
@@ -475,18 +475,19 @@ static void mpsd__resolution(mpsd__sink *s, const minipsd_doc *d, minipsd_bytes 
         p[0] = (uint8_t)(res >> 24); p[1] = (uint8_t)(res >> 16); p[2] = (uint8_t)(res >> 8); p[3] = (uint8_t)res;
         p[5] = p[7] = 1;
     }
-    mpsd__put_resource(s, MPSD__RES_RESOLUTION, name, kept ? kept : own, MPSD__RESOLUTION_SIZE);
+    mpsd__put_resource(s, MINIPSD_RES_RESOLUTION_INFO, name, kept ? kept : own, MPSD__RESOLUTION_SIZE);
 }
 
 /* The image resources: the writer's own first (the resolution, the ICC profile if any), then the
    kept ones.  A kept resolution or profile goes: the document's field says it. */
 static void mpsd__resources(mpsd__sink *s, const minipsd_doc *d)
 {
-    const minipsd_resource *res = mpsd__find_resource(d, MPSD__RES_RESOLUTION), *icc = mpsd__find_resource(d, MPSD__RES_ICC);
+    const minipsd_resource *res = mpsd__find_resource(d, MINIPSD_RES_RESOLUTION_INFO);
+    const minipsd_resource *icc = mpsd__find_resource(d, MINIPSD_RES_ICC_PROFILE);
     const minipsd_bytes     none = { NULL, 0 };
     size_t                  i;
     mpsd__resolution(s, d, res ? res->name : none);
-    if (d->icc) mpsd__put_resource(s, MPSD__RES_ICC, icc ? icc->name : none, d->icc, d->icc_size);
+    if (d->icc) mpsd__put_resource(s, MINIPSD_RES_ICC_PROFILE, icc ? icc->name : none, d->icc, d->icc_size);
     for (i = 0; i < d->resource_count; ++i)
         if (mpsd__kept_resource(&d->resources[i]))
             mpsd__put_resource(s, d->resources[i].id, d->resources[i].name, d->resources[i].data.data, d->resources[i].data.size);

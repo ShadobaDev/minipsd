@@ -93,13 +93,14 @@ include/
   minipsd/
     base.h                     return-code texts
     writer.h                   the encoder (pull), plus the 0.1-compatible minipsd_write (push)
+    views.h                    typed views: a kept resource parsed into plain values, UTF-16BE to UTF-8
     reader.h                   the decoder: views into the caller's bytes
     read.h                     minipsd_read: a whole file into one standalone document, on the reader
     detail/
       bytes.h                  big-endian put/get on uint8_t pointers, bounds-checked cursor
       samples.h                samples per colour mode and depth: a mode's colour channels, row
                                bytes, a stored byte's place in memory, ZIP prediction, 1-bit rows
-      utf.h                    UTF-8 <-> UTF-16 for layer names
+      utf.h                    UTF-8 <-> UTF-16 for layer names and other text
       packbits.h               PackBits encode, decode, size bound; strided source and target
       composite.h              blending one row "over", white matte and un-matte
       format.h                 the file's layout: each structure's fields and sizes, and what PSD and PSB
@@ -122,10 +123,11 @@ tools/
 
 | Module (section of `minipsd.h`) | Struct | Functions (sketch) | Implementation |
 |---|---|---|---|
-| Version, linkage, return codes | `minipsd_bytes { const uint8_t *data; size_t size; }` | `minipsd_error_string`; new codes, added never renumbered: `MINIPSD_MORE = 1` (positive: not an error, call again), `MINIPSD_ERR_FORMAT = -6`, `MINIPSD_ERR_UNSUPPORTED = -7`, `MINIPSD_ERR_SHORT = -8`, `MINIPSD_ERR_LIMIT = -9` | `base.h` |
+| Version, linkage, return codes | `minipsd_bytes { const uint8_t *data; size_t size; }` | `minipsd_error_string`; new codes, added never renumbered: `MINIPSD_MORE = 1` (positive: not an error, call again), `MINIPSD_ERR_FORMAT = -6`, `MINIPSD_ERR_UNSUPPORTED = -7`, `MINIPSD_ERR_SHORT = -8`, `MINIPSD_ERR_LIMIT = -9`, `MINIPSD_ERR_NOT_FOUND = -10` | `base.h` |
 | Document | `minipsd_doc`, `minipsd_layer` (unchanged from 0.1) | `minipsd_doc_check(doc, NULL)`: the validation `minipsd_write` does today, now callable on its own | `writer.h` today; its own file if the reader shares it |
 | Writer | `minipsd_writer` (opaque, built in the workspace) | `minipsd_writer_workspace_size`, `_init`, `_total`, `_fill`; `minipsd_write` | `writer.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
-| Reader | `minipsd_reader` (opaque, like the writer), `minipsd_info`, `minipsd_resource`, `minipsd_layer_view`, `minipsd_target` (of `minipsd_plane`), `minipsd_decode_opts`, `minipsd_limits` | `minipsd_reader_workspace_size`, `_init`, `_needed`, `_next_resource`, `_next_layer`, `minipsd_layer_name`, `minipsd_decode_layer`, `minipsd_decode_composite`, `minipsd_decode_mask`, `minipsd_target_rgba`, `minipsd_target_rgba16` | `reader.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
+| Reader | `minipsd_reader` (opaque, like the writer), `minipsd_info`, `minipsd_resource`, `minipsd_layer_view`, `minipsd_target` (of `minipsd_plane`), `minipsd_decode_opts`, `minipsd_limits` | `minipsd_reader_workspace_size`, `_init`, `_needed`, `_next_resource`, `_find_resource`, `_next_layer`, `minipsd_layer_name`, `minipsd_decode_layer`, `minipsd_decode_composite`, `minipsd_decode_mask`, `minipsd_target_rgba`, `minipsd_target_rgba16` | `reader.h`; detail: `bytes`, `utf`, `packbits`, `composite` |
+| Typed views | `minipsd_resolution_info`, `minipsd_version_info`; `MINIPSD_RES_*` | `minipsd_resource_resolution_info`, `minipsd_resource_version_info`, `minipsd_utf16be_to_utf8`: a resource (from the reader or a document) in, a struct out; no reader | `views.h`; detail: `bytes`, `format`, `utf` |
 | Document from a file | `MINIPSD_LOST_*` | `minipsd_read_size`, `minipsd_read_into`, `minipsd_read`, `minipsd_doc_free` | `read.h`, on the public reader (and its record offsets, to tell what is lost) |
 
 Rules for the split:
