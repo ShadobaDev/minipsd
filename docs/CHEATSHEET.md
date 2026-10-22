@@ -153,7 +153,7 @@ paths also check the SBOM fragment's version and that it lists the headers.
 | `MINIPSD_BUILD_TESTS` | ON only as the top-level project | the tests above |
 | `MINIPSD_INSTALL` | ON only as the top-level project | install rules |
 | `MINIPSD_REQUIRE_PSD_TOOLS` | OFF (CI: ON) | fail the configure instead of skipping the round trip |
-| `MINIPSD_PSD_TOOLS_FILES` | OFF (CI: OFF) | fetch psd-tools' 315 test files, 278 PSD and 37 PSB (v1.25.0, about 22 MB, pinned by hash) and read every one |
+| `MINIPSD_PSD_TOOLS_FILES` | OFF (CI: ON in `linux-gcc`) | fetch psd-tools' 315 test files, 278 PSD and 37 PSB (v1.25.0, about 22 MB, pinned by hash) and read every one |
 | `MINIPSD_TEST_FIXTURES` | ON (`linux-coverage`: OFF) | read the local PSDs in `tests/fixtures/` too; off, a local coverage run measures what CI's does |
 | `MINIPSD_CLANG_TIDY` | empty (`linux-tidy`: `clang-tidy`) | run clang-tidy on the test targets |
 

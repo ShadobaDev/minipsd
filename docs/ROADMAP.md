@@ -187,7 +187,7 @@ Additive. See [Reader](CODE-ARCH.md#reader).
       and S7.1, the API frozen from then:
       `minipsd_write_opts` became a parameter of the write calls, a break, so it is a MINOR under
       the pre-1.0 rules. Before it: regenerate [COMPATIBILITY.md](COMPATIBILITY.md) with the new
-      version, and have one CI job fetch psd-tools' files (`MINIPSD_PSD_TOOLS_FILES`), so that
+      version, and have one CI job fetch psd-tools' files (`MINIPSD_PSD_TOOLS_FILES`; done: `linux-gcc`), so that
       Photoshop's ZIP files are checked through zlib there too, not only locally.
 
 ## 5. Round trip and conveniences
