@@ -415,22 +415,23 @@ feature; a supplied composite needs nothing. See
       `linux-tsan` runs every test under ThreadSanitizer.
       *Done when:* a test decodes the bands of one layer from several threads at once under
       ThreadSanitizer, or the spec says why it must not.
-- [ ] **S6.15** Streaming read (`R9`): the reader over a window of the file instead of the whole
-      blob, generalising today's prefix (`MINIPSD_ERR_SHORT`, `minipsd_reader_needed`):
-      - *design.* A call that cannot go on says which range it needs (offset and size), not
-        only a prefix length; the caller hands that range, and the offset from which it may
-        drop what it holds. Views stay valid until it drops them. The same calls serve a
-        source that seeks (a file, `vips_source`), which then reads only what is asked for.
-      - **What must be held at once:** the layer records (layer 0's data begins only after the
-        last record), one resource, and one layer's or the composite's channel data, still
-        compressed (they are planar, so a layer's rows need all its channels). Each bounded by
-        `minipsd_limits`. The global blocks after the layers' data and the resources are
-        skipped by their lengths when not asked for.
-      - **Order.** Without a seek, forward only: resources, records, layers bottom first, the
-        tail, the composite.
-      *Done when:* every file of psd-tools' set decodes the same through a window fed in chunks
-      of 4 KiB as from the whole blob, and no call holds more than its records, one resource
-      and one layer's compressed data (counted in a test).
+- [~] **S6.15** Streaming read (`R9`), *deferred* until a consumer needs it. Its trigger is a
+      source that is neither memory nor mmap: an asynchronous one (WASM's `Blob.slice`, HTTP
+      Range) or a PSB too large for a 32-bit address space. Done so far: the reader reads
+      through a window of the file (`base`, `size`), and `MINIPSD_ERR_SHORT` records the whole
+      range a call needs; `minipsd_reader_init` sets the window at offset 0.
+      - **Why not now.** PSD's layout sets the floor, not minipsd. Records come before every
+        layer's data, channels are planar, and the composite comes last with its RLE tables
+        first. Read forward only, an interleaved band therefore needs the whole compressed layer
+        (or composite) held. A band of a few KiB needs seeks and several ranges a call. mmap
+        already gives libvips and files on 64 bits all of that.
+      - **The mechanism, when it comes.** Resumable calls: a call returns `MINIPSD_ERR_SHORT`
+        with the range it needs, the caller fetches it and hands a new window, and the call is
+        repeated. A read callback cannot serve an asynchronous source. Lengths precede the data,
+        so the reader knows each unit's size before reading it, and a unit over the caller's
+        budget is refused before a byte is read. Units: the resources whole at init, the
+        records whole, one channel or one layer for a decode; decoding by offset, not by a
+        view's pointer.
 - [ ] **S6.16** Names, before 0.3.0 (S4.10) freezes them: fields take Adobe's descriptive names in
       snake_case, the four-character key in their comment; where Adobe gives none or an
       ambiguous one, psd-tools'. `kind` and `MINIPSD_KIND_*` (psd-tools' name for `lsct`'s
