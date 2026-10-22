@@ -494,12 +494,18 @@ libvips is where minipsd is meant to be used: as a loader and saver of PSD and P
 programs that render a composite with libvips and write the layers with minipsd. Steps 7.2 on are
 the loader and saver; how they reach libvips is not this roadmap's.
 
-- [ ] **S7.1** `examples/vips_composite.c`: a document's composite rendered with libvips
+- [x] **S7.1** `examples/vips_composite.c`: a document's composite rendered with libvips
       (`vips_composite`, blend keys mapped as in the spec's
       [Working with libvips](SPECIFICATION.md#working-with-libvips)), then written with it;
       built and run only when pkg-config finds `vips`. A "With libvips" chapter in
       [MANUAL.md](MANUAL.md). The pattern a program such as Platemaker follows to export layered
       PSDs with 0.3.0.
+      As done: behind `MINIPSD_VIPS_EXAMPLE` (off by default), not pkg-config alone: Windows
+      fetches libvips' prebuilt "web" build pinned to the newest release (8.18.7), elsewhere
+      pkg-config. Layers made in the example, or an 8-bit RGB file's (`minipsd_read`); the file
+      is read back and its composite must be the render, which is the test. CI's `msvc` job
+      runs it; locally it also runs on `tests/fixtures/Test-g-example.psd`. Tracking libvips'
+      master is left for later.
 - [ ] **S7.2** *design.* minipsd as a libvips loader and saver:
       - **Loading.** What the image is: the composite by default, one layer by an option, its
         offset in the metadata. Metadata: ICC profile, resolution, interpretation, sample

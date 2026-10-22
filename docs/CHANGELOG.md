@@ -26,6 +26,9 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   composite's transparency with a global `Mtrn`, `Mt16` or `Mt32` block rather than a negative
   layer count; both count.
 - `examples/read_file.c`: a PSD described layer by layer, every layer and the composite decoded.
+- `examples/vips_composite.c`: layers flattened by libvips (`vips_composite`, blend modes mapped)
+  and written with that composite, then read back; built with `MINIPSD_VIPS_EXAMPLE`, which on
+  Windows fetches libvips' prebuilt build. A "With libvips" chapter in the manual.
 - `examples/hello_write.c` and `examples/hello_read.c`: the shortest programs that write and read
   a PSD, which open a rewritten [MANUAL.md](MANUAL.md): call-order diagrams, a file read in
   parts, memory, return codes and configuration.

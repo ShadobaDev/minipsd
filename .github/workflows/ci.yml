@@ -30,7 +30,9 @@ jobs:
       matrix:
         include:
           # windows-2022, not windows-latest: the msvc preset's generator is "Visual Studio 17 2022".
-          - { os: windows-2022,   preset: msvc }
+          # msvc also builds and runs examples/vips_composite.c on libvips' prebuilt Windows build
+          # (fetched, pinned; MSVC is what Platemaker builds with).
+          - { os: windows-2022,   preset: msvc, vips_example: ON }
           - { os: windows-latest, preset: mingw }
           # linux-gcc also reads psd-tools' 315 files (22 MB, pinned by hash): every comparison
           # with psd-tools, Photoshop's ZIP files through zlib among them.
@@ -76,7 +78,7 @@ jobs:
       - name: Configure, build, test
         if: matrix.preset != 'mingw'
         run: |
-          cmake --preset ${{ matrix.preset }} -DMINIPSD_REQUIRE_PSD_TOOLS=ON -DMINIPSD_PSD_TOOLS_FILES=${{ matrix.psd_tools_files || 'OFF' }} "-DPython3_EXECUTABLE=${{ steps.python.outputs.python-path }}"
+          cmake --preset ${{ matrix.preset }} -DMINIPSD_REQUIRE_PSD_TOOLS=ON -DMINIPSD_PSD_TOOLS_FILES=${{ matrix.psd_tools_files || 'OFF' }} -DMINIPSD_VIPS_EXAMPLE=${{ matrix.vips_example || 'OFF' }} "-DPython3_EXECUTABLE=${{ steps.python.outputs.python-path }}"
           cmake --build --preset ${{ matrix.preset }}
           ctest --preset ${{ matrix.preset }}
 

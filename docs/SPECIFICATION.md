@@ -623,7 +623,9 @@ does, and its memory images are minipsd's buffers, with no conversion:
 - **Memory:** libvips computes lazily, in strips; minipsd takes a whole layer, so a large
   pipeline materialises each layer before writing. Reading in bands of rows
   (`minipsd_decode_opts`) fits libvips' strips.
-- minipsd never depends on libvips.
+- minipsd never depends on libvips. `examples/vips_composite.c` does the whole round: layers out
+  of libvips, the composite rendered by `vips_composite`, the file written with it and read back;
+  CI's `msvc` job runs it on libvips' prebuilt Windows build, pinned to the newest release.
 
 ## Consumer requirements
 

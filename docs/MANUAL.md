@@ -675,6 +675,41 @@ Each is planned work. If a file of yours sets one, please
 made it (the program, and the feature you used): that is what sets the order of the work.
 [examples/read_file.c](../examples/read_file.c) prints the bits of any file.
 
+## With libvips
+
+minipsd writes and reads PSD; it renders nothing. When your layers are libvips images, let
+libvips flatten them and hand minipsd the result as the document's composite, the image a
+viewer that ignores layers shows. The two share their memory layout (8-bit RGBA, straight
+alpha, rows top down), so nothing is converted.
+[examples/vips_composite.c](../examples/vips_composite.c) is the whole program; its steps:
+
+1. **Layers out of libvips.** `vips_image_write_to_memory` gives a layer's `rgba` as it is
+   (a 3-band image takes `vips_bandjoin_const1(image, 255)` first).
+2. **The composite in libvips.** `vips_composite` onto a transparent canvas of the document's
+   size, each layer at its rectangle (`"x"`, `"y"`), its opacity multiplied into alpha
+   (`vips_linear` on the alpha band), hidden layers and group markers left out, blend keys
+   mapped by the table in [Working with libvips](SPECIFICATION.md#working-with-libvips). Modes
+   without a counterpart, masks, clipping and effects are yours to draw.
+3. **Written by minipsd.** The render goes into `doc.composite`, `composite_matted` 0: the writer
+   mattes it as the format wants.
+4. **Read back** (the example's check): `minipsd_decode_composite` into a buffer that
+   `vips_image_new_from_memory` wraps without a copy gives the render again, exactly where alpha is
+   full and within the un-matting bound elsewhere.
+
+```c
+VipsImage *in[3] = { canvas, background, disc }, *out;
+int modes[2] = { VIPS_BLEND_MODE_OVER, VIPS_BLEND_MODE_MULTIPLY };   /* "norm", "mul " */
+int xs[2] = { 0, -32 }, ys[2] = { 0, 96 };                            /* the layers' left, top */
+VipsArrayInt *x = vips_array_int_new(xs, 2), *y = vips_array_int_new(ys, 2);
+vips_composite(in, &out, 3, modes, "x", x, "y", y, NULL);
+doc.composite = vips_image_write_to_memory(out, &size);   /* width * height * 4, straight alpha */
+```
+
+libvips computes lazily, in strips; minipsd takes a whole layer and a whole composite, so each is
+materialised before writing. Reading, bands of rows (`minipsd_decode_opts`) fit libvips' strips.
+Build the example with `-DMINIPSD_VIPS_EXAMPLE=ON`: on Windows CMake fetches libvips' prebuilt
+build, elsewhere pkg-config finds yours. minipsd itself never depends on libvips.
+
 ## Memory and ownership
 
 minipsd allocates only inside `minipsd_write`, which frees it before returning, and
