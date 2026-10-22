@@ -55,13 +55,13 @@ struct minipsd_reader {
 /* --- reading from a buffer that may end early --- */
 
 /* Does the window hold the file's bytes [from, to)? */
-static int mpsd__holds(const minipsd_reader *r, uint64_t from, uint64_t to)
+static int mpsd__reader_holds(const minipsd_reader *r, uint64_t from, uint64_t to)
 {
     return from >= r->base && to - r->base <= r->size;
 }
 
 /* The byte at file offset `at`, which the window holds. */
-static const uint8_t *mpsd__ptr(const minipsd_reader *r, uint64_t at)
+static const uint8_t *mpsd__reader_ptr(const minipsd_reader *r, uint64_t at)
 {
     return r->data + (size_t)(at - r->base);
 }
@@ -70,7 +70,7 @@ static const uint8_t *mpsd__ptr(const minipsd_reader *r, uint64_t at)
    where the call that asks starts reading when repeated. */
 static int mpsd__have(minipsd_reader *r, uint64_t from, uint64_t to)
 {
-    if (mpsd__holds(r, from, to)) return MINIPSD_OK;
+    if (mpsd__reader_holds(r, from, to)) return MINIPSD_OK;
     r->needed_from = from;
     r->needed      = to;
     return MINIPSD_ERR_SHORT;
@@ -81,7 +81,7 @@ static int mpsd__have(minipsd_reader *r, uint64_t from, uint64_t to)
 static int mpsd__length(minipsd_reader *r, uint64_t at, unsigned wide, uint64_t *length)
 {
     const int rc = mpsd__have(r, 0, at + mpsd__len_size(wide));
-    if (rc == MINIPSD_OK) *length = mpsd__getlen(mpsd__ptr(r, at), wide);
+    if (rc == MINIPSD_OK) *length = mpsd__getlen(mpsd__reader_ptr(r, at), wide);
     return rc;
 }
 
@@ -101,16 +101,16 @@ static int mpsd__starts(const minipsd_reader *r, const char *signature)
 static int mpsd__resource(const minipsd_reader *r, uint64_t at, minipsd_resource *res, uint64_t *next)
 {
     uint64_t       pos, size;
-    if (r->res_end - at < mpsd__resource_size(0, 0) || !mpsd__tag(mpsd__ptr(r, at), "8BIM")) return MINIPSD_ERR_FORMAT;
-    pos = at + MPSD__RES_NAME + mpsd__pad(1u + mpsd__ptr(r, at)[MPSD__RES_NAME], 2);   /* after the name */
+    if (r->res_end - at < mpsd__resource_size(0, 0) || !mpsd__tag(mpsd__reader_ptr(r, at), "8BIM")) return MINIPSD_ERR_FORMAT;
+    pos = at + MPSD__RES_NAME + mpsd__pad(1u + mpsd__reader_ptr(r, at)[MPSD__RES_NAME], 2);   /* after the name */
     if (pos > r->res_end || r->res_end - pos < MPSD__LEN) return MINIPSD_ERR_FORMAT;
-    size = mpsd__get32(mpsd__ptr(r, pos));
+    size = mpsd__get32(mpsd__reader_ptr(r, pos));
     pos += MPSD__LEN;
     if (size + (size & 1) > r->res_end - pos) return MINIPSD_ERR_FORMAT;
-    res->id        = (uint16_t)mpsd__get16(mpsd__ptr(r, at) + 4);
-    res->name.data = mpsd__ptr(r, at) + MPSD__RES_NAME + 1;
-    res->name.size = mpsd__ptr(r, at)[MPSD__RES_NAME];
-    res->data.data = mpsd__ptr(r, pos);
+    res->id        = (uint16_t)mpsd__get16(mpsd__reader_ptr(r, at) + 4);
+    res->name.data = mpsd__reader_ptr(r, at) + MPSD__RES_NAME + 1;
+    res->name.size = mpsd__reader_ptr(r, at)[MPSD__RES_NAME];
+    res->data.data = mpsd__reader_ptr(r, pos);
     res->data.size = (size_t)size;
     *next          = pos + size + (size & 1);
     return MINIPSD_OK;
@@ -144,7 +144,7 @@ static int mpsd__layers_at(minipsd_reader *r, uint64_t at, uint64_t end, minipsd
     int32_t count;
     const int rc = mpsd__have(r, 0, at + MPSD__LAYER_COUNT);
     if (rc != MINIPSD_OK) return rc;
-    count = (int16_t)(uint16_t)mpsd__get16(mpsd__ptr(r, at));
+    count = (int16_t)(uint16_t)mpsd__get16(mpsd__reader_ptr(r, at));
     in->composite_has_alpha = count < 0;
     if (count < 0) count = -count;
     if (count > MPSD__MAX_LAYERS) return MINIPSD_ERR_FORMAT;
@@ -173,7 +173,7 @@ static int mpsd__deep_layers(minipsd_reader *r, uint64_t at, uint64_t end, minip
     for (at += MPSD__LEN + length; at < end && end - at >= MPSD__BLOCK_HEAD; at += head + mpsd__pad((size_t)length, 4)) {
         rc = mpsd__have(r, 0, at + MPSD__BLOCK_HEAD);
         if (rc != MINIPSD_OK) return rc;
-        p = mpsd__ptr(r, at);
+        p = mpsd__reader_ptr(r, at);
         if (!(mpsd__tag(p, "8BIM") || mpsd__tag(p, "8B64"))) return MINIPSD_OK;
         head = mpsd__block_head(p, r->psb);
         if (end - at < head) return MINIPSD_OK;
@@ -206,12 +206,12 @@ static int mpsd__scan(minipsd_reader *r, minipsd_info *info)
     if (!mpsd__starts(r, "8BPS")) return MINIPSD_ERR_FORMAT;
     rc = mpsd__have(r, 0, MPSD__HEADER_SIZE);                    /* its fields: detail/format.h */
     if (rc != MINIPSD_OK) return rc;
-    in.format     = (uint16_t)mpsd__get16(mpsd__ptr(r, 4));
-    in.channels   = (uint16_t)mpsd__get16(mpsd__ptr(r, 12));
-    in.height     = mpsd__get32(mpsd__ptr(r, 14));
-    in.width      = mpsd__get32(mpsd__ptr(r, 18));
-    in.depth      = (uint16_t)mpsd__get16(mpsd__ptr(r, 22));
-    in.color_mode = (uint16_t)mpsd__get16(mpsd__ptr(r, 24));
+    in.format     = (uint16_t)mpsd__get16(mpsd__reader_ptr(r, 4));
+    in.channels   = (uint16_t)mpsd__get16(mpsd__reader_ptr(r, 12));
+    in.height     = mpsd__get32(mpsd__reader_ptr(r, 14));
+    in.width      = mpsd__get32(mpsd__reader_ptr(r, 18));
+    in.depth      = (uint16_t)mpsd__get16(mpsd__reader_ptr(r, 22));
+    in.color_mode = (uint16_t)mpsd__get16(mpsd__reader_ptr(r, 24));
     psb           = in.format == MINIPSD_PSB;
     side          = mpsd__max_side(psb);
     if ((in.format != MINIPSD_PSD && !psb) || in.channels < 1 || in.channels > MPSD__MAX_CHANNELS || !mpsd__depth_ok(in.depth)
@@ -225,7 +225,7 @@ static int mpsd__scan(minipsd_reader *r, minipsd_info *info)
        a buffer that has them has it). */
     rc = mpsd__length(r, MPSD__HEADER_SIZE, 0, &length);
     if (rc != MINIPSD_OK) return rc;
-    in.color_data.data = length ? mpsd__ptr(r, MPSD__HEADER_SIZE + MPSD__LEN) : NULL;
+    in.color_data.data = length ? mpsd__reader_ptr(r, MPSD__HEADER_SIZE + MPSD__LEN) : NULL;
     in.color_data.size = (size_t)length;
     at = MPSD__HEADER_SIZE + MPSD__LEN + length;
 
@@ -265,7 +265,7 @@ static int mpsd__scan(minipsd_reader *r, minipsd_info *info)
         if (info_length > length - mpsd__len_size(psb) || info_length == 1) return MINIPSD_ERR_FORMAT;
         tail = lm_start + mpsd__len_size(psb) + info_length;   /* the global layer mask, the global blocks */
         in.layer_tail.size = (size_t)(lm_start + length - tail);
-        if (mpsd__holds(r, tail, lm_start + length)) in.layer_tail.data = mpsd__ptr(r, tail);
+        if (mpsd__reader_holds(r, tail, lm_start + length)) in.layer_tail.data = mpsd__reader_ptr(r, tail);
         rc = info_length ? mpsd__layers_at(r, lm_start + mpsd__len_size(psb), tail, &in) : MINIPSD_OK;
         if (rc == MINIPSD_OK && !in.layer_count) rc = mpsd__deep_layers(r, tail, lm_start + length, &in);
         if (rc != MINIPSD_OK) return rc;
@@ -403,11 +403,11 @@ static int mpsd__extra(const minipsd_reader *r, uint64_t at, uint64_t end, minip
     int            k, rc;
     for (k = 0; k < 2; ++k) {                                 /* layer mask data, blending ranges */
         if (end - at < MPSD__LEN) return MINIPSD_ERR_FORMAT;
-        skip = mpsd__get32(mpsd__ptr(r, at));
+        skip = mpsd__get32(mpsd__reader_ptr(r, at));
         at += MPSD__LEN;
         if (skip > end - at) return MINIPSD_ERR_FORMAT;
         if (k == 0 && skip >= MPSD__MASK_HEAD) {               /* rectangle, colour, flags, the rest */
-            const uint8_t *m = mpsd__ptr(r, at);
+            const uint8_t *m = mpsd__reader_ptr(r, at);
             minipsd_mask  *mask = &v->mask;
             mask->top    = (int32_t)mpsd__get32(m);     mask->left  = (int32_t)mpsd__get32(m + 4);
             mask->bottom = (int32_t)mpsd__get32(m + 8); mask->right = (int32_t)mpsd__get32(m + 12);
@@ -421,17 +421,17 @@ static int mpsd__extra(const minipsd_reader *r, uint64_t at, uint64_t end, minip
         }
         if (k == 1) {
             if (skip % MPSD__RANGE_SIZE) return MINIPSD_ERR_FORMAT;
-            if (skip) v->blending_ranges.data = mpsd__ptr(r, at);
+            if (skip) v->blending_ranges.data = mpsd__reader_ptr(r, at);
             v->blending_ranges.size = skip;
             v->blending_range_count = skip / MPSD__RANGE_SIZE;
         }
         at += skip;
     }
-    if (end == at || mpsd__pad(1u + *mpsd__ptr(r, at), 4) > end - at) return MINIPSD_ERR_FORMAT;
-    v->name_pascal.data = mpsd__ptr(r, at) + 1;
-    v->name_pascal.size = *mpsd__ptr(r, at);
-    at += mpsd__pad(1u + *mpsd__ptr(r, at), 4);
-    v->extra.data = mpsd__ptr(r, at);
+    if (end == at || mpsd__pad(1u + *mpsd__reader_ptr(r, at), 4) > end - at) return MINIPSD_ERR_FORMAT;
+    v->name_pascal.data = mpsd__reader_ptr(r, at) + 1;
+    v->name_pascal.size = *mpsd__reader_ptr(r, at);
+    at += mpsd__pad(1u + *mpsd__reader_ptr(r, at), 4);
+    v->extra.data = mpsd__reader_ptr(r, at);
     v->extra.size = (size_t)(end - at);
     for (pos = 0; pos < v->extra.size;) {
         rc = mpsd__block(v->extra, pos, r->psb, &block, &pos);
@@ -461,12 +461,12 @@ static int mpsd__record(minipsd_reader *r, uint64_t from, uint64_t at, mpsd__rec
 
     rc = mpsd__room(r, from, at + MPSD__RECORD_HEAD);                /* the rectangle and the channel count */
     if (rc != MINIPSD_OK) return rc;
-    channels = mpsd__get16(mpsd__ptr(r, at) + MPSD__RECT_SIZE);
+    channels = mpsd__get16(mpsd__reader_ptr(r, at) + MPSD__RECT_SIZE);
     pos      = at + MPSD__RECORD_HEAD + (uint64_t)entry * channels;   /* after the channel table */
     rc = mpsd__room(r, from, pos + MPSD__RECORD_TAIL);               /* blend, flags, extra length */
     if (rc != MINIPSD_OK) return rc;
 
-    for (k = 0; k < 4; ++k) rect[k] = (int32_t)mpsd__get32(mpsd__ptr(r, at) + 4 * (size_t)k);
+    for (k = 0; k < 4; ++k) rect[k] = (int32_t)mpsd__get32(mpsd__reader_ptr(r, at) + 4 * (size_t)k);
     for (k = 0; k < MINIPSD_PLANES; ++k) {
         v->channel[k].data = NULL;
         v->channel[k].size = 0;
@@ -484,7 +484,7 @@ static int mpsd__record(minipsd_reader *r, uint64_t from, uint64_t at, mpsd__rec
     v->other_channels = 0;
     rec->total        = 0;
     for (k = 0; k < channels; ++k) {
-        const uint8_t *e      = mpsd__ptr(r, at) + MPSD__RECORD_HEAD + (size_t)entry * k;
+        const uint8_t *e      = mpsd__reader_ptr(r, at) + MPSD__RECORD_HEAD + (size_t)entry * k;
         const uint64_t length = mpsd__getlen(e + 2, r->psb);   /* after the id */
         const int      slot   = mpsd__slot(r, (int16_t)(uint16_t)mpsd__get16(e));
         /* A marker, no repeats, and no more data than the layer info could hold. */
@@ -498,14 +498,14 @@ static int mpsd__record(minipsd_reader *r, uint64_t from, uint64_t at, mpsd__rec
         rec->total += length;
     }
 
-    if (!mpsd__tag(mpsd__ptr(r, pos), "8BIM")) return MINIPSD_ERR_FORMAT;
-    for (k = 0; k < 4; ++k) v->blend[k] = (char)mpsd__ptr(r, pos)[4 + k];
+    if (!mpsd__tag(mpsd__reader_ptr(r, pos), "8BIM")) return MINIPSD_ERR_FORMAT;
+    for (k = 0; k < 4; ++k) v->blend[k] = (char)mpsd__reader_ptr(r, pos)[4 + k];
     v->blend[4] = '\0';
-    v->opacity  = mpsd__ptr(r, pos)[8];
-    v->clipping = mpsd__ptr(r, pos)[9];
-    v->flags    = mpsd__ptr(r, pos)[10];
+    v->opacity  = mpsd__reader_ptr(r, pos)[8];
+    v->clipping = mpsd__reader_ptr(r, pos)[9];
+    v->flags    = mpsd__reader_ptr(r, pos)[10];
     v->hidden   = (v->flags & MPSD__FLAG_HIDDEN) != 0;
-    extra       = mpsd__get32(mpsd__ptr(r, pos) + 12);
+    extra       = mpsd__get32(mpsd__reader_ptr(r, pos) + 12);
     extra_end   = pos + MPSD__RECORD_TAIL + extra;
     rc = mpsd__room(r, from, extra_end);
     if (rc != MINIPSD_OK) return rc;
@@ -560,7 +560,7 @@ MINIPSDDEF int minipsd_reader_next_layer(minipsd_reader *r, minipsd_layer_view *
         const uint64_t at   = r->data_next + rec.offset[k];
         minipsd_bytes *view = k < MINIPSD_PLANES ? &rec.view.channel[k] : k == MPSD__SLOT_MASK ? &rec.view.mask.stored : &rec.view.mask.real;
         view->size = (size_t)rec.length[k];                     /* within the section, which fits */
-        view->data = rec.length[k] && mpsd__holds(r, at, at + rec.length[k]) ? mpsd__ptr(r, at) : NULL;
+        view->data = rec.length[k] && mpsd__reader_holds(r, at, at + rec.length[k]) ? mpsd__reader_ptr(r, at) : NULL;
         if (k < MINIPSD_PLANES) rec.view.channel_offset[k] = rec.length[k] ? at : 0;
         if (k == MPSD__SLOT_MASK) rec.view.mask_offset = rec.length[k] ? at : 0;
     }
@@ -901,10 +901,10 @@ static int mpsd__composite_open(minipsd_reader *r, int last, mpsd__chan *ch)
     int            k, rc = mpsd__have(r, r->image_start, at);
     if (rc != MINIPSD_OK) return rc;
     for (k = 0; k <= last; ++k) mpsd__chan_init(r, &ch[k]);
-    switch (mpsd__get16(mpsd__ptr(r, r->image_start))) {
+    switch (mpsd__get16(mpsd__reader_ptr(r, r->image_start))) {
     case MPSD__COMP_RAW:
         rc = mpsd__have(r, r->image_start, at + plane * (uint64_t)(last + 1));
-        for (k = 0; rc == MINIPSD_OK && k <= last; ++k) ch[k].rows = mpsd__ptr(r, at + plane * (uint64_t)k);
+        for (k = 0; rc == MINIPSD_OK && k <= last; ++k) ch[k].rows = mpsd__reader_ptr(r, at + plane * (uint64_t)k);
         return rc;
     case MPSD__COMP_RLE:
         rows_at = at + (uint64_t)r->channels * r->height * mpsd__count_size(r->psb);   /* the counts of every channel come first */
@@ -912,12 +912,12 @@ static int mpsd__composite_open(minipsd_reader *r, int last, mpsd__chan *ch)
         if (rc != MINIPSD_OK) return rc;
         for (k = 0; k <= last; ++k) {
             offset[k] = sum;
-            for (y = 0, n = r->height; y < n; ++y) sum += mpsd__count(mpsd__ptr(r, at), (uint32_t)k * n + y, r->psb);
+            for (y = 0, n = r->height; y < n; ++y) sum += mpsd__count(mpsd__reader_ptr(r, at), (uint32_t)k * n + y, r->psb);
         }
         rc = mpsd__have(r, r->image_start, rows_at + sum);
         for (k = 0; rc == MINIPSD_OK && k <= last; ++k) {
-            ch[k].table = mpsd__ptr(r, at) + (size_t)k * r->height * mpsd__count_size(r->psb);
-            ch[k].rows  = mpsd__ptr(r, rows_at + offset[k]);
+            ch[k].table = mpsd__reader_ptr(r, at) + (size_t)k * r->height * mpsd__count_size(r->psb);
+            ch[k].rows  = mpsd__reader_ptr(r, rows_at + offset[k]);
         }
         return rc;
     case MPSD__COMP_ZIP: case MPSD__COMP_ZIP_PREDICTED:

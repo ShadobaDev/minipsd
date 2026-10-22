@@ -170,7 +170,8 @@ This is not the roadmap, just where each case fits against the current plan in
   - W7 (supplied composite);
   - X1 (b) and (c).
 - **Large, only on real demand:**
-  - R9 (streaming parser);
+  - R9 (streaming parser): PSD's planar layout means a whole compressed layer held when read
+    forward only (ROADMAP S6.15);
   - W6 and W8 (row provider, layer-at-a-time);
   - W9 (parallel split API);
   - E3 (segment output);
