@@ -113,6 +113,34 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
                 || memcmp(name, "A", 2) != 0)
                 return -116;
         }
+        {   /* the other typed views, each over a resource built by hand: one item, then the end */
+            static const uint8_t guides[] = { 0, 0, 0, 1,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 1,  0, 0, 0, 64,  1 };
+            static const uint8_t names[] = { 1, 'a' }, ids[] = { 0, 0, 0, 9 }, index[] = { 0, 7 };
+            minipsd_grid_and_guides grid;
+            minipsd_guide           guide;
+            minipsd_bytes           alpha;
+            minipsd_resource        made;
+            uint32_t                id;
+            uint16_t                transparent;
+            size_t                  at = 0;
+            made.name.data = NULL; made.name.size = 0;
+            made.id = MINIPSD_RES_GRID_AND_GUIDES; made.data.data = guides; made.data.size = sizeof guides;
+            if (minipsd_resource_grid_and_guides(&made, &grid) != MINIPSD_OK || grid.guide_count != 1
+                || minipsd_resource_next_guide(&made, &at, &guide) != MINIPSD_MORE || guide.location != 64
+                || minipsd_resource_next_guide(&made, &at, &guide) != MINIPSD_OK)
+                return -117;
+            made.id = MINIPSD_RES_ALPHA_NAMES; made.data.data = names; made.data.size = sizeof names; at = 0;
+            if (minipsd_resource_next_alpha_name(&made, &at, &alpha) != MINIPSD_MORE || alpha.size != 1
+                || minipsd_resource_next_alpha_name(&made, &at, &alpha) != MINIPSD_OK)
+                return -118;
+            made.id = MINIPSD_RES_ALPHA_IDENTIFIERS; made.data.data = ids; made.data.size = sizeof ids; at = 0;
+            if (minipsd_resource_next_alpha_identifier(&made, &at, &id) != MINIPSD_MORE || id != 9
+                || minipsd_resource_next_alpha_identifier(&made, &at, &id) != MINIPSD_OK)
+                return -119;
+            made.id = MINIPSD_RES_TRANSPARENCY_INDEX; made.data.data = index; made.data.size = sizeof index;
+            if (minipsd_resource_transparency_index(&made, &transparent) != MINIPSD_OK || transparent != 7)
+                return -120;
+        }
         if (minipsd_reader_next_layer(rd, &lv) != MINIPSD_MORE
             || minipsd_layer_name(&lv, name, sizeof name, &rneed) != MINIPSD_OK
             || rneed != 9 || memcmp(name, "Template", 9) != 0 || lv.channel[MINIPSD_CH_R].size == 0)
@@ -123,6 +151,12 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
         if (minipsd_decode_composite(rd, &t, NULL) != MINIPSD_OK || got[3] != px[3])   /* one layer: its alpha */
             return -108;
         while (minipsd_layer_next_block(&lv, &pos, &blk) == MINIPSD_MORE) ++blocks;
+        {   /* the writer writes 'luni' only: no setting present, the fill opaque */
+            minipsd_block_settings settings;
+            if (minipsd_layer_block_settings(&lv, &settings) != MINIPSD_OK || settings.present != 0
+                || settings.fill_opacity != 255)
+                return -121;
+        }
         if (blocks != 1 || minipsd_reader_next_layer(rd, &lv) != MINIPSD_MORE
             || minipsd_layer_blending_range(&lv, 0, &br) != MINIPSD_OK || br.destination.white[0] != 210
             || minipsd_reader_next_layer(rd, &lv) != MINIPSD_OK)

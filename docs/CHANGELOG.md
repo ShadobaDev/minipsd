@@ -63,7 +63,10 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   `MINIPSD_ERR_NOT_FOUND`, a new code); `minipsd_resource_resolution_info` and
   `minipsd_resource_version_info` parse resources 1005 and 1057 (both resolutions with their
   units; whether the composite is real, `has_real_merged_data`); `minipsd_utf16be_to_utf8`
-  converts their names. Public fields follow one naming rule, Adobe's names
+  converts their names. The grid and guides (1032), the alpha channels' names (1045, 1006) and
+  identifiers (1053) and the transparency index (1047) are parsed too, lists walked with a
+  cursor; `minipsd_layer_block_settings` gives a layer's id, colour label, fill opacity, locks,
+  knockout and blending of clipped and interior elements. Public fields follow one naming rule, Adobe's names
   ([API](SPECIFICATION.md#api), Names).
 - The decode calls may run at once on one reader, from any number of threads, each with its own
   target and scratch, when the buffer holds the whole file

@@ -441,7 +441,7 @@ feature; a supplied composite needs nothing. See
       words; `blend` `blend_mode`, `extra` `additional_info`, a mask's `color` `default_color`,
       `color_data` `color_mode_data`. `dpi`, `format` and the two names stay.
       *Done when:* the rule is in the spec, and every public field follows it or says why not.
-- [ ] **S6.17** Typed views of kept data: what the file's own bytes say, parsed into plain values;
+- [x] **S6.17** Typed views of kept data: what the file's own bytes say, parsed into plain values;
       what needs another tool stays out. No allocation, no tree built: a view in, a small
       struct or one scalar out, as `minipsd_layer_blending_range` does. ImageMagick parses
       only the resolution, the "has merged image" flag and four profiles; psd-tools nearly
@@ -461,18 +461,23 @@ feature; a supplied composite needs nothing. See
       - **Fixed-layout layer blocks (P2):** `lyid` layer id, `lclr` colour label, `iOpa` fill
         opacity, `lspf` protection, `knko` knockout, `clbl` and `infx` blend clipped and
         interior elements.
+        *Done:* `minipsd_layer_block_settings`, one struct with a `present` bit a block.
       - **Fixed-layout resources (P2):** guides, alpha channel names and ids, an indexed file's
         transparency index.
-      - **Old fixed-layout adjustments (P3):** `levl`, `curv`, `brit`, `hue2` and the like.
-      - *design (P3).* One-level descriptor reader: one item a call (key, type, a scalar, or a
-        nested descriptor or list as a view, never descended into). Descriptor items carry no
-        length, so skipping a nested one walks its shape (depth-limited) without building it;
-        decide whether that is acceptable. It would give a text layer's text (`TySh`, key
-        `Txt `), a smart object's name, effects' flags.
+        *Done:* `minipsd_resource_grid_and_guides` and the walks `next_guide`,
+        `next_alpha_name` (1045 or 1006), `next_alpha_identifier`; `transparency_index`.
       - **Out:** EngineData (text styling, a nested text format), rendering effects,
         adjustments, blend modes and vectors, parsing EXIF, XMP or IPTC, colour conversion.
       *Done when:* each step's values match psd-tools' on its test files; the P1 ones are
       what S7.3 sets as libvips metadata.
+- [ ] **S6.18** Typed views, further (S6.17's P3, split out until a consumer asks):
+      - **Old fixed-layout adjustments:** `levl`, `curv`, `brit`, `hue2` and the like.
+      - *design.* One-level descriptor reader: one item a call (key, type, a scalar, or a
+        nested descriptor or list as a view, never descended into). Descriptor items carry no
+        length, so skipping a nested one walks its shape (depth-limited) without building it;
+        decide whether that is acceptable. It would give a text layer's text (`TySh`, key
+        `Txt `), a smart object's name, effects' flags.
+      *Done when:* as S6.17's.
 
 ## 7. Interoperability
 

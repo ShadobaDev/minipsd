@@ -665,6 +665,93 @@ TEST(MinipsdReaderTest, ResolutionAndVersionInfoAreParsedFieldByField)
     EXPECT_EQ(minipsd_resource_resolution_info(&noData, &ri), MINIPSD_ERR_ARG) << "a size without data";
 }
 
+// The lists among the resources, walked with a cursor as a layer's blocks are: every item, then the
+// end; a list whose data ends inside an item is refused.
+TEST(MinipsdReaderTest, GuidesAlphaChannelsAndTheTransparencyIndexAreParsed)
+{
+    std::vector<Bytes> keep;   // the data the resources view
+    const auto of = [&keep](std::uint16_t id, const Bytes &data) {
+        keep.push_back(data);
+        return minipsd_resource{id, {keep.back().data(), keep.back().size()}, {nullptr, 0}};
+    };
+    keep.reserve(16);
+
+    // Two guides: a column at x = 10, a row above the canvas.
+    const Bytes guides = Out().u32(1).u32(576).u32(576).u32(2).u32(10 * 32).u8(0).u32(0xFFFFFFE0u).u8(1).b;
+    const minipsd_resource g = of(MINIPSD_RES_GRID_AND_GUIDES, guides);
+    minipsd_grid_and_guides grid{};
+    ASSERT_EQ(minipsd_resource_grid_and_guides(&g, &grid), MINIPSD_OK);
+    EXPECT_EQ(std::tie(grid.version, grid.horizontal_grid, grid.vertical_grid, grid.guide_count),
+              std::make_tuple(1u, 576u, 576u, 2u));
+    std::size_t pos = 0;
+    minipsd_guide guide{};
+    ASSERT_EQ(minipsd_resource_next_guide(&g, &pos, &guide), MINIPSD_MORE);
+    EXPECT_EQ(std::tie(guide.location, guide.direction), std::make_tuple(320, 0));
+    ASSERT_EQ(minipsd_resource_next_guide(&g, &pos, &guide), MINIPSD_MORE);
+    EXPECT_EQ(std::tie(guide.location, guide.direction), std::make_tuple(-32, 1)) << "signed: past the canvas";
+    EXPECT_EQ(minipsd_resource_next_guide(&g, &pos, &guide), MINIPSD_OK);
+    pos = 17;
+    EXPECT_EQ(minipsd_resource_next_guide(&g, &pos, &guide), MINIPSD_ERR_ARG) << "inside a guide";
+    const minipsd_resource cutGuides = of(MINIPSD_RES_GRID_AND_GUIDES, Bytes(guides.begin(), guides.end() - 1));
+    pos = 0;
+    EXPECT_EQ(minipsd_resource_grid_and_guides(&cutGuides, &grid), MINIPSD_ERR_FORMAT) << "two guides counted, one and a bit stored";
+    EXPECT_EQ(minipsd_resource_next_guide(&cutGuides, &pos, &guide), MINIPSD_ERR_FORMAT);
+
+    // Alpha channel names, Pascal (1006) and Unicode (1045); a name past the data is refused.
+    const auto names = [](const minipsd_resource &res) {
+        std::vector<Bytes> out;
+        std::size_t at = 0;
+        minipsd_bytes name;
+        int rc;
+        while ((rc = minipsd_resource_next_alpha_name(&res, &at, &name)) == MINIPSD_MORE) out.emplace_back(name.data, name.data + name.size);
+        EXPECT_EQ(rc, MINIPSD_OK);
+        return out;
+    };
+    EXPECT_EQ(names(of(MINIPSD_RES_ALPHA_NAMES, Out().u8(5).str("Alpha").u8(0).u8(2).str("Sp").b)),
+              (std::vector<Bytes>{{'A', 'l', 'p', 'h', 'a'}, {}, {'S', 'p'}}));
+    EXPECT_EQ(names(of(MINIPSD_RES_UNICODE_ALPHA_NAMES, Out().u32(1).u16('A').u32(0).b)),
+              (std::vector<Bytes>{{0, 'A'}, {}}));
+    minipsd_bytes name;
+    pos = 0;
+    const minipsd_resource longPascal = of(MINIPSD_RES_ALPHA_NAMES, Out().u8(5).str("Alp").b);
+    EXPECT_EQ(minipsd_resource_next_alpha_name(&longPascal, &pos, &name), MINIPSD_ERR_FORMAT);
+    const minipsd_resource longUnicode = of(MINIPSD_RES_UNICODE_ALPHA_NAMES, Out().u32(2).u16('A').b);
+    EXPECT_EQ(minipsd_resource_next_alpha_name(&longUnicode, &pos, &name), MINIPSD_ERR_FORMAT);
+
+    // Alpha identifiers, four bytes each.
+    const minipsd_resource ids = of(MINIPSD_RES_ALPHA_IDENTIFIERS, Out().u32(5).u32(0xABCDEF01u).b);
+    std::uint32_t id = 0;
+    pos = 0;
+    ASSERT_EQ(minipsd_resource_next_alpha_identifier(&ids, &pos, &id), MINIPSD_MORE);
+    EXPECT_EQ(id, 5u);
+    ASSERT_EQ(minipsd_resource_next_alpha_identifier(&ids, &pos, &id), MINIPSD_MORE);
+    EXPECT_EQ(id, 0xABCDEF01u);
+    EXPECT_EQ(minipsd_resource_next_alpha_identifier(&ids, &pos, &id), MINIPSD_OK);
+    pos = 0;
+    const minipsd_resource oddIds = of(MINIPSD_RES_ALPHA_IDENTIFIERS, Bytes(6, 0));
+    EXPECT_EQ(minipsd_resource_next_alpha_identifier(&oddIds, &pos, &id), MINIPSD_ERR_FORMAT);
+
+    // The transparency index.
+    std::uint16_t index = 0;
+    const minipsd_resource ti = of(MINIPSD_RES_TRANSPARENCY_INDEX, Bytes{0, 200});
+    EXPECT_EQ(minipsd_resource_transparency_index(&ti, &index), MINIPSD_OK);
+    EXPECT_EQ(index, 200);
+    const minipsd_resource shortTi = of(MINIPSD_RES_TRANSPARENCY_INDEX, Bytes{0});
+    EXPECT_EQ(minipsd_resource_transparency_index(&shortTi, &index), MINIPSD_ERR_FORMAT);
+
+    // Another id, or a NULL, is the caller's mistake.
+    pos = 0;
+    EXPECT_EQ(minipsd_resource_grid_and_guides(&ids, &grid), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_resource_next_guide(&ids, &pos, &guide), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_resource_next_alpha_name(&ids, &pos, &name), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_resource_next_alpha_identifier(&g, &pos, &id), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_resource_transparency_index(&g, &index), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_resource_next_guide(&g, nullptr, &guide), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_resource_next_alpha_name(nullptr, &pos, &name), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_resource_next_alpha_identifier(&ids, &pos, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_resource_transparency_index(&ti, nullptr), MINIPSD_ERR_ARG);
+}
+
 // ---------------------------------------------------------------------------------------------------
 // the layer and mask section
 // ---------------------------------------------------------------------------------------------------
@@ -987,6 +1074,61 @@ TEST(MinipsdReaderTest, ARecordWithoutBlocksHasAnEmptyExtraRegion)
     std::size_t pos = 0;
     minipsd_block b;
     EXPECT_EQ(minipsd_layer_next_block(&v, &pos, &b), MINIPSD_OK);
+    minipsd_block_settings s{};
+    ASSERT_EQ(minipsd_layer_block_settings(&v, &s), MINIPSD_OK);
+    EXPECT_EQ(s.present, 0) << "no block, no setting";
+    EXPECT_EQ(s.fill_opacity, 255) << "a layer without 'iOpa' fills opaque";
+}
+
+// The fixed-layout blocks, among others and padded as Photoshop pads them: the first of a key
+// counts; one shorter than its value, or a malformed run, is refused and nothing written.
+TEST(MinipsdReaderTest, FixedLayoutBlocksGiveTheLayersSettings)
+{
+    const auto settingsOf = [](const Bytes &blocks, minipsd_block_settings *s) {
+        Rec r = simpleRec();
+        r.blocks = blocks;
+        Spec spec;
+        spec.layers = {r};
+        spec.count = -1;
+        Open o(build(spec).bytes);
+        const minipsd_layer_view v = nextLayer(o.r);
+        return minipsd_layer_block_settings(&v, s);
+    };
+    const Bytes all = Out()
+        .raw(luniBlock(u"L"))
+        .raw(block("lyid", Out().u32(0x01020304).b))
+        .raw(block("lclr", Out().u16(4).zeros(6).b))
+        .raw(block("iOpa", Bytes{128, 0, 0, 0}))
+        .raw(block("lspf", Out().u32(0x80000000u).b))
+        .raw(block("knko", Bytes{2, 0, 0, 0}))
+        .raw(block("clbl", Bytes{0, 0, 0, 0}))
+        .raw(block("infx", Bytes{1, 0, 0, 0}))
+        .raw(block("iOpa", Bytes{7, 0, 0, 0}))   // a second one: the first counts
+        .b;
+    minipsd_block_settings s{};
+    ASSERT_EQ(settingsOf(all, &s), MINIPSD_OK);
+    EXPECT_EQ(s.present, 0x7F);
+    EXPECT_EQ(s.layer_id, 0x01020304u);
+    EXPECT_EQ(s.sheet_color, 4);
+    EXPECT_EQ(s.fill_opacity, 128);
+    EXPECT_EQ(s.protection_flags, 0x80000000u);
+    EXPECT_EQ(std::tie(s.knockout, s.blend_clipped_elements, s.blend_interior_elements), std::make_tuple(2, 0, 1));
+
+    ASSERT_EQ(settingsOf(block("iOpa", Bytes{9}), &s), MINIPSD_OK) << "unpadded, as psd-tools also takes it";
+    EXPECT_EQ(std::tie(s.present, s.fill_opacity), std::make_tuple(MINIPSD_PRESENT_FILL_OPACITY, 9));
+
+    minipsd_block_settings untouched{};
+    untouched.layer_id = 77;
+    EXPECT_EQ(settingsOf(block("lyid", Bytes{1, 2, 3}), &untouched), MINIPSD_ERR_FORMAT) << "shorter than its value";
+    const Bytes cut = Out().raw(block("lclr", Bytes{0, 4})).str("8BIM").str("knko").b;
+    minipsd_layer_view byHand{};   // next_layer refuses such a record; a view built by hand can hold it
+    byHand.additional_info = {cut.data(), cut.size()};
+    EXPECT_EQ(minipsd_layer_block_settings(&byHand, &untouched), MINIPSD_ERR_FORMAT) << "a run that ends inside a block";
+    EXPECT_EQ(untouched.layer_id, 77u);
+
+    const minipsd_layer_view none{};
+    EXPECT_EQ(minipsd_layer_block_settings(nullptr, &s), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_layer_block_settings(&none, nullptr), MINIPSD_ERR_ARG);
 }
 
 TEST(MinipsdReaderTest, MalformedRecordsAreRefused)

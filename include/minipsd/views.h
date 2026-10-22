@@ -91,4 +91,130 @@ MINIPSDDEF int minipsd_resource_version_info(const minipsd_resource *res, minips
     return MINIPSD_OK;
 }
 
+/* Grid and guides: the header (version, two grid values, the guide count), then each guide. */
+static int mpsd__guides(const minipsd_resource *res, minipsd_grid_and_guides *out)
+{
+    const uint8_t *p = res->data.data;
+    uint32_t       count;
+    if (res->data.size < MPSD__GUIDES_HEAD) return MINIPSD_ERR_FORMAT;
+    count = mpsd__get32(p + 12);
+    if ((uint64_t)count * MPSD__GUIDE_SIZE > res->data.size - MPSD__GUIDES_HEAD) return MINIPSD_ERR_FORMAT;
+    out->version         = mpsd__get32(p);
+    out->horizontal_grid = mpsd__get32(p + 4);
+    out->vertical_grid   = mpsd__get32(p + 8);
+    out->guide_count     = count;
+    return MINIPSD_OK;
+}
+
+MINIPSDDEF int minipsd_resource_grid_and_guides(const minipsd_resource *res, minipsd_grid_and_guides *out)
+{
+    minipsd_grid_and_guides g;
+    int                     rc;
+    if (!out || !mpsd__resource_of(res, MINIPSD_RES_GRID_AND_GUIDES)) return MINIPSD_ERR_ARG;
+    rc = mpsd__guides(res, &g);
+    if (rc == MINIPSD_OK) *out = g;
+    return rc;
+}
+
+MINIPSDDEF int minipsd_resource_next_guide(const minipsd_resource *res, size_t *pos, minipsd_guide *guide)
+{
+    minipsd_grid_and_guides g;
+    size_t                  at, end;
+    int                     rc;
+    if (!pos || !guide || !mpsd__resource_of(res, MINIPSD_RES_GRID_AND_GUIDES)) return MINIPSD_ERR_ARG;
+    rc = mpsd__guides(res, &g);
+    if (rc != MINIPSD_OK) return rc;
+    at  = *pos ? *pos : MPSD__GUIDES_HEAD;
+    end = MPSD__GUIDES_HEAD + (size_t)g.guide_count * MPSD__GUIDE_SIZE;
+    if (at < MPSD__GUIDES_HEAD || (at - MPSD__GUIDES_HEAD) % MPSD__GUIDE_SIZE) return MINIPSD_ERR_ARG;
+    if (at >= end) return MINIPSD_OK;
+    guide->location  = (int32_t)mpsd__get32(res->data.data + at);
+    guide->direction = res->data.data[at + 4];
+    *pos = at + MPSD__GUIDE_SIZE;
+    return MINIPSD_MORE;
+}
+
+MINIPSDDEF int minipsd_resource_next_alpha_name(const minipsd_resource *res, size_t *pos, minipsd_bytes *name)
+{
+    const uint8_t *p, *end;
+    minipsd_bytes  text;
+    if (!pos || !name || !res || (res->id != MINIPSD_RES_ALPHA_NAMES && res->id != MINIPSD_RES_UNICODE_ALPHA_NAMES)
+        || !mpsd__resource_of(res, res->id))
+        return MINIPSD_ERR_ARG;
+    if (*pos >= res->data.size) return MINIPSD_OK;
+    p   = res->data.data + *pos;
+    end = res->data.data + res->data.size;
+    if (res->id == MINIPSD_RES_ALPHA_NAMES) {                  /* a Pascal string, not padded */
+        if ((size_t)(end - p) < 1u + p[0]) return MINIPSD_ERR_FORMAT;
+        text.data = p + 1;
+        text.size = p[0];
+        p += 1u + p[0];
+    } else if (mpsd__unicode_string(&p, end, &text) != MINIPSD_OK) {
+        return MINIPSD_ERR_FORMAT;
+    }
+    *name = text;
+    *pos  = (size_t)(p - res->data.data);
+    return MINIPSD_MORE;
+}
+
+MINIPSDDEF int minipsd_resource_next_alpha_identifier(const minipsd_resource *res, size_t *pos, uint32_t *id)
+{
+    if (!pos || !id || !mpsd__resource_of(res, MINIPSD_RES_ALPHA_IDENTIFIERS)) return MINIPSD_ERR_ARG;
+    if (res->data.size % MPSD__LEN) return MINIPSD_ERR_FORMAT;
+    if (*pos % MPSD__LEN) return MINIPSD_ERR_ARG;
+    if (*pos >= res->data.size) return MINIPSD_OK;
+    *id   = mpsd__get32(res->data.data + *pos);
+    *pos += MPSD__LEN;
+    return MINIPSD_MORE;
+}
+
+MINIPSDDEF int minipsd_resource_transparency_index(const minipsd_resource *res, uint16_t *index)
+{
+    if (!index || !mpsd__resource_of(res, MINIPSD_RES_TRANSPARENCY_INDEX)) return MINIPSD_ERR_ARG;
+    if (res->data.size < MPSD__TRANSPARENCY_INDEX_SIZE) return MINIPSD_ERR_FORMAT;
+    *index = (uint16_t)mpsd__get16(res->data.data);
+    return MINIPSD_OK;
+}
+
+/* --- a layer's fixed-layout blocks --- */
+
+/* The blocks minipsd_layer_block_settings reads: key, the bytes its value needs, its present bit. */
+static const struct { char key[5]; unsigned char size, bit; } mpsd__settings[] = {
+    { "lyid", 4, MINIPSD_PRESENT_LAYER_ID },         { "lclr", 2, MINIPSD_PRESENT_SHEET_COLOR },
+    { "iOpa", 1, MINIPSD_PRESENT_FILL_OPACITY },     { "lspf", 4, MINIPSD_PRESENT_PROTECTION_FLAGS },
+    { "knko", 1, MINIPSD_PRESENT_KNOCKOUT },         { "clbl", 1, MINIPSD_PRESENT_BLEND_CLIPPED_ELEMENTS },
+    { "infx", 1, MINIPSD_PRESENT_BLEND_INTERIOR_ELEMENTS }
+};
+
+MINIPSDDEF int minipsd_layer_block_settings(const minipsd_layer_view *layer, minipsd_block_settings *out)
+{
+    minipsd_block_settings s;
+    minipsd_block          block;
+    size_t                 pos = 0, k;
+    int                    rc;
+    if (!layer || !out) return MINIPSD_ERR_ARG;
+    memset(&s, 0, sizeof s);
+    s.fill_opacity = MPSD__FILL_OPAQUE;
+    while ((rc = minipsd_layer_next_block(layer, &pos, &block)) == MINIPSD_MORE) {
+        for (k = 0; k < sizeof mpsd__settings / sizeof mpsd__settings[0]; ++k) {
+            const uint8_t *d = block.data.data;
+            if (!mpsd__tag((const uint8_t *)block.key, mpsd__settings[k].key) || (s.present & mpsd__settings[k].bit)) continue;
+            if (block.data.size < mpsd__settings[k].size) return MINIPSD_ERR_FORMAT;
+            s.present |= mpsd__settings[k].bit;
+            switch (mpsd__settings[k].bit) {
+            case MINIPSD_PRESENT_LAYER_ID:                s.layer_id = mpsd__get32(d); break;
+            case MINIPSD_PRESENT_SHEET_COLOR:             s.sheet_color = (uint16_t)mpsd__get16(d); break;
+            case MINIPSD_PRESENT_FILL_OPACITY:            s.fill_opacity = d[0]; break;
+            case MINIPSD_PRESENT_PROTECTION_FLAGS:        s.protection_flags = mpsd__get32(d); break;
+            case MINIPSD_PRESENT_KNOCKOUT:                s.knockout = d[0]; break;
+            case MINIPSD_PRESENT_BLEND_CLIPPED_ELEMENTS:  s.blend_clipped_elements = d[0]; break;
+            default:                                      s.blend_interior_elements = d[0]; break;
+            }
+        }
+    }
+    if (rc != MINIPSD_OK) return rc;
+    *out = s;
+    return MINIPSD_OK;
+}
+
 #endif /* MPSD__VIEWS_DONE */

@@ -224,22 +224,30 @@ typedef struct minipsd_resource {
 /**
  * \brief The ids of standard image resources, named as Adobe's "Image Resource IDs" names them.
  *
- * Those minipsd parses have a function that takes the resource; the rest (IPTC, EXIF, XMP, the
- * thumbnail) are formats of their own, left as bytes for their own parsers.
+ * Each comment says what reads the resource: a minipsd function that takes it, or, for formats of
+ * their own (IPTC, EXIF, XMP, the thumbnail's JFIF), its bytes for their own parsers.  Which ones
+ * a file has: minipsd_reader_next_resource lists them all, minipsd_reader_find_resource finds one.
+ * Any other id is a resource too, returned as bytes.
  */
 enum {
-    MINIPSD_RES_RESOLUTION_INFO     = 1005, /*!< ResolutionInfo: minipsd_resource_resolution_info. */
-    MINIPSD_RES_ALPHA_NAMES         = 1006, /*!< The alpha channels' names, Pascal strings.        */
-    MINIPSD_RES_IPTC_NAA            = 1028, /*!< The IPTC-NAA record.                              */
-    MINIPSD_RES_GRID_AND_GUIDES     = 1032, /*!< Grid and guides information.                      */
-    MINIPSD_RES_THUMBNAIL           = 1036, /*!< The thumbnail, a JFIF image after a header.       */
-    MINIPSD_RES_ICC_PROFILE         = 1039, /*!< The ICC profile (minipsd_info.icc).                */
-    MINIPSD_RES_UNICODE_ALPHA_NAMES = 1045, /*!< The alpha channels' names, Unicode strings.       */
-    MINIPSD_RES_TRANSPARENCY_INDEX  = 1047, /*!< An indexed file's transparent colour.             */
-    MINIPSD_RES_ALPHA_IDENTIFIERS   = 1053, /*!< The alpha channels' identifiers.                  */
-    MINIPSD_RES_VERSION_INFO        = 1057, /*!< Version info: minipsd_resource_version_info.      */
-    MINIPSD_RES_EXIF_DATA_1         = 1058, /*!< EXIF data.                                        */
-    MINIPSD_RES_XMP_METADATA        = 1060  /*!< XMP metadata, UTF-8 XML.                          */
+    MINIPSD_RES_RESOLUTION_INFO     = 1005, /*!< Resolution info: minipsd_resource_resolution_info
+                                                 (and minipsd_info.dpi).                          */
+    MINIPSD_RES_ALPHA_NAMES         = 1006, /*!< The alpha channels' names, Pascal strings:
+                                                 minipsd_resource_next_alpha_name.                */
+    MINIPSD_RES_IPTC_NAA            = 1028, /*!< The IPTC-NAA record: bytes.                      */
+    MINIPSD_RES_GRID_AND_GUIDES     = 1032, /*!< Grid and guides: minipsd_resource_grid_and_guides,
+                                                 minipsd_resource_next_guide.                     */
+    MINIPSD_RES_THUMBNAIL           = 1036, /*!< The thumbnail, a JFIF image after a header: bytes. */
+    MINIPSD_RES_ICC_PROFILE         = 1039, /*!< The ICC profile: minipsd_info.icc.               */
+    MINIPSD_RES_UNICODE_ALPHA_NAMES = 1045, /*!< The alpha channels' names, Unicode strings:
+                                                 minipsd_resource_next_alpha_name.                */
+    MINIPSD_RES_TRANSPARENCY_INDEX  = 1047, /*!< An indexed file's transparent colour:
+                                                 minipsd_resource_transparency_index.             */
+    MINIPSD_RES_ALPHA_IDENTIFIERS   = 1053, /*!< The alpha channels' identifiers:
+                                                 minipsd_resource_next_alpha_identifier.          */
+    MINIPSD_RES_VERSION_INFO        = 1057, /*!< Version info: minipsd_resource_version_info.     */
+    MINIPSD_RES_EXIF_DATA_1         = 1058, /*!< EXIF data: bytes.                                */
+    MINIPSD_RES_XMP_METADATA        = 1060  /*!< XMP metadata, UTF-8 XML: bytes.                  */
 };
 
 /**
@@ -272,6 +280,54 @@ typedef struct minipsd_version_info {
     minipsd_bytes reader_name;          /*!< UTF-16BE, as writer_name.                            */
     uint32_t      file_version;         /*!< The file version, as stored.                          */
 } minipsd_version_info;
+
+/** \brief Resource 1032, grid and guides information: its header; minipsd_resource_next_guide walks the guides. */
+typedef struct minipsd_grid_and_guides {
+    uint32_t version;         /*!< As stored.                                                      */
+    uint32_t horizontal_grid; /*!< Adobe's "future implementation of document-specific grids", as */
+    uint32_t vertical_grid;   /*!< stored, horizontal then vertical.                             */
+    uint32_t guide_count;     /*!< How many guides follow.                                         */
+} minipsd_grid_and_guides;
+
+/** \brief One guide of resource 1032. */
+typedef struct minipsd_guide {
+    int32_t location;  /*!< Where it lies, in document coordinates (pixels) times 32; may lie past
+                            the canvas.                                                         */
+    uint8_t direction; /*!< 0: vertical (a column), 1: horizontal (a row).                      */
+} minipsd_guide;
+
+/** \brief Which of a layer's blocks minipsd_layer_block_settings found: bits of its present field. */
+enum {
+    MINIPSD_PRESENT_LAYER_ID                = 0x01, /*!< 'lyid'. */
+    MINIPSD_PRESENT_SHEET_COLOR             = 0x02, /*!< 'lclr'. */
+    MINIPSD_PRESENT_FILL_OPACITY            = 0x04, /*!< 'iOpa'. */
+    MINIPSD_PRESENT_PROTECTION_FLAGS        = 0x08, /*!< 'lspf'. */
+    MINIPSD_PRESENT_KNOCKOUT                = 0x10, /*!< 'knko'. */
+    MINIPSD_PRESENT_BLEND_CLIPPED_ELEMENTS  = 0x20, /*!< 'clbl'. */
+    MINIPSD_PRESENT_BLEND_INTERIOR_ELEMENTS = 0x40  /*!< 'infx'. */
+};
+
+/**
+ * \brief What a layer's fixed-layout blocks say, as stored; the first block of each key counts.
+ *
+ * A value whose block is missing is 0, its bit in present clear; fill_opacity is then 255, the
+ * fill a layer without it has.
+ */
+typedef struct minipsd_block_settings {
+    uint32_t layer_id;                /*!< 'lyid': the layer's id.                                  */
+    uint16_t sheet_color;             /*!< 'lclr': the colour label in the layers panel, 0 none, 1 red,
+                                           2 orange, 3 yellow, 4 green, 5 blue, 6 violet, 7 grey, and
+                                           newer ones above (psd-tools' list).                       */
+    uint8_t  fill_opacity;            /*!< 'iOpa': the fill opacity, 255 opaque; unlike opacity, it
+                                           leaves the layer's effects alone.                        */
+    uint32_t protection_flags;        /*!< 'lspf': 0x01 transparency, 0x02 composite (pixels), 0x04
+                                           position locked; 0x08 nesting and 0x80000000 all, by
+                                           psd-tools.                                               */
+    uint8_t  knockout;                /*!< 'knko': 0 none, 1 shallow, 2 deep (psd-tools').         */
+    uint8_t  blend_clipped_elements;  /*!< 'clbl': non-zero blends clipped layers as a group.      */
+    uint8_t  blend_interior_elements; /*!< 'infx': non-zero blends interior effects as a group.    */
+    uint8_t  present;                 /*!< MINIPSD_PRESENT_*: the blocks the layer has.            */
+} minipsd_block_settings;
 
 /** \brief One tagged block of a layer's additional information ('luni', 'lsct', 'tySh', ...). */
 typedef struct minipsd_block {
@@ -946,6 +1002,75 @@ MINIPSDDEF int minipsd_resource_resolution_info(const minipsd_resource *res, min
  *         MINIPSD_ERR_ARG for a NULL argument or another id.
  */
 MINIPSDDEF int minipsd_resource_version_info(const minipsd_resource *res, minipsd_version_info *out);
+
+/**
+ * \brief Resource 1032, grid and guides information: the header.
+ *
+ * \param res A resource, its id MINIPSD_RES_GRID_AND_GUIDES.
+ * \param out Receives the header.
+ * \return MINIPSD_OK; MINIPSD_ERR_FORMAT when the data ends inside the header or the guides it
+ *         counts; MINIPSD_ERR_ARG for a NULL argument or another id.
+ */
+MINIPSDDEF int minipsd_resource_grid_and_guides(const minipsd_resource *res, minipsd_grid_and_guides *out);
+
+/**
+ * \brief The next guide of resource 1032, in stored order.
+ *
+ * \param res   A resource, its id MINIPSD_RES_GRID_AND_GUIDES.
+ * \param pos   The caller's cursor: start at 0; moved past the guide returned.
+ * \param guide Receives the guide.
+ * \return MINIPSD_MORE when a guide was written; MINIPSD_OK at the end; MINIPSD_ERR_FORMAT as
+ *         minipsd_resource_grid_and_guides; MINIPSD_ERR_ARG for a NULL argument, another id, or a
+ *         pos this function did not give.
+ */
+MINIPSDDEF int minipsd_resource_next_guide(const minipsd_resource *res, size_t *pos, minipsd_guide *guide);
+
+/**
+ * \brief The next alpha channel's name: resource 1045 (Unicode) or 1006 (Pascal strings).
+ *
+ * Photoshop writes both; find 1045 first, 1006 for files without it.
+ *
+ * \param res  A resource, its id MINIPSD_RES_UNICODE_ALPHA_NAMES or MINIPSD_RES_ALPHA_NAMES.
+ * \param pos  The caller's cursor: start at 0; moved past the name returned.
+ * \param name Receives the name: UTF-16BE for 1045 (minipsd_utf16be_to_utf8 converts), raw bytes
+ *             in the writer's code page for 1006.
+ * \return MINIPSD_MORE when a name was written; MINIPSD_OK at the end; MINIPSD_ERR_FORMAT when a
+ *         name runs past the data; MINIPSD_ERR_ARG for a NULL argument or another id.
+ */
+MINIPSDDEF int minipsd_resource_next_alpha_name(const minipsd_resource *res, size_t *pos, minipsd_bytes *name);
+
+/**
+ * \brief The next alpha channel's identifier, resource 1053.
+ *
+ * \param res A resource, its id MINIPSD_RES_ALPHA_IDENTIFIERS.
+ * \param pos The caller's cursor: start at 0; moved past the identifier returned.
+ * \param id  Receives the identifier.
+ * \return MINIPSD_MORE when one was written; MINIPSD_OK at the end; MINIPSD_ERR_FORMAT when the
+ *         data is not whole identifiers (four bytes each); MINIPSD_ERR_ARG for a NULL argument or
+ *         another id.
+ */
+MINIPSDDEF int minipsd_resource_next_alpha_identifier(const minipsd_resource *res, size_t *pos, uint32_t *id);
+
+/**
+ * \brief Resource 1047: which palette entry of an indexed file is transparent.
+ *
+ * \param res   A resource, its id MINIPSD_RES_TRANSPARENCY_INDEX.
+ * \param index Receives the entry, 0 to 255.
+ * \return MINIPSD_OK; MINIPSD_ERR_FORMAT when the data is shorter than two bytes; MINIPSD_ERR_ARG
+ *         for a NULL argument or another id.
+ */
+MINIPSDDEF int minipsd_resource_transparency_index(const minipsd_resource *res, uint16_t *index);
+
+/**
+ * \brief What a layer's fixed-layout blocks say: id, colour label, fill, locks, knockout, blending
+ *        of clipped and interior elements.
+ *
+ * \param layer A record from minipsd_reader_next_layer, or a view built by hand.
+ * \param out   Receives the values.
+ * \return MINIPSD_OK; MINIPSD_ERR_FORMAT for a malformed run of blocks or one of these shorter than
+ *         its value; MINIPSD_ERR_ARG for a NULL argument.
+ */
+MINIPSDDEF int minipsd_layer_block_settings(const minipsd_layer_view *layer, minipsd_block_settings *out);
 
 /**
  * \brief Where one channel's samples go: the first sample, and the steps to the next one.

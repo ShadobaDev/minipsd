@@ -80,6 +80,22 @@ class VersionInfo(ctypes.Structure):
                 ("writer_name", Bytes), ("reader_name", Bytes), ("file_version", ctypes.c_uint32)]
 
 
+class GridAndGuides(ctypes.Structure):
+    _fields_ = [("version", ctypes.c_uint32), ("horizontal_grid", ctypes.c_uint32),
+                ("vertical_grid", ctypes.c_uint32), ("guide_count", ctypes.c_uint32)]
+
+
+class Guide(ctypes.Structure):
+    _fields_ = [("location", ctypes.c_int32), ("direction", ctypes.c_uint8)]
+
+
+class BlockSettings(ctypes.Structure):
+    _fields_ = [("layer_id", ctypes.c_uint32), ("sheet_color", ctypes.c_uint16), ("fill_opacity", ctypes.c_uint8),
+                ("protection_flags", ctypes.c_uint32), ("knockout", ctypes.c_uint8),
+                ("blend_clipped_elements", ctypes.c_uint8), ("blend_interior_elements", ctypes.c_uint8),
+                ("present", ctypes.c_uint8)]
+
+
 class BlendRange(ctypes.Structure):
     _fields_ = [("black", ctypes.c_uint8 * 2), ("white", ctypes.c_uint8 * 2)]
 
@@ -789,6 +805,38 @@ def color_channels(header, alpha):
 
 
 RES_RESOLUTION_INFO, RES_VERSION_INFO, ERR_NOT_FOUND = 1005, 1057, -10
+RES_GRID_AND_GUIDES, RES_ALPHA_NAMES, RES_UNICODE_ALPHA_NAMES = 1032, 1006, 1045
+RES_ALPHA_IDENTIFIERS, RES_TRANSPARENCY_INDEX = 1053, 1047
+SETTINGS = [  # a layer's fixed-layout blocks: key, the field minipsd parses it into, its present bit
+    (b"lyid", "layer_id", 0x01), (b"lclr", "sheet_color", 0x02), (b"iOpa", "fill_opacity", 0x04),
+    (b"lspf", "protection_flags", 0x08), (b"knko", "knockout", 0x10), (b"clbl", "blend_clipped_elements", 0x20),
+    (b"infx", "blend_interior_elements", 0x40)]
+
+
+def items(lib, fn, res, item):
+    """Every item a minipsd_resource_next_* walk gives, or None when it fails."""
+    pos, out = ctypes.c_size_t(0), []
+    while (rc := fn(ctypes.byref(res), ctypes.byref(pos), ctypes.byref(item))) == MINIPSD_MORE:
+        out.append(type(item).from_buffer_copy(item) if isinstance(item, ctypes.Structure) else item.value)
+    return out if rc == MINIPSD_OK else None
+
+
+def as_int(value):
+    """psd-tools' value of a small element, an int or an enum, as an int."""
+    return int(getattr(value, "value", value))
+
+
+def check_settings(lib, view, rec, name):
+    """A layer's fixed-layout blocks: present where psd-tools has the block, the same value."""
+    lib.minipsd_layer_block_settings.argtypes = [ctypes.c_void_p, ctypes.POINTER(BlockSettings)]
+    s = BlockSettings()
+    rc = lib.minipsd_layer_block_settings(view, ctypes.byref(s))
+    if rc != MINIPSD_OK:
+        return [f"{name}: minipsd_layer_block_settings returned {rc}"]
+    blocks = rec.tagged_blocks
+    want = {key: as_int(blocks.get_data(key)) for key, _, _ in SETTINGS if blocks and blocks.get_data(key) is not None}
+    got = {key: getattr(s, field) for key, field, bit in SETTINGS if s.present & bit}
+    return [] if got == want else [f"{name}: block settings {got}, psd-tools says {want}"]
 
 
 def utf8(lib, text):
@@ -808,8 +856,14 @@ def check_resources(lib, reader, psd, name):
     lib.minipsd_resource_version_info.argtypes = [ctypes.POINTER(Resource), ctypes.POINTER(VersionInfo)]
     lib.minipsd_utf16be_to_utf8.argtypes = [ctypes.POINTER(Bytes), ctypes.c_char_p, ctypes.c_size_t,
                                             ctypes.POINTER(ctypes.c_size_t)]
+    lib.minipsd_resource_grid_and_guides.argtypes = [ctypes.POINTER(Resource), ctypes.POINTER(GridAndGuides)]
+    lib.minipsd_resource_transparency_index.argtypes = [ctypes.POINTER(Resource), ctypes.POINTER(ctypes.c_uint16)]
+    for fn in ("next_guide", "next_alpha_name", "next_alpha_identifier"):
+        getattr(lib, f"minipsd_resource_{fn}").argtypes = [ctypes.POINTER(Resource), ctypes.POINTER(ctypes.c_size_t),
+                                                         ctypes.c_void_p]
     errors = []
-    for rid in (RES_RESOLUTION_INFO, RES_VERSION_INFO):
+    for rid in (RES_RESOLUTION_INFO, RES_VERSION_INFO, RES_GRID_AND_GUIDES, RES_ALPHA_NAMES, RES_UNICODE_ALPHA_NAMES,
+                RES_ALPHA_IDENTIFIERS, RES_TRANSPARENCY_INDEX):
         res = Resource()
         rc = lib.minipsd_reader_find_resource(reader, rid, ctypes.byref(res))
         theirs = psd.image_resources.get_data(rid)
@@ -825,6 +879,27 @@ def check_resources(lib, reader, psd, name):
                    round(ri.vertical_resolution * 65536), ri.vertical_resolution_unit, ri.height_unit)
             want = (theirs.horizontal, int(theirs.horizontal_unit), int(theirs.width_unit),
                     theirs.vertical, int(theirs.vertical_unit), int(theirs.height_unit))
+        elif rid == RES_GRID_AND_GUIDES:
+            g = GridAndGuides()
+            rc = lib.minipsd_resource_grid_and_guides(ctypes.byref(res), ctypes.byref(g))
+            guides = items(lib, lib.minipsd_resource_next_guide, res, Guide())
+            got = (g.version, g.horizontal_grid, g.vertical_grid,
+                   guides and [(x.location & 0xFFFFFFFF, x.direction) for x in guides])
+            want = (theirs.version, theirs.horizontal, theirs.vertical, [tuple(x) for x in theirs.data])
+        elif rid in (RES_ALPHA_NAMES, RES_UNICODE_ALPHA_NAMES):
+            names = items(lib, lib.minipsd_resource_next_alpha_name, res, Bytes())
+            rc = MINIPSD_OK if names is not None else -1
+            got = [utf8(lib, n) if rid == RES_UNICODE_ALPHA_NAMES else ctypes.string_at(n.data, n.size).decode("mac_roman")
+                   for n in names or []]
+            want = [n.split("\0")[0] if rid == RES_UNICODE_ALPHA_NAMES else n for n in theirs]
+        elif rid == RES_ALPHA_IDENTIFIERS:
+            got = items(lib, lib.minipsd_resource_next_alpha_identifier, res, ctypes.c_uint32())
+            rc = MINIPSD_OK if got is not None else -1
+            want = list(theirs)
+        elif rid == RES_TRANSPARENCY_INDEX:
+            index = ctypes.c_uint16()
+            rc = lib.minipsd_resource_transparency_index(ctypes.byref(res), ctypes.byref(index))
+            got, want = index.value, as_int(theirs)
         else:
             vi = VersionInfo()
             rc = lib.minipsd_resource_version_info(ctypes.byref(res), ctypes.byref(vi))
@@ -874,6 +949,7 @@ def check_decoded(lib, path):
         if rc != MINIPSD_MORE:
             errors.append(f"{path.name}: layer {i}: minipsd_reader_next_layer returned {rc}")
             break
+        errors += check_settings(lib, view, rec, f"{path.name}: layer {i}")
         top, left, bottom, right = struct.unpack_from("=4i", view.raw)
         if rec.bottom >= rec.top and rec.right >= rec.left and (top, left, bottom, right) != (rec.top, rec.left, rec.bottom, rec.right):
             errors.append(f"{path.name}: layer {i}: rectangle {(top, left, bottom, right)}")

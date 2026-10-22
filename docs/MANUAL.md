@@ -568,6 +568,17 @@ A resolution is stored in pixels per inch whatever its unit; the unit (`horizont
 resource is `MINIPSD_ERR_NOT_FOUND`; IPTC, EXIF, XMP and the thumbnail are found the same way and
 come as bytes, for a parser of their own.
 
+The same holds for guides (`minipsd_resource_grid_and_guides`, then `minipsd_resource_next_guide`),
+the alpha channels' names and identifiers, and an indexed file's transparency index; lists are
+walked with a cursor from 0, as a layer's blocks are. A layer's id, colour label, fill opacity,
+locks and knockout come from its blocks in one call:
+
+```c
+minipsd_block_settings s;
+if (minipsd_layer_block_settings(&layer, &s) == MINIPSD_OK && (s.present & MINIPSD_PRESENT_LAYER_ID))
+    printf("layer id %u, fill %u\n", (unsigned)s.layer_id, (unsigned)s.fill_opacity);
+```
+
 ### Untrusted files
 
 Every length is checked; a malformed file is `MINIPSD_ERR_FORMAT`. Pass a `minipsd_limits` to

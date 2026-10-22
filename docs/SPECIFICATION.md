@@ -118,6 +118,11 @@ The declarations, with every parameter and return code, are in
 | `minipsd_layer_blending_range(layer, i, &range)` | one of a layer's blending ranges ("Blend If"): the composite grey's, then each channel's |
 | `minipsd_resource_resolution_info(res, &out)` | resource 1005 parsed: both resolutions in pixels per inch, their units and the units Photoshop shows |
 | `minipsd_resource_version_info(res, &out)` | resource 1057 parsed: whether the composite is real (`has_real_merged_data`), the writer's and reader's names |
+| `minipsd_resource_grid_and_guides(res, &out)`, `minipsd_resource_next_guide(res, &pos, &guide)` | resource 1032: its header, then the guides one per call (`MINIPSD_MORE`, then `MINIPSD_OK`) |
+| `minipsd_resource_next_alpha_name(res, &pos, &name)` | the alpha channels' names, one per call, from 1045 (UTF-16BE) or 1006 (Pascal strings) |
+| `minipsd_resource_next_alpha_identifier(res, &pos, &id)` | the alpha channels' identifiers (1053), one per call |
+| `minipsd_resource_transparency_index(res, &index)` | an indexed file's transparent palette entry (1047) |
+| `minipsd_layer_block_settings(layer, &out)` | a layer's fixed-layout blocks parsed: id, colour label, fill opacity, locks, knockout, blending of clipped and interior elements; `present` says which it has |
 | `minipsd_utf16be_to_utf8(text, utf8, cap, &needed)` | UTF-16BE text from a view (a version info's names) as UTF-8, as `minipsd_layer_name` gives a name |
 | `minipsd_target_rgba(&target, rgba, row_stride)` | a target for interleaved RGBA, the common case |
 | `minipsd_target_rgba16(&target, rgba, row_stride)` | the same for 16-bit samples, `uint16_t` |
@@ -165,7 +170,7 @@ its layers and composite as stored: no colour is converted.
 | `minipsd_info` | what the file says about itself: size, depth, colour mode and its colour channels, colour mode data, dpi, ICC profile, layer count, format (PSD or PSB) |
 | `minipsd_bytes` | a read-only view into the caller's buffer |
 | `minipsd_resource`, `minipsd_layer_view`, `minipsd_block` | an image resource, a layer record, an additional-information block, as views |
-| `minipsd_resolution_info`, `minipsd_version_info` | typed views: what resources 1005 and 1057 store, parsed; strings stay views |
+| `minipsd_resolution_info`, `minipsd_version_info`, `minipsd_grid_and_guides`, `minipsd_guide`, `minipsd_block_settings` | typed views: what resources 1005, 1057 and 1032 and a layer's fixed-layout blocks store, parsed; strings stay views |
 | `minipsd_target`, `minipsd_plane` | where decoded samples go: per plane (the colour channels, then transparency) a pointer, a pixel step and a row step; any layout |
 | `minipsd_decode_opts` | the rows to decode, the target's `depth` and, for the composite, `keep_matte`; `NULL` for all rows, 8-bit, un-matted |
 
@@ -274,7 +279,7 @@ interact, whatever the table says.
 | `minipsd_layer_name` | yes | reads the view; writes only the caller's buffer |
 | `minipsd_layer_next_block` | yes | each thread its own `pos` |
 | `minipsd_layer_blending_range` | yes | reads the view |
-| `minipsd_resource_resolution_info`, `minipsd_resource_version_info`, `minipsd_utf16be_to_utf8` | yes | read the view; write only the caller's struct or buffer |
+| `minipsd_resource_*`, `minipsd_layer_block_settings`, `minipsd_utf16be_to_utf8` | yes | read the view; write only the caller's struct, buffer or `pos` (each thread its own) |
 | `minipsd_target_rgba`, `minipsd_target_rgba16`, `minipsd_target_interleaved` | yes | fill only the caller's `minipsd_target` |
 | `minipsd_decode_layer` | yes, with the whole file | each thread its own scratch; may run beside the walk (`next_layer`, `next_resource`) |
 | `minipsd_decode_mask` | yes, with the whole file | as `minipsd_decode_layer` |
@@ -458,9 +463,30 @@ them; nothing is copied or allocated. Results on real files from other programs:
   `MINIPSD_ERR_FORMAT`, one of another id `MINIPSD_ERR_ARG`. Resolution info (1005): both
   resolutions in pixels per inch and the four units Photoshop shows them in. Version info
   (1057): `has_real_merged_data`, zero when the composite is not the layers' image (ImageMagick
-  then flattens the layers), and the writer's and reader's names. IPTC, EXIF, XMP and the
-  thumbnail stay bytes: formats of their own. `roundtrip.py` checks both against psd-tools on
-  every file of its set.
+  then flattens the layers), and the writer's and reader's names. Grid and guides (1032): the
+  header, then each guide's location (pixels times 32, signed) and direction. The alpha
+  channels' names (1045, else 1006) and identifiers (1053), and an indexed file's transparency
+  index (1047). Lists are walked with a cursor, as a layer's blocks are. A layer's fixed-layout
+  blocks, the first of each key: `lyid`, `lclr`, `iOpa`, `lspf`, `knko`, `clbl`, `infx`, with a
+  bit each in `present`; without `iOpa` the fill is 255. IPTC, EXIF, XMP and the thumbnail stay
+  bytes: formats of their own. `roundtrip.py` checks every one against psd-tools on every file
+  of its set. Which resources a file has, `minipsd_reader_next_resource` lists; what reads each:
+
+  | Resource | Constant | Read with |
+  |---|---|---|
+  | 1005 resolution info | `MINIPSD_RES_RESOLUTION_INFO` | `minipsd_resource_resolution_info`; `minipsd_info.dpi` |
+  | 1006 alpha names (Pascal) | `MINIPSD_RES_ALPHA_NAMES` | `minipsd_resource_next_alpha_name` |
+  | 1028 IPTC-NAA | `MINIPSD_RES_IPTC_NAA` | bytes |
+  | 1032 grid and guides | `MINIPSD_RES_GRID_AND_GUIDES` | `minipsd_resource_grid_and_guides`, `minipsd_resource_next_guide` |
+  | 1036 thumbnail | `MINIPSD_RES_THUMBNAIL` | bytes (a header, then JFIF) |
+  | 1039 ICC profile | `MINIPSD_RES_ICC_PROFILE` | `minipsd_info.icc` |
+  | 1045 alpha names (Unicode) | `MINIPSD_RES_UNICODE_ALPHA_NAMES` | `minipsd_resource_next_alpha_name` |
+  | 1047 transparency index | `MINIPSD_RES_TRANSPARENCY_INDEX` | `minipsd_resource_transparency_index` |
+  | 1053 alpha identifiers | `MINIPSD_RES_ALPHA_IDENTIFIERS` | `minipsd_resource_next_alpha_identifier` |
+  | 1057 version info | `MINIPSD_RES_VERSION_INFO` | `minipsd_resource_version_info` |
+  | 1058 EXIF | `MINIPSD_RES_EXIF_DATA_1` | bytes |
+  | 1060 XMP | `MINIPSD_RES_XMP_METADATA` | bytes (UTF-8 XML) |
+  | any other id | | bytes, from `minipsd_reader_next_resource` or `minipsd_reader_find_resource` |
 - **Layer records**, bottom first:
   - the rectangle; one stored inverted (Photoshop's fill layers) comes back empty;
   - opacity, visibility, the blend mode's key, clipping and the flag bits, as stored;

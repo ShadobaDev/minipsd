@@ -94,6 +94,14 @@ static uint32_t mpsd__max_side(unsigned psb) { return psb ? MINIPSD_MAX_SIDE_PSB
    (Unicode strings: a count of UTF-16 units in four bytes, then the units), the file version (4). */
 #define MPSD__VERSION_INFO_HEAD 5
 
+/* Grid and guides: version, two grid values and the guide count (4 each), then each guide: its
+   location (4) and direction (1). */
+#define MPSD__GUIDES_HEAD 16
+#define MPSD__GUIDE_SIZE  5
+
+#define MPSD__TRANSPARENCY_INDEX_SIZE 2   /* one palette entry, two bytes */
+#define MPSD__FILL_OPAQUE             255 /* a layer's fill without an 'iOpa' block */
+
 static uint64_t mpsd__resource_size(size_t name, size_t data)
 {
     return MPSD__RES_NAME + (uint64_t)mpsd__pad(1 + name, 2) + MPSD__LEN + (uint64_t)mpsd__pad(data, 2);
