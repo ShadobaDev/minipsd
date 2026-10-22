@@ -566,7 +566,15 @@ A resolution is stored in pixels per inch whatever its unit; the unit (`horizont
 6 and its composite is real. The names in version info are UTF-16BE views:
 `minipsd_utf16be_to_utf8` converts them, measured first as `minipsd_layer_name` is. A missing
 resource is `MINIPSD_ERR_NOT_FOUND`; IPTC, EXIF, XMP and the thumbnail are found the same way and
-come as bytes, for a parser of their own.
+come as bytes, for a parser of their own. To list what a file holds, walk the resources and
+name each id:
+
+```c
+while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE) {
+    const char *name = minipsd_resource_id_name(res.id);   /* Adobe's name; NULL if unlisted */
+    printf("%u %s, %zu bytes\n", (unsigned)res.id, name ? name : "(unknown)", res.data.size);
+}
+```
 
 The same holds for guides (`minipsd_resource_grid_and_guides`, then `minipsd_resource_next_guide`),
 the alpha channels' names and identifiers, and an indexed file's transparency index; lists are

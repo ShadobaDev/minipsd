@@ -32,7 +32,7 @@ import sys
 import zlib
 
 from psd_tools import PSDImage
-from psd_tools.constants import Compression
+from psd_tools.constants import Compression, Resource as ResourceId
 
 MINIPSD_OK, MINIPSD_RLE, MINIPSD_RAW, MINIPSD_ZIP, MINIPSD_ZIP_PREDICTED = 0, 0, 1, 2, 3
 MINIPSD_ERR_UNSUPPORTED = -7
@@ -861,7 +861,11 @@ def check_resources(lib, reader, psd, name):
     for fn in ("next_guide", "next_alpha_name", "next_alpha_identifier"):
         getattr(lib, f"minipsd_resource_{fn}").argtypes = [ctypes.POINTER(Resource), ctypes.POINTER(ctypes.c_size_t),
                                                          ctypes.c_void_p]
-    errors = []
+    lib.minipsd_resource_id_name.argtypes = [ctypes.c_uint16]
+    lib.minipsd_resource_id_name.restype = ctypes.c_char_p
+    known = {int(m) for m in ResourceId}   # psd-tools' table, Adobe's, without the middle of its ranges
+    errors = [f"{name}: resource {int(rid)} has no name" for rid in psd.image_resources.keys()
+              if int(rid) in known and lib.minipsd_resource_id_name(int(rid)) is None]
     for rid in (RES_RESOLUTION_INFO, RES_VERSION_INFO, RES_GRID_AND_GUIDES, RES_ALPHA_NAMES, RES_UNICODE_ALPHA_NAMES,
                 RES_ALPHA_IDENTIFIERS, RES_TRANSPARENCY_INDEX):
         res = Resource()
@@ -992,7 +996,10 @@ def main():
     out = pathlib.Path(sys.argv[2])
     out.mkdir(parents=True, exist_ok=True)
 
-    errors = []
+    lib.minipsd_resource_id_name.argtypes = [ctypes.c_uint16]
+    lib.minipsd_resource_id_name.restype = ctypes.c_char_p
+    errors = [f"resource {int(m)} ({m.name}) has no name in minipsd" for m in ResourceId
+              if lib.minipsd_resource_id_name(int(m)) is None]   # every id psd-tools knows, Adobe's table
     for (name, w, h, dpi, compression, layers), fmt in [(d, 0) for d in DOCUMENTS] + [(d, MINIPSD_PSB) for d in PSB_DOCUMENTS]:
         path = out / (f"{name}.psb" if fmt else f"{name}.psd")
         rc = write(lib, path, w, h, dpi, compression, layers, fmt)

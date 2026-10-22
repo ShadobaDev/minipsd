@@ -1062,6 +1062,17 @@ MINIPSDDEF int minipsd_resource_next_alpha_identifier(const minipsd_resource *re
 MINIPSDDEF int minipsd_resource_transparency_index(const minipsd_resource *res, uint16_t *index);
 
 /**
+ * \brief Adobe's name for an image resource id, for listing what a file holds.
+ *
+ * Every id of Adobe's "Image Resource IDs" table has one, its ranges included (2000 to 2997 path
+ * information, 4000 to 4999 plug-in resources).  The text is a constant, in English.
+ *
+ * \param id A resource's number, such as minipsd_resource.id.
+ * \return The name, such as "Resolution info"; NULL for an id Adobe does not list.
+ */
+MINIPSDDEF const char *minipsd_resource_id_name(uint16_t id);
+
+/**
  * \brief What a layer's fixed-layout blocks say: id, colour label, fill, locks, knockout, blending
  *        of clipped and interior elements.
  *

@@ -549,6 +549,32 @@ TEST(MinipsdReaderTest, ResourcesWithNamesAndOddSizesAreWalkedCorrectly)
     EXPECT_EQ(minipsd_reader_find_resource(o.r, MINIPSD_RES_VERSION_INFO, &found), MINIPSD_ERR_NOT_FOUND);
     EXPECT_EQ(found.id, 7777) << "untouched when not found";
 
+    // Their names, Adobe's, for a list of what the file holds: ranges to their bounds, gaps unnamed.
+    const std::pair<std::uint16_t, const char *> names[] = {
+        {1000, "Channels, rows, columns, depth and mode (obsolete)"}, {1004, nullptr}, {1005, "Resolution info"},
+        {1036, "Thumbnail"}, {1999, nullptr}, {2000, "Path information"}, {2997, "Path information"}, {2998, nullptr},
+        {2999, "Name of clipping path"}, {3999, nullptr}, {4000, "Plug-in resource"}, {4999, "Plug-in resource"},
+        {5000, nullptr}, {10000, "Print flags information"}, {65535, nullptr}};
+    for (const auto &[id, name] : names) {
+        const char *got = minipsd_resource_id_name(id);
+        EXPECT_EQ(got ? std::string(got) : "(none)", name ? std::string(name) : "(none)") << id;
+    }
+    // The lookup starts at index id - first and walks down, which holds while entries ascend and
+    // never share an id; then it gives what a scan of the whole table gives, for every id.
+    const auto &table = mpsd__resource_names;
+    for (std::size_t k = 0; k < std::size(table); ++k) {
+        EXPECT_LE(table[k].first, table[k].last) << k;
+        if (k) {
+            EXPECT_GT(table[k].first, table[k - 1].last) << k;
+        }
+    }
+    for (unsigned id = 0; id <= 0xFFFF; ++id) {
+        const char *scan = nullptr;
+        for (const auto &e : table)
+            if (id >= e.first && id <= e.last) scan = e.name;
+        ASSERT_EQ(minipsd_resource_id_name(static_cast<std::uint16_t>(id)), scan) << id;
+    }
+
     const std::tuple<int, std::size_t, std::string> expected[] = {
         {1036, 7, "ab"}, {2000, 4, "abc"}, {1005, 16, ""}, {1039, 3, ""}, {1005, 16, ""}, {1039, 9, ""}};
     for (const auto &[id, size, name] : expected) {

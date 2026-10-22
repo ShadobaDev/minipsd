@@ -176,6 +176,116 @@ MINIPSDDEF int minipsd_resource_transparency_index(const minipsd_resource *res, 
     return MINIPSD_OK;
 }
 
+/* Adobe's "Image Resource IDs" table: each entry covers the ids [first, last], in ascending order. */
+static const struct { uint16_t first, last; const char *name; } mpsd__resource_names[] = {
+    { 1000, 1000, "Channels, rows, columns, depth and mode (obsolete)" },
+    { 1001, 1001, "Macintosh print manager print info" },
+    { 1002, 1002, "Macintosh page format information (obsolete)" },
+    { 1003, 1003, "Indexed colour table (obsolete)" },
+    { 1005, 1005, "Resolution info" },
+    { 1006, 1006, "Alpha channel names" },
+    { 1007, 1007, "Display info (obsolete)" },
+    { 1008, 1008, "Caption" },
+    { 1009, 1009, "Border information" },
+    { 1010, 1010, "Background colour" },
+    { 1011, 1011, "Print flags" },
+    { 1012, 1012, "Greyscale and multichannel halftoning information" },
+    { 1013, 1013, "Colour halftoning information" },
+    { 1014, 1014, "Duotone halftoning information" },
+    { 1015, 1015, "Greyscale and multichannel transfer function" },
+    { 1016, 1016, "Colour transfer functions" },
+    { 1017, 1017, "Duotone transfer functions" },
+    { 1018, 1018, "Duotone image information" },
+    { 1019, 1019, "Effective black and white values for the dot range" },
+    { 1020, 1020, "Obsolete" },
+    { 1021, 1021, "EPS options" },
+    { 1022, 1022, "Quick mask information" },
+    { 1023, 1023, "Obsolete" },
+    { 1024, 1024, "Layer state information" },
+    { 1025, 1025, "Working path" },
+    { 1026, 1026, "Layers group information" },
+    { 1027, 1027, "Obsolete" },
+    { 1028, 1028, "IPTC-NAA record" },
+    { 1029, 1029, "Image mode for raw format files" },
+    { 1030, 1030, "JPEG quality" },
+    { 1032, 1032, "Grid and guides information" },
+    { 1033, 1033, "Thumbnail (Photoshop 4.0, obsolete)" },
+    { 1034, 1034, "Copyright flag" },
+    { 1035, 1035, "URL" },
+    { 1036, 1036, "Thumbnail" },
+    { 1037, 1037, "Global angle" },
+    { 1038, 1038, "Colour samplers (obsolete)" },
+    { 1039, 1039, "ICC profile" },
+    { 1040, 1040, "Watermark" },
+    { 1041, 1041, "ICC untagged profile" },
+    { 1042, 1042, "Effects visible" },
+    { 1043, 1043, "Spot halftone" },
+    { 1044, 1044, "Document-specific IDs seed number" },
+    { 1045, 1045, "Unicode alpha names" },
+    { 1046, 1046, "Indexed colour table count" },
+    { 1047, 1047, "Transparency index" },
+    { 1049, 1049, "Global altitude" },
+    { 1050, 1050, "Slices" },
+    { 1051, 1051, "Workflow URL" },
+    { 1052, 1052, "Jump to XPEP" },
+    { 1053, 1053, "Alpha identifiers" },
+    { 1054, 1054, "URL list" },
+    { 1057, 1057, "Version info" },
+    { 1058, 1058, "EXIF data 1" },
+    { 1059, 1059, "EXIF data 3" },
+    { 1060, 1060, "XMP metadata" },
+    { 1061, 1061, "Caption digest" },
+    { 1062, 1062, "Print scale" },
+    { 1064, 1064, "Pixel aspect ratio" },
+    { 1065, 1065, "Layer comps" },
+    { 1066, 1066, "Alternate duotone colours" },
+    { 1067, 1067, "Alternate spot colours" },
+    { 1069, 1069, "Layer selection IDs" },
+    { 1070, 1070, "HDR toning information" },
+    { 1071, 1071, "Print info" },
+    { 1072, 1072, "Layer groups enabled IDs" },
+    { 1073, 1073, "Colour samplers" },
+    { 1074, 1074, "Measurement scale" },
+    { 1075, 1075, "Timeline information" },
+    { 1076, 1076, "Sheet disclosure" },
+    { 1077, 1077, "Display info" },
+    { 1078, 1078, "Onion skins" },
+    { 1080, 1080, "Count information" },
+    { 1082, 1082, "Print information" },
+    { 1083, 1083, "Print style" },
+    { 1084, 1084, "Macintosh NSPrintInfo" },
+    { 1085, 1085, "Windows DEVMODE" },
+    { 1086, 1086, "Auto save file path" },
+    { 1087, 1087, "Auto save format" },
+    { 1088, 1088, "Path selection state" },
+    { 2000, 2997, "Path information" },
+    { 2999, 2999, "Name of clipping path" },
+    { 3000, 3000, "Origin path info" },
+    { 4000, 4999, "Plug-in resource" },
+    { 7000, 7000, "Image Ready variables" },
+    { 7001, 7001, "Image Ready data sets" },
+    { 7002, 7002, "Image Ready default selected state" },
+    { 7003, 7003, "Image Ready 7 rollover expanded state" },
+    { 7004, 7004, "Image Ready rollover expanded state" },
+    { 7005, 7005, "Image Ready save layer settings" },
+    { 7006, 7006, "Image Ready version" },
+    { 8000, 8000, "Lightroom workflow" },
+    { 10000, 10000, "Print flags information" }
+};
+
+/* Entries ascend and never share an id, so entry k starts at the first one's id + k or later: the
+   entry that holds id lies at index id - first or below, and is found walking down from there. */
+MINIPSDDEF const char *minipsd_resource_id_name(uint16_t id)
+{
+    const size_t count = sizeof mpsd__resource_names / sizeof mpsd__resource_names[0];
+    size_t       k;
+    if (id < mpsd__resource_names[0].first) return NULL;
+    k = (size_t)(id - mpsd__resource_names[0].first);
+    if (k >= count) k = count - 1;
+    while (mpsd__resource_names[k].first > id) --k;            /* stops at entry 0 at the latest */
+    return id <= mpsd__resource_names[k].last ? mpsd__resource_names[k].name : NULL;
+}
+
 /* --- a layer's fixed-layout blocks --- */
 
 /* The blocks minipsd_layer_block_settings reads: key, the bytes its value needs, its present bit. */

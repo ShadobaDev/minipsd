@@ -121,6 +121,7 @@ The declarations, with every parameter and return code, are in
 | `minipsd_resource_grid_and_guides(res, &out)`, `minipsd_resource_next_guide(res, &pos, &guide)` | resource 1032: its header, then the guides one per call (`MINIPSD_MORE`, then `MINIPSD_OK`) |
 | `minipsd_resource_next_alpha_name(res, &pos, &name)` | the alpha channels' names, one per call, from 1045 (UTF-16BE) or 1006 (Pascal strings) |
 | `minipsd_resource_next_alpha_identifier(res, &pos, &id)` | the alpha channels' identifiers (1053), one per call |
+| `minipsd_resource_id_name(id)` | Adobe's name for a resource id ("Resolution info", "Path information"), to list what a file holds; `NULL` for an id Adobe does not list |
 | `minipsd_resource_transparency_index(res, &index)` | an indexed file's transparent palette entry (1047) |
 | `minipsd_layer_block_settings(layer, &out)` | a layer's fixed-layout blocks parsed: id, colour label, fill opacity, locks, knockout, blending of clipped and interior elements; `present` says which it has |
 | `minipsd_utf16be_to_utf8(text, utf8, cap, &needed)` | UTF-16BE text from a view (a version info's names) as UTF-8, as `minipsd_layer_name` gives a name |
@@ -279,7 +280,7 @@ interact, whatever the table says.
 | `minipsd_layer_name` | yes | reads the view; writes only the caller's buffer |
 | `minipsd_layer_next_block` | yes | each thread its own `pos` |
 | `minipsd_layer_blending_range` | yes | reads the view |
-| `minipsd_resource_*`, `minipsd_layer_block_settings`, `minipsd_utf16be_to_utf8` | yes | read the view; write only the caller's struct, buffer or `pos` (each thread its own) |
+| `minipsd_resource_*`, `minipsd_layer_block_settings`, `minipsd_utf16be_to_utf8` | yes | read the view; write only the caller's struct, buffer or `pos` (each thread its own); `minipsd_resource_id_name` returns a constant string |
 | `minipsd_target_rgba`, `minipsd_target_rgba16`, `minipsd_target_interleaved` | yes | fill only the caller's `minipsd_target` |
 | `minipsd_decode_layer` | yes, with the whole file | each thread its own scratch; may run beside the walk (`next_layer`, `next_resource`) |
 | `minipsd_decode_mask` | yes, with the whole file | as `minipsd_decode_layer` |
@@ -470,7 +471,11 @@ them; nothing is copied or allocated. Results on real files from other programs:
   blocks, the first of each key: `lyid`, `lclr`, `iOpa`, `lspf`, `knko`, `clbl`, `infx`, with a
   bit each in `present`; without `iOpa` the fill is 255. IPTC, EXIF, XMP and the thumbnail stay
   bytes: formats of their own. `roundtrip.py` checks every one against psd-tools on every file
-  of its set. Which resources a file has, `minipsd_reader_next_resource` lists; what reads each:
+  of its set. Which resources a file has, `minipsd_reader_next_resource` lists, and
+  `minipsd_resource_id_name` names each by Adobe's "Image Resource IDs" table, its ranges
+  included (2000 to 2997 path information, 4000 to 4999 plug-in resources); an id the table
+  lacks has no name (psd-tools' test files hold 1092 and 1097, which neither Adobe nor psd-tools names).
+  What reads each:
 
   | Resource | Constant | Read with |
   |---|---|---|

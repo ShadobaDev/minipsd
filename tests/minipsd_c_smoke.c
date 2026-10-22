@@ -138,7 +138,9 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
                 || minipsd_resource_next_alpha_identifier(&made, &at, &id) != MINIPSD_OK)
                 return -119;
             made.id = MINIPSD_RES_TRANSPARENCY_INDEX; made.data.data = index; made.data.size = sizeof index;
-            if (minipsd_resource_transparency_index(&made, &transparent) != MINIPSD_OK || transparent != 7)
+            if (minipsd_resource_transparency_index(&made, &transparent) != MINIPSD_OK || transparent != 7
+                || strcmp(minipsd_resource_id_name(MINIPSD_RES_TRANSPARENCY_INDEX), "Transparency index") != 0
+                || minipsd_resource_id_name(1004) != NULL)
                 return -120;
         }
         if (minipsd_reader_next_layer(rd, &lv) != MINIPSD_MORE
