@@ -194,17 +194,17 @@ minipsd_layer logo = { .name = "Logo", .rgba = logo_rgba, .opacity = 255,
 ```
 
 A group is two records around its layers, bottom first: a divider, then the layers, then the
-group itself, which carries its name, visibility and mode (Pass Through unless `blend` says
+group itself, which carries its name, visibility and mode (Pass Through unless `blend_mode` says
 otherwise). A layer mask is one byte per pixel over a rectangle of its own, 255 where the layer
 shows:
 
 ```c
 minipsd_mask  fade   = { .top = 0, .left = 0, .bottom = 32, .right = 64, .pixels = ramp };
 minipsd_layer layers[4] = {
-    { .name = "</Layer group>", .opacity = 255, .kind = MINIPSD_KIND_GROUP_END },
+    { .name = "</Layer group>", .opacity = 255, .section_divider_type = MINIPSD_SECTION_GROUP_END },
     { .name = "Logo", .rgba = logo_rgba, .opacity = 255, .bottom = 32, .right = 64, .mask = &fade },
     { .name = "Shadow", .rgba = shadow_rgba, .opacity = 128, .bottom = 32, .right = 64 },
-    { .name = "Branding", .opacity = 255, .kind = MINIPSD_KIND_GROUP },
+    { .name = "Branding", .opacity = 255, .section_divider_type = MINIPSD_SECTION_GROUP },
 };
 ```
 
@@ -470,13 +470,13 @@ t.channel[MINIPSD_CH_B].data = bgra;
 ```
 
 A layer's mask, when `has_mask` is set, decodes the same way into one plane, over the mask's own
-rectangle: `minipsd_decode_mask(r, &layer, &plane, NULL)`. Groups need no decoding: `kind` says
+rectangle: `minipsd_decode_mask(r, &layer, &plane, NULL)`. Groups need no decoding: `section_divider_type` says
 which records open and close them.
 
 Pixels come as stored: straight alpha, the layer's opacity and visibility left in the view. A
 `minipsd_decode_opts` with `y_first` and `y_count` decodes a band of rows into the target's first
 row, so a huge layer can go through a small buffer in strips. Every colour mode and depth
-decodes, as stored: no colour is converted, the palette (`info.color_data`) or the ICC profile
+decodes, as stored: no colour is converted, the palette (`info.color_mode_data`) or the ICC profile
 says what samples mean. A 16-bit file decodes into 16-bit samples only, `uint16_t` in host order;
 say so in the options:
 

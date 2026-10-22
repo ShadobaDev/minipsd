@@ -138,7 +138,7 @@ its layers and composite as stored: no colour is converted.
   stored), 8 (and 0, `NULL` opts) a byte, 16 a `uint16_t`, 32 a `float`, all in host order. It
   must be the file's depth; there is no conversion. The steps of a plane count bytes.
 - **What samples mean** is the file's to say: its ICC profile (`minipsd_info.icc`), or its colour
-  mode data (`minipsd_info.color_data`): an indexed file's palette, a duotone's inks.
+  mode data (`minipsd_info.color_mode_data`): an indexed file's palette, a duotone's inks.
 - **Un-matting.** An RGB file stores the composite's colour matted against white; the reader
   undoes it, `c = max - (max - s) * max / a` rounded and clamped (`max` is 255, or 65535 at 16
   bits), `0` where `a == 0`, and at 32 bits `1 - (1 - s) / a`. That is exact where `a == max`
@@ -170,6 +170,27 @@ its layers and composite as stored: no colour is converted.
 - `rgba = NULL` is an empty layer; `name = NULL` is an empty name.
 - Layers are listed bottom first.
 
+**Names**
+- A field that holds something the file stores takes Adobe's descriptive name for it, in
+  snake_case, and its comment names the four-character key or the resource id: `blend_mode`
+  ("blend mode key"), `section_divider_type` (`lsct`'s type), `additional_info` ("additional
+  layer information"), a mask's `default_color`, `color_mode_data`.
+- Where Adobe gives no name, or an ambiguous one, psd-tools' name.
+- A constant follows its field: `MINIPSD_SECTION_*` for `section_divider_type`. Its values may
+  say what they mean to a program rather than repeat Adobe's words: `MINIPSD_SECTION_GROUP_END`
+  for Adobe's "bounding section divider".
+- Functions keep minipsd's verbs (`next_`, `decode_`, `find_`); their nouns follow the fields'.
+- Exceptions, which the file does not store as such and so keep minipsd's names:
+  - `hidden`: bit 0x02 of the record's flags, which Adobe calls "visible" though it is set when
+    the layer is hidden;
+  - `dpi`: the horizontal resolution of resource 1005 in pixels per inch, one number both read and
+    written;
+  - `format`: the header's version, `MINIPSD_PSD` 1 and `MINIPSD_PSB` 2 as Adobe numbers them;
+  - `name_pascal` and `name_unicode`: the record's Pascal name and `luni`, both of which Adobe
+    calls the layer name;
+  - what minipsd derives or adds: `composite_has_alpha` (a negative layer count), `layer_tail`,
+    `other_channels`, `channel_offset`, `mask_offset`, `stored`, `composite_*`, `color_channels`.
+
 **Return codes**: errors are negative, so `rc < 0` is the failure test for every function.
 
 | Code | Value | Meaning |
@@ -195,7 +216,7 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
 | Name | Owner | Size | Must stay valid | May live in |
 |---|---|---|---|---|
 | `minipsd_doc`, `minipsd_layer[]` | caller; borrowed | `sizeof`; `layer_count` layers | the call; for the pull writer, from init for as long as the writer is used | stack, static, heap |
-| raw document data: layer pixels (`rgba`) or stored channels (`stored`), names, ICC profile, the supplied `composite`, kept `extra`, `resources` and `layer_tail` | caller; borrowed, read in place, never copied | a layer's rectangle times 4 samples, of 1 or 2 bytes (or its channels' stored size); `width * height * 4` samples for the composite | as `minipsd_doc` | wherever the application keeps it |
+| raw document data: layer pixels (`rgba`) or stored channels (`stored`), names, ICC profile, the supplied `composite`, kept `additional_info`, `resources` and `layer_tail` | caller; borrowed, read in place, never copied | a layer's rectangle times 4 samples, of 1 or 2 bytes (or its channels' stored size); `width * height * 4` samples for the composite | as `minipsd_doc` | wherever the application keeps it |
 | `minipsd_workspace` of the writer | caller; lent to the writer | `minipsd_writer_workspace_size()` | for as long as the writer is used | heap; stack or static sized for the largest document |
 | `minipsd_writer` | inside `minipsd_workspace`; opaque | part of the workspace | as the workspace | the caller keeps only the pointer |
 | raw PSD bytes | passed to the callback of `minipsd_write()` | pieces of up to 4 KiB, in order | the callback copies what it keeps | the callback decides |
@@ -318,15 +339,15 @@ several threads from one reader into one image.
   - the blend key as given, `norm` by default (the keys: [Blend modes](#blend-modes)), and
     clipping as given;
   - the writer's own blocks first, `luni` (a kept one as it is while it says the name) and the
-    group marker, then the blocks kept from a file (`extra`), as they are and in their order:
+    group marker, then the blocks kept from a file (`additional_info`), as they are and in their order:
     the name wins, and kept `luni` blocks go;
   - channel data encoded from `rgba`, or copied as it is from `stored` (any compression the
     file had, ZIP included), so a layer that was not changed is not encoded again; a stored
     layer without transparency is written without one (three colour channels);
-  - groups (`kind`), bottom first: a divider (`lsct` type 3), the group's layers, then the
+  - groups (`section_divider_type`), bottom first: a divider (`lsct` type 3), the group's layers, then the
     group's top record (type 1 open, 2 closed) with its name, visibility and mode in its `lsct`
-    block (`blend`, Pass Through by default; the record keeps `norm`). A kept `lsct` of the same
-    kind is written instead, as it is. Groups must nest;
+    block (`blend_mode`, Pass Through by default; the record keeps `norm`). A kept `lsct` of the same
+    type is written instead, as it is. Groups must nest;
   - a layer mask (`mask`): its rectangle, colour outside it and flags in the mask data, then
     what was kept after them (parameters, the real mask's rectangle) or two bytes of padding; its
     channel (id -2) encoded from `pixels` or copied from `stored`, and a kept real mask (id -3)
@@ -430,7 +451,7 @@ them; nothing is copied or allocated. Results on real files from other programs:
     an unpaired surrogate becomes U+FFFD and a U+0000 ends the name;
   - the channels red, green, blue and transparency as views of their stored data; any other
     channel (alpha, spot, a mask channel without mask data) is counted, not read;
-  - what the record is (`kind`, from its `lsct` block): a layer, a group's top record, a divider;
+  - what the record is (`section_divider_type`, from its `lsct` block): a layer, a group's top record, a divider;
   - its mask: rectangle, colour, flags, the rest of the mask data, the mask channel and the real
     mask channel as views; `minipsd_decode_mask` decodes the mask's pixels;
   - its blending ranges as a view and a count, read one at a time with
@@ -445,10 +466,10 @@ them; nothing is copied or allocated. Results on real files from other programs:
 - **The layer tail:** the global layer mask information and the global additional-information
   blocks that follow the layer info, as one raw view (`minipsd_info.layer_tail`), an `Lr16` the
   layers came from included. Global blocks are padded to four bytes past the length they state.
-- **The colour mode data:** as one raw view (`minipsd_info.color_data`): an indexed file's
+- **The colour mode data:** as one raw view (`minipsd_info.color_mode_data`): an indexed file's
   palette, a duotone's inks and curves.
 - **As a document** (`minipsd_read`): 8- and 16-bit RGB files, at their depth; each layer's
-  rectangle, name, opacity, visibility, blend key, clipping, flags, kind, mask, blending ranges, decoded pixels
+  rectangle, name, opacity, visibility, blend key, clipping, flags, section divider type, mask, blending ranges, decoded pixels
   (or, with `opts->stored`, its channels as stored, ZIP ones too) and blocks, the composite as
   stored (`composite_matted`; with `opts->stored`, every channel's bytes in `composite_stored`), the dpi (72 when none is stored), the ICC profile, every resource
   and the layer tail, the `Lr16` its layers came from in it, empty, all copied into one block. A
@@ -470,8 +491,8 @@ them; nothing is copied or allocated. Results on real files from other programs:
 
 ## Blend modes
 
-A layer's blend mode is a four-character key in its record. minipsd writes `minipsd_layer.blend`
-as given and reads it into `minipsd_layer_view.blend`; it does not blend with it: the composite
+A layer's blend mode is a four-character key in its record. minipsd writes `minipsd_layer.blend_mode`
+as given and reads it into `minipsd_layer_view.blend_mode`; it does not blend with it: the composite
 it composes draws every mode as Normal (supply the composite for the real result). Photoshop's
 keys, in its menu order; the tests write each and read it back with `psd-tools` (`pass` on a
 group, where it belongs):

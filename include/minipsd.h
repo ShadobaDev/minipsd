@@ -63,8 +63,8 @@
  *
  * Channel data is PackBits RLE by default (small for flat art), or raw.
  *
- * Groups (minipsd_layer.kind) and layer masks (minipsd_layer.mask) are written; text and effects
- * only as blocks kept from a file.  Not written: 32-bit, other colour modes.
+ * Groups (minipsd_layer.section_divider_type) and layer masks (minipsd_layer.mask) are written;
+ * text and effects only as blocks kept from a file.  Not written: 32-bit, other colour modes.
  * PSD caps each side at 30000 px, PSB at 300000; larger documents are refused (MINIPSD_ERR_SIZE).
  *
  * \par Output
@@ -248,12 +248,16 @@ typedef struct minipsd_blending_range {
     minipsd_blend_range destination; /*!< "Underlying Layer". */
 } minipsd_blending_range;
 
-/** \brief What a layer record is: a layer, or one end of a group (the type of its 'lsct' block). */
+/**
+ * \brief What a layer record is: a layer, or one end of a group.  The type of its 'lsct' block,
+ *        Adobe's "section divider setting" (any other layer, open folder, closed folder, bounding
+ *        section divider).
+ */
 enum {
-    MINIPSD_KIND_LAYER        = 0, /*!< A layer with pixels, or an empty one.                     */
-    MINIPSD_KIND_GROUP        = 1, /*!< A group, shown open in the layers panel: its top record.  */
-    MINIPSD_KIND_GROUP_CLOSED = 2, /*!< A group, shown closed: its top record.                    */
-    MINIPSD_KIND_GROUP_END    = 3  /*!< Where a group starts, below its layers: the divider.      */
+    MINIPSD_SECTION_LAYER        = 0, /*!< A layer with pixels, or an empty one.                     */
+    MINIPSD_SECTION_GROUP        = 1, /*!< A group, shown open in the layers panel: its top record.  */
+    MINIPSD_SECTION_GROUP_CLOSED = 2, /*!< A group, shown closed: its top record.                    */
+    MINIPSD_SECTION_GROUP_END    = 3  /*!< Where a group starts, below its layers: the divider.      */
 };
 
 /**
@@ -264,7 +268,7 @@ enum {
 typedef struct minipsd_mask {
     int32_t        top, left, bottom, right; /*!< The mask's rectangle on the canvas; may differ from
                                                   the layer's, and may have no area.                */
-    uint8_t        color;                    /*!< Its value outside the rectangle: 0 or 255.        */
+    uint8_t        default_color;            /*!< Its value outside the rectangle: 0 or 255.        */
     uint8_t        flags;                    /*!< As stored: 0x01 position relative to the layer,
                                                   0x02 disabled, 0x08 made by rendering other data,
                                                   0x10 parameters follow (in rest).                 */
@@ -298,17 +302,17 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
                                     minipsd_layer_view; all four zero, with rgba and no stored: the
                                     full canvas.  It may reach past the canvas, or lie wholly
                                     outside it.  An empty layer's has no area.                     */
-    char           blend[4];    /*!< The blend mode's four-character key, such as "mul "; all zero:
+    char           blend_mode[4]; /*!< The blend mode's four-character key, such as "mul "; all zero:
                                     "norm".  Written as given; the composed composite draws every
                                     mode as normal.                                                */
     uint8_t        clipping;    /*!< Non-zero: clipped to the layer below.  Written as given.        */
     uint8_t        flags;       /*!< The record's other flag bits, written as given: 0x01 transparency
                                     locked, 0x08 and 0x10 pixel data irrelevant (groups' markers).
                                     Bit 0x02 is ignored: hidden says it.                           */
-    minipsd_bytes  extra;       /*!< Additional-information blocks kept from a file (text, effects,
-                                    groups, ...), as minipsd_layer_view.extra holds them: written
-                                     after the layer's own name, except a 'luni' block, since name
-                                    wins.                                                          */
+    minipsd_bytes  additional_info; /*!< Additional layer information blocks kept from a file (text,
+                                    effects, groups, ...), as minipsd_layer_view.additional_info
+                                    holds them: written after the layer's own name, except a
+                                    'luni' block, since name wins.                                 */
     const minipsd_bytes *stored; /*!< NULL: rgba is encoded.  Otherwise four channels as a file
                                     stores them (R, G, B, transparency, as minipsd_layer_view.channel:
                                     the compression marker, then the rows), copied as they are
@@ -316,11 +320,11 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
                                     again.  Each is checked against the rectangle; transparency of
                                     size 0 is none, and written as none.  rgba may then be NULL, as long
                                     as the document supplies its composite.                       */
-    uint8_t        kind;        /*!< MINIPSD_KIND_*: a layer, or a group's top record or divider.
-                                    Groups nest bottom first: a divider, the group's layers, then
-                                    its top record, which carries the group's name, visibility and
-                                    mode (blend; zero: pass through).  Written as an 'lsct' block,
-                                    or a kept one of the same kind as it is.                       */
+    uint8_t        section_divider_type; /*!< MINIPSD_SECTION_*: a layer, or a group's top record or
+                                    divider.  Groups nest bottom first: a divider, the group's
+                                    layers, then its top record, which carries the group's name,
+                                    visibility and mode (blend_mode; zero: pass through).  Written
+                                    as an 'lsct' block, or a kept one of the same type as it is.   */
     const minipsd_mask *mask;   /*!< The layer mask; NULL: none.                                   */
     const minipsd_blending_range *blending_ranges; /*!< blending_range_count ranges, written as given:
                                     the composite grey's, then each channel's.  NULL with a count
@@ -380,7 +384,7 @@ typedef struct minipsd_doc {
                                               host order, 0 .. 65535.                         */
     uint16_t             format;         /*!< MINIPSD_PSD (or 0) or MINIPSD_PSB: what the
                                               document is.  Everything kept from a file
-                                              (stored channels, masks' stored and real, extra,
+                                              (stored channels, masks' stored and real, additional_info,
                                               layer_tail) is laid out as this format lays it
                                               out; minipsd_read sets it to the file's.  It is
                                               written as this format unless
@@ -456,8 +460,8 @@ typedef struct minipsd_write_opts {
  * \retval MINIPSD_ERR_ARG  doc is NULL, a format is neither 0, MINIPSD_PSD nor MINIPSD_PSB (the
  *                          document's or opts'), there are no layers and no composite (or more than 32767 layers), dpi is outside
  *                          (0, 65536), depth is not 0, 8 or 16, a size is set without its data (icc, a resource, a name,
- *                          extra, layer_tail), a layer's rectangle is inverted, an empty layer's
- *                          has an area, extra is not a run of well-formed blocks, a stored
+ *                          additional_info, layer_tail), a layer's rectangle is inverted, an empty layer's
+ *                          has an area, additional_info is not a run of well-formed blocks, a stored
  *                          channel does not match its rectangle, a layer has only stored
  *                          channels while the composite is to be composed, groups do not nest
  *                          (every group's top record needs its divider below it), or a mask's
@@ -619,8 +623,8 @@ typedef struct minipsd_info {
     uint16_t      depth;               /*!< Bits per channel: 1, 8, 16 or 32.                          */
     uint16_t      color_mode;          /*!< As stored: 0 bitmap, 1 grey, 2 indexed, 3 RGB, 4 CMYK,
                                             7 multichannel, 8 duotone, 9 Lab.                          */
-    double        dpi;                 /*!< Horizontal pixels per inch; 0 without a resolution resource. */
-    minipsd_bytes icc;                 /*!< The ICC profile; size 0 when the file has none.            */
+    double        dpi;                 /*!< Horizontal pixels per inch (resource 1005); 0 without it.   */
+    minipsd_bytes icc;                 /*!< The ICC profile (resource 1039); size 0 when none.        */
     size_t        layer_count;         /*!< Layers in the file.                                        */
     int           composite_has_alpha; /*!< Non-zero: the composite's first extra channel is transparency
                                             (the file's layer count is negative).                      */
@@ -637,7 +641,7 @@ typedef struct minipsd_info {
                                             and in multichannel every channel but the composite's
                                             transparency.  Transparency has the plane after them in a
                                             target and in a layer view.                               */
-    minipsd_bytes color_data;          /*!< The colour mode data, as stored: an indexed file's palette
+    minipsd_bytes color_mode_data;     /*!< The colour mode data, as stored: an indexed file's palette
                                             (256 reds, 256 greens, 256 blues), a duotone file's
                                             inks and curves; size 0 for none.  minipsd converts no
                                             colour: this, or the ICC profile, says what samples mean. */
@@ -673,13 +677,13 @@ typedef struct minipsd_layer_view {
                                                  layers) comes back empty, bottom = top, right = left. */
     uint8_t       opacity;                  /*!< 255 is opaque.                                        */
     uint8_t       hidden;                   /*!< Non-zero: the layer is hidden.                        */
-    char          blend[5];                 /*!< The blend mode's four-character key ("norm"), then a NUL. */
+    char          blend_mode[5];            /*!< The blend mode's four-character key ("norm"), then a NUL. */
     minipsd_bytes name_pascal;              /*!< The legacy name, raw bytes (non-ASCII characters are
                                                  whatever code page the writer used).                  */
     minipsd_bytes name_unicode;             /*!< The 'luni' name, raw UTF-16BE; data is NULL when the
                                                  record has none.  minipsd_layer_name converts.        */
-    minipsd_bytes extra;                    /*!< All the layer's additional-information blocks, walked
-                                                 with minipsd_layer_next_block.                        */
+    minipsd_bytes additional_info;          /*!< All the layer's additional layer information blocks,
+                                                 walked with minipsd_layer_next_block.                 */
     minipsd_bytes channel[MINIPSD_PLANES];  /*!< The colour channels, then transparency (MINIPSD_PLANES;
                                                  RGB's MINIPSD_CH_*): the channel's stored data, its
                                                  compression marker first.  size 0: the layer has no
@@ -692,8 +696,8 @@ typedef struct minipsd_layer_view {
     uint16_t      other_channels;           /*!< Channels the reader does not read (alpha, spot, ...). */
     uint8_t       clipping;                 /*!< Non-zero: clipped to the layer below.                 */
     uint8_t       flags;                    /*!< The record's flag bits as stored (0x02 is hidden).    */
-    uint8_t       kind;                     /*!< MINIPSD_KIND_*, from the record's 'lsct' block; a
-                                                 group's own mode is in that block (blend is the
+    uint8_t       section_divider_type;     /*!< MINIPSD_SECTION_*, from the record's 'lsct' block; a
+                                                 group's own mode is in that block (blend_mode is the
                                                  record's).                                           */
     uint8_t       has_mask;                 /*!< Non-zero: mask holds the layer mask.                  */
     minipsd_mask  mask;                     /*!< The layer mask: its rectangle, colour and flags, its
@@ -701,7 +705,7 @@ typedef struct minipsd_layer_view {
                                                  buffer ends before it), real and rest as views;
                                                  pixels is NULL: minipsd_decode_mask decodes.          */
     uint64_t      mask_offset;              /*!< Where the mask's channel starts in the file (0: none). */
-    uint8_t       format;                   /*!< MINIPSD_PSD or MINIPSD_PSB, the file's: how extra's
+    uint8_t       format;                   /*!< MINIPSD_PSD or MINIPSD_PSB, the file's: how additional_info's
                                                  blocks and the channels' row counts are laid out.
                                                  0 in a view built by hand is MINIPSD_PSD.             */
     minipsd_bytes blending_ranges;          /*!< The blending ranges as stored, eight bytes each; size

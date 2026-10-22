@@ -20,7 +20,7 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   `minipsd_target_interleaved` for any mode). Every colour mode and depth decodes as stored, with
   no colour conversion. A target's planes are the mode's colour channels, then transparency
   (`minipsd_info.color_channels`, `MINIPSD_PLANES`). Samples are a byte of 0 or 1 at 1 bit, a
-  `float` at 32 bits. The palette or duotone data is `minipsd_info.color_data`.
+  `float` at 32 bits. The palette or duotone data is `minipsd_info.color_mode_data`.
 - `minipsd_decode_composite`: the merged image, or a band of its rows, un-matted to straight
   alpha in RGB (or as stored, with `keep_matte`). Photoshop's 16- and 32-bit files mark the
   composite's transparency with a global `Mtrn`, `Mt16` or `Mt32` block rather than a negative
@@ -40,7 +40,7 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   is, every byte copied into one block so the file can be freed at once; `minipsd_doc_free`;
   `minipsd_read_size` and `minipsd_read_into` for the caller's own memory. `lost`
   (`MINIPSD_LOST_*`) says what the document could not carry: extra channels.
-- Layer groups: `kind` on `minipsd_layer` and the layer view (`MINIPSD_KIND_*`), written as
+- Layer groups: `section_divider_type` on `minipsd_layer` and the layer view (`MINIPSD_SECTION_*`), written as
   `lsct` blocks with the group's mode, nesting checked by `minipsd_doc_check`.
 - Blending ranges ("Blend If"): `minipsd_blend_range` and `minipsd_blending_range`, as the
   file stores them; `blending_ranges` and `blending_range_count` on `minipsd_layer`, written as
@@ -82,7 +82,7 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   stores them (`minipsd_layer.stored`), and the writer copies them instead of encoding pixels, so
   changing one layer encodes only that one. A stored layer without transparency gets an opaque
   transparency channel.
-- Content kept from a file and written back as it is: `blend`, `clipping`, `flags` and `extra`
+- Content kept from a file and written back as it is: `blend_mode`, `clipping`, `flags` and `additional_info`
   (additional-information blocks: text, effects, groups, smart objects) on `minipsd_layer`;
   `resources` and `layer_tail` (global layer mask and blocks) on `minipsd_doc`. The document's
   own fields win over kept data that says the same (`name`, `dpi`, `icc`). The reader gives

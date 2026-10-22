@@ -61,7 +61,7 @@ class Bytes(ctypes.Structure):
 class Mask(ctypes.Structure):
     _fields_ = [("top", ctypes.c_int32), ("left", ctypes.c_int32),
                 ("bottom", ctypes.c_int32), ("right", ctypes.c_int32),
-                ("color", ctypes.c_uint8), ("flags", ctypes.c_uint8), ("pixels", ctypes.c_void_p),
+                ("default_color", ctypes.c_uint8), ("flags", ctypes.c_uint8), ("pixels", ctypes.c_void_p),
                 ("stored", Bytes), ("real", Bytes), ("rest", Bytes)]
 
 
@@ -78,9 +78,9 @@ class Layer(ctypes.Structure):
                 ("opacity", ctypes.c_uint8), ("hidden", ctypes.c_uint8),
                 ("top", ctypes.c_int32), ("left", ctypes.c_int32),
                 ("bottom", ctypes.c_int32), ("right", ctypes.c_int32),
-                ("blend", ctypes.c_char * 4), ("clipping", ctypes.c_uint8), ("flags", ctypes.c_uint8),
-                ("extra", Bytes), ("stored", ctypes.c_void_p),
-                ("kind", ctypes.c_uint8), ("mask", ctypes.POINTER(Mask)),
+                ("blend_mode", ctypes.c_char * 4), ("clipping", ctypes.c_uint8), ("flags", ctypes.c_uint8),
+                ("additional_info", Bytes), ("stored", ctypes.c_void_p),
+                ("section_divider_type", ctypes.c_uint8), ("mask", ctypes.POINTER(Mask)),
                 ("blending_ranges", ctypes.POINTER(BlendingRange)), ("blending_range_count", ctypes.c_uint32),
                 ("name_pascal", Bytes)]
 
@@ -364,7 +364,7 @@ def check(name, psd, w, h, dpi, layers):
 
 # --- groups and a mask, written from scratch ------------------------------------------------------
 
-KIND_LAYER, KIND_GROUP, KIND_GROUP_CLOSED, KIND_GROUP_END = 0, 1, 2, 3
+SECTION_LAYER, SECTION_GROUP, SECTION_GROUP_CLOSED, SECTION_GROUP_END = 0, 1, 2, 3
 
 
 # "Blend If" of "Masked": composite grey, then R, G, B, each (source, destination) as
@@ -392,20 +392,20 @@ def groups_and_mask(lib, path):
 
     mask_px = bytes((x * 255 // 31) for y in range(20) for x in range(32))   # a ramp, left to right
     mask_buf = ctypes.create_string_buffer(mask_px)
-    mask = Mask(top=10, left=8, bottom=30, right=40, color=0, flags=0, pixels=ctypes.cast(mask_buf, ctypes.c_void_p))
+    mask = Mask(top=10, left=8, bottom=30, right=40, default_color=0, flags=0, pixels=ctypes.cast(mask_buf, ctypes.c_void_p))
     ranges = (BlendingRange * len(BLEND_IF))(*[BlendingRange(BlendRange(*s), BlendRange(*d)) for s, d in BLEND_IF])
     records = (Layer * 7)()
     spec = [  # name, rgba, kind, blend, mask
-        ("Base", pixels(w, h, (240, 240, 240, 255)), KIND_LAYER, b"\0\0\0\0", None),
-        ("</Layer group>", None, KIND_GROUP_END, b"\0\0\0\0", None),
-        ("Masked", pixels(w, h, (200, 40, 40, 255)), KIND_LAYER, b"\0\0\0\0", ctypes.pointer(mask)),
-        ("</Layer group>", None, KIND_GROUP_END, b"\0\0\0\0", None),
-        ("Deep", pixels(w, h, (40, 40, 200, 255)), KIND_LAYER, b"\0\0\0\0", None),
-        ("Inner", None, KIND_GROUP_CLOSED, b"mul ", None),
-        ("Outer", None, KIND_GROUP, b"\0\0\0\0", None),
+        ("Base", pixels(w, h, (240, 240, 240, 255)), SECTION_LAYER, b"\0\0\0\0", None),
+        ("</Layer group>", None, SECTION_GROUP_END, b"\0\0\0\0", None),
+        ("Masked", pixels(w, h, (200, 40, 40, 255)), SECTION_LAYER, b"\0\0\0\0", ctypes.pointer(mask)),
+        ("</Layer group>", None, SECTION_GROUP_END, b"\0\0\0\0", None),
+        ("Deep", pixels(w, h, (40, 40, 200, 255)), SECTION_LAYER, b"\0\0\0\0", None),
+        ("Inner", None, SECTION_GROUP_CLOSED, b"mul ", None),
+        ("Outer", None, SECTION_GROUP, b"\0\0\0\0", None),
     ]
     for i, (name, rgba, kind, blend, m) in enumerate(spec):
-        records[i] = Layer(name=name.encode(), rgba=rgba, opacity=255, blend=blend, kind=kind, mask=m)
+        records[i] = Layer(name=name.encode(), rgba=rgba, opacity=255, blend_mode=blend, section_divider_type=kind, mask=m)
     records[2].blending_ranges, records[2].blending_range_count = ranges, len(BLEND_IF)
     doc = Doc(w, h, 72.0, records, len(spec), None, 0, MINIPSD_RLE)
     out = bytearray()
@@ -434,7 +434,7 @@ def check_groups_and_mask(psd, mask_px):
     expect("Outer's layers", [(l.name, l.is_group()) for l in outer], [("Masked", False), ("Inner", True)])
     inner = list(outer)[1]
     expect("Inner's mode", inner.blend_mode.value, b"mul ")
-    expect("Inner closed", inner._record.tagged_blocks.get_data(b"lsct").kind.value, KIND_GROUP_CLOSED)
+    expect("Inner closed", inner._record.tagged_blocks.get_data(b"lsct").kind.value, SECTION_GROUP_CLOSED)
     expect("Inner's layers", [l.name for l in inner], ["Deep"])
     masked = list(outer)[0]
     expect("mask", masked.has_mask(), True)

@@ -138,7 +138,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         decode(r, &layer, (uint64_t)((int64_t)layer.right - layer.left), (uint64_t)((int64_t)layer.bottom - layer.top),
                &info, size);
         if (layer.has_mask) decode_mask(r, &layer, info.depth, size);
-        if (layer.kind > MINIPSD_KIND_GROUP_END) abort();
+        if (layer.section_divider_type > MINIPSD_SECTION_GROUP_END) abort();
     }
     check_short(r, rc, size);
     decode(r, NULL, info.width, info.height, &info, size);

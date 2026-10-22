@@ -664,12 +664,12 @@ TEST(MinipsdReaderTest, RecordsOfTheWritersFileAreRead)
     EXPECT_EQ(a.right, 5);
     EXPECT_EQ(a.opacity, 255);
     EXPECT_EQ(a.hidden, 0);
-    EXPECT_STREQ(a.blend, "norm");
+    EXPECT_STREQ(a.blend_mode, "norm");
     EXPECT_EQ(a.other_channels, 0);
     EXPECT_EQ(nameOf(a), "Template");
     EXPECT_EQ(std::string(a.name_pascal.data, a.name_pascal.data + a.name_pascal.size), "Template");
     EXPECT_EQ(a.name_unicode.size, 16u);
-    EXPECT_TRUE(inside(o.blob, a.name_pascal) && inside(o.blob, a.name_unicode) && inside(o.blob, a.extra));
+    EXPECT_TRUE(inside(o.blob, a.name_pascal) && inside(o.blob, a.name_unicode) && inside(o.blob, a.additional_info));
     for (int k = 0; k < 4; ++k) {   // each channel: the marker (0: raw), then its plane of the pixels
         const minipsd_bytes &c = a.channel[k];
         ASSERT_EQ(c.size, 2u + 15u) << k;
@@ -771,7 +771,7 @@ TEST(MinipsdReaderTest, BlendingRangesAreReadAfterTheMask)
     ASSERT_EQ(o.rc, MINIPSD_OK);
     const minipsd_layer_view v = nextLayer(o.r);
     EXPECT_EQ(nameOf(v), "Masked");
-    EXPECT_STREQ(v.blend, "mul ");
+    EXPECT_STREQ(v.blend_mode, "mul ");
     EXPECT_EQ(v.opacity, 77);
     EXPECT_NE(v.hidden, 0);
     EXPECT_EQ(v.flags, 0x0B) << "as stored";
@@ -896,7 +896,7 @@ TEST(MinipsdReaderTest, AdditionalInformationBlocksAreListedRaw)
         seen.emplace_back(b.key, b.data.size);
         EXPECT_TRUE(inside(o.blob, b.data));
     }
-    EXPECT_EQ(pos, v.extra.size);
+    EXPECT_EQ(pos, v.additional_info.size);
     ASSERT_EQ(seen.size(), 4u);
     EXPECT_EQ(seen[0].first, "luni");
     EXPECT_EQ(seen[1], (std::pair<std::string, std::size_t>{"lsct", 4}));
@@ -906,7 +906,7 @@ TEST(MinipsdReaderTest, AdditionalInformationBlocksAreListedRaw)
     pos = 1;   // in the middle of a block
     EXPECT_EQ(minipsd_layer_next_block(&v, &pos, &b), MINIPSD_ERR_FORMAT);
     EXPECT_EQ(pos, 1u) << "the cursor stays";
-    pos = v.extra.size + 5;
+    pos = v.additional_info.size + 5;
     EXPECT_EQ(minipsd_layer_next_block(&v, &pos, &b), MINIPSD_OK);
     EXPECT_EQ(minipsd_layer_next_block(nullptr, &pos, &b), MINIPSD_ERR_ARG);
     EXPECT_EQ(minipsd_layer_next_block(&v, nullptr, &b), MINIPSD_ERR_ARG);
@@ -917,7 +917,7 @@ TEST(MinipsdReaderTest, ARecordWithoutBlocksHasAnEmptyExtraRegion)
 {
     Open o(build([] { Spec s; s.layers = {simpleRec()}; s.count = -1; return s; }()).bytes);
     const minipsd_layer_view v = nextLayer(o.r);
-    EXPECT_EQ(v.extra.size, 0u);
+    EXPECT_EQ(v.additional_info.size, 0u);
     std::size_t pos = 0;
     minipsd_block b;
     EXPECT_EQ(minipsd_layer_next_block(&v, &pos, &b), MINIPSD_OK);
@@ -2396,10 +2396,10 @@ TEST(MinipsdReaderTest, MaskAndKindAtTheEdges)
     auto lsct = [](std::uint32_t type) { return block("lsct", Out().u32(type).b); };
     Rec unknown = simpleRec();
     unknown.blocks = Out().raw(block("lsct", {})).raw(lsct(7)).b;
-    EXPECT_EQ(OneLayer(unknown).v.kind, MINIPSD_KIND_LAYER) << "too short, then an unknown type";
+    EXPECT_EQ(OneLayer(unknown).v.section_divider_type, MINIPSD_SECTION_LAYER) << "too short, then an unknown type";
     Rec twice = simpleRec();
-    twice.blocks = Out().raw(lsct(MINIPSD_KIND_GROUP)).raw(lsct(MINIPSD_KIND_GROUP_END)).b;
-    EXPECT_EQ(OneLayer(twice).v.kind, MINIPSD_KIND_GROUP) << "the first kind";
+    twice.blocks = Out().raw(lsct(MINIPSD_SECTION_GROUP)).raw(lsct(MINIPSD_SECTION_GROUP_END)).b;
+    EXPECT_EQ(OneLayer(twice).v.section_divider_type, MINIPSD_SECTION_GROUP) << "the first kind";
 }
 
 // A PSB: the layer and mask section's two lengths, each channel's length and a long key's block
@@ -2662,18 +2662,18 @@ void expectKeptAlike(const Bytes &before, const Bytes &after)
     minipsd_layer_view va, vb;
     while (minipsd_reader_next_layer(a.r, &va) == MINIPSD_MORE) {
         ASSERT_EQ(minipsd_reader_next_layer(b.r, &vb), MINIPSD_MORE);
-        EXPECT_STREQ(va.blend, vb.blend);
+        EXPECT_STREQ(va.blend_mode, vb.blend_mode);
         EXPECT_EQ(va.clipping, vb.clipping);
         EXPECT_EQ(va.flags, vb.flags);
-        EXPECT_EQ(va.kind, vb.kind);
+        EXPECT_EQ(va.section_divider_type, vb.section_divider_type);
         EXPECT_EQ(blocks(va), blocks(vb));
         EXPECT_EQ(Bytes(va.blending_ranges.data, va.blending_ranges.data + va.blending_ranges.size),
                   Bytes(vb.blending_ranges.data, vb.blending_ranges.data + vb.blending_ranges.size)) << "blending ranges";
         ASSERT_EQ(va.has_mask, vb.has_mask);
         if (!va.has_mask) continue;
         const minipsd_mask &ma = va.mask, &mb = vb.mask;
-        EXPECT_EQ(std::tie(ma.top, ma.left, ma.bottom, ma.right, ma.color, ma.flags),
-                  std::tie(mb.top, mb.left, mb.bottom, mb.right, mb.color, mb.flags));
+        EXPECT_EQ(std::tie(ma.top, ma.left, ma.bottom, ma.right, ma.default_color, ma.flags),
+                  std::tie(mb.top, mb.left, mb.bottom, mb.right, mb.default_color, mb.flags));
         auto bytesOf = [](const minipsd_bytes &x) { return Bytes(x.data, x.data + x.size); };
         EXPECT_EQ(ma.rest.size ? bytesOf(ma.rest) : Bytes(2, 0), mb.rest.size ? bytesOf(mb.rest) : Bytes(2, 0));
         EXPECT_EQ(bytesOf(ma.real), bytesOf(mb.real));

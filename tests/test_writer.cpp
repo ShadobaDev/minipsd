@@ -234,7 +234,7 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     const minipsd_blending_range ranges[2] = {{{{0, 0}, {255, 255}}, {{59, 60}, {210, 220}}},   // grey, then red
                                               {{{10, 10}, {200, 200}}, {{0, 0}, {255, 255}}}};
     const minipsd_layer layer{.name = "Mine", .rgba = px.data(), .opacity = 200, .hidden = 1,
-                              .blend = {'m', 'u', 'l', ' '}, .clipping = 1, .flags = 0x09, .extra = view(extra),
+                              .blend_mode = {'m', 'u', 'l', ' '}, .clipping = 1, .flags = 0x09, .additional_info = view(extra),
                               .blending_ranges = ranges, .blending_range_count = 2};
     const Bytes cm = {0, 150, 0, 0, 0, 1, 0, 2, 0, 150, 0, 0, 0, 1, 0, 2};   // 150 dpi, shown in centimetres
     const Bytes thumb = {1, 2, 3}, oldIcc = {9, 9}, icc = {5, 6, 7}, nm = {'n', 'm'};
@@ -267,7 +267,7 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     EXPECT_EQ(ids, (std::vector<int>{1005, 1039, 1036})) << "the writer's own resources first";
     minipsd_layer_view v;
     ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
-    EXPECT_STREQ(v.blend, "mul ");
+    EXPECT_STREQ(v.blend_mode, "mul ");
     EXPECT_EQ(v.clipping, 1);
     EXPECT_EQ(v.flags, 0x0B) << "0x09 as given, 0x02 from hidden";
     char name[8];
@@ -275,7 +275,7 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     EXPECT_STREQ(name, "Mine") << "the name wins over a kept 'luni'";
     EXPECT_EQ(Bytes(v.blending_ranges.data, v.blending_ranges.data + v.blending_ranges.size),
               (Bytes{0, 0, 255, 255, 59, 60, 210, 220, 10, 10, 200, 200, 0, 0, 255, 255})) << "the ranges, as given";
-    const Bytes blocks(v.extra.data, v.extra.data + v.extra.size);
+    const Bytes blocks(v.additional_info.data, v.additional_info.data + v.additional_info.size);
     EXPECT_EQ(std::string(blocks.begin() + 4, blocks.begin() + 8), "luni") << "the writer's 'luni' first";
     EXPECT_EQ(Bytes(blocks.end() - static_cast<std::ptrdiff_t>(vmsk.size() + lsct.size() + tysh.size()), blocks.end()), vmsk + lsct + tysh)
         << "kept blocks follow it, in order, without the kept 'luni's";
@@ -320,14 +320,14 @@ TEST(MinipsdWriterTest, GroupsAndMasksAreWritten)
     const Bytes px = testImage(6, 4);
     Bytes ramp(std::size_t(5) * 3);
     for (std::size_t i = 0; i < ramp.size(); ++i) ramp[i] = static_cast<std::uint8_t>(i * 17);
-    const minipsd_mask mask{.top = 1, .left = 1, .bottom = 4, .right = 6, .color = 255, .flags = 0x02, .pixels = ramp.data()};
+    const minipsd_mask mask{.top = 1, .left = 1, .bottom = 4, .right = 6, .default_color = 255, .flags = 0x02, .pixels = ramp.data()};
     const Bytes kept = tagged("lsct", {0, 0, 0, 2, '8', 'B', 'I', 'M', 'n', 'o', 'r', 'm', 0, 0, 0, 1});   // with a sub-type
     const minipsd_layer layers[5] = {
-        {.name = "</Layer group>", .opacity = 255, .kind = MINIPSD_KIND_GROUP_END},
+        {.name = "</Layer group>", .opacity = 255, .section_divider_type = MINIPSD_SECTION_GROUP_END},
         {.name = "Masked", .rgba = px.data(), .opacity = 255, .mask = &mask},
-        {.name = "</Layer group>", .opacity = 255, .kind = MINIPSD_KIND_GROUP_END},
-        {.name = "Inner", .opacity = 255, .extra = view(kept), .kind = MINIPSD_KIND_GROUP_CLOSED},
-        {.name = "Outer", .opacity = 255, .blend = {'s', 'c', 'r', 'n'}, .kind = MINIPSD_KIND_GROUP}};
+        {.name = "</Layer group>", .opacity = 255, .section_divider_type = MINIPSD_SECTION_GROUP_END},
+        {.name = "Inner", .opacity = 255, .additional_info = view(kept), .section_divider_type = MINIPSD_SECTION_GROUP_CLOSED},
+        {.name = "Outer", .opacity = 255, .blend_mode = {'s', 'c', 'r', 'n'}, .section_divider_type = MINIPSD_SECTION_GROUP}};
     for (int compression : {MINIPSD_RLE, MINIPSD_RAW}) {
         SCOPED_TRACE(compression);
         minipsd_doc d = docOf(6, 4, layers, 5);
@@ -342,9 +342,9 @@ TEST(MinipsdWriterTest, GroupsAndMasksAreWritten)
         ASSERT_EQ(minipsd_reader_init(&r, file.data(), file.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
         std::vector<minipsd_layer_view> v(5);
         for (minipsd_layer_view &one : v) ASSERT_EQ(minipsd_reader_next_layer(r, &one), MINIPSD_MORE);
-        const std::uint8_t kinds[5] = {MINIPSD_KIND_GROUP_END, MINIPSD_KIND_LAYER, MINIPSD_KIND_GROUP_END,
-                                       MINIPSD_KIND_GROUP_CLOSED, MINIPSD_KIND_GROUP};
-        for (int i = 0; i < 5; ++i) EXPECT_EQ(v[i].kind, kinds[i]) << i;
+        const std::uint8_t kinds[5] = {MINIPSD_SECTION_GROUP_END, MINIPSD_SECTION_LAYER, MINIPSD_SECTION_GROUP_END,
+                                       MINIPSD_SECTION_GROUP_CLOSED, MINIPSD_SECTION_GROUP};
+        for (int i = 0; i < 5; ++i) EXPECT_EQ(v[i].section_divider_type, kinds[i]) << i;
         auto lsct = [](const minipsd_layer_view &one) {
             minipsd_block blk;
             for (std::size_t pos = 0; minipsd_layer_next_block(&one, &pos, &blk) == MINIPSD_MORE;)
@@ -358,7 +358,7 @@ TEST(MinipsdWriterTest, GroupsAndMasksAreWritten)
         ASSERT_TRUE(v[1].has_mask);
         const minipsd_mask &m = v[1].mask;
         EXPECT_EQ(std::tie(m.top, m.left, m.bottom, m.right), std::tie(mask.top, mask.left, mask.bottom, mask.right));
-        EXPECT_EQ(m.color, 255);
+        EXPECT_EQ(m.default_color, 255);
         EXPECT_EQ(m.flags, 0x02);
         EXPECT_EQ(m.rest.size, 2u) << "the padding of a mask with nothing more";
         Bytes got(ramp.size(), 0xEE);
@@ -509,7 +509,7 @@ TEST(MinipsdWriterTest, SixteenBitDocumentsAreWrittenAndReadBack)
     for (std::size_t i = 0; i < px.size(); ++i) px[i] = static_cast<std::uint16_t>(i * 2111 + (i % 4 == 3 ? 30000 : 0));
     for (std::size_t i = 0; i < ramp.size(); ++i) ramp[i] = static_cast<std::uint16_t>(i * 9000 + 1);
     const auto bytes = [](const std::vector<std::uint16_t> &v) { return reinterpret_cast<const std::uint8_t *>(v.data()); };
-    const minipsd_mask mask{.top = 1, .left = 1, .bottom = 3, .right = 5, .color = 255, .pixels = bytes(ramp)};
+    const minipsd_mask mask{.top = 1, .left = 1, .bottom = 3, .right = 5, .default_color = 255, .pixels = bytes(ramp)};
     const minipsd_layer layers[2] = {
         {.name = "Deep", .rgba = bytes(px), .opacity = 200, .top = 1, .left = 1, .bottom = 4, .right = 6, .mask = &mask},
         {.name = "Empty", .opacity = 255}};
@@ -630,12 +630,12 @@ TEST(MinipsdWriterTest, PsbDocumentsAreWrittenAndReadBack)
 {
     const Bytes px = testImage(5, 3), ramp{1, 2, 3, 4, 5, 6, 7, 8};
     Bytes lnk2 = {'8', 'B', 'I', 'M', 'l', 'n', 'k', '2', 0, 0, 0, 0, 0, 0, 0, 2, 7, 7};   // eight bytes of length
-    const minipsd_mask  mask{.top = 1, .left = 1, .bottom = 3, .right = 5, .color = 255, .pixels = ramp.data()};
+    const minipsd_mask  mask{.top = 1, .left = 1, .bottom = 3, .right = 5, .default_color = 255, .pixels = ramp.data()};
     const minipsd_layer layers[3] = {
         {.name = "Pic", .rgba = px.data(), .opacity = 200, .top = 1, .left = 1, .bottom = 4, .right = 6,
-         .extra = {lnk2.data(), lnk2.size()}, .mask = &mask},
-        {.name = "</Group>", .opacity = 255, .kind = MINIPSD_KIND_GROUP_END},
-        {.name = "Group", .opacity = 255, .kind = MINIPSD_KIND_GROUP}};
+         .additional_info = {lnk2.data(), lnk2.size()}, .mask = &mask},
+        {.name = "</Group>", .opacity = 255, .section_divider_type = MINIPSD_SECTION_GROUP_END},
+        {.name = "Group", .opacity = 255, .section_divider_type = MINIPSD_SECTION_GROUP}};
     for (int compression : {MINIPSD_RLE, MINIPSD_RAW}) {
         SCOPED_TRACE(compression);
         minipsd_doc d = docOf(6, 4, layers, 3);
@@ -670,7 +670,7 @@ TEST(MinipsdWriterTest, PsbDocumentsAreWrittenAndReadBack)
         EXPECT_STREQ(blk.key, "lnk2");
         EXPECT_EQ(Bytes(blk.data.data, blk.data.data + blk.data.size), (Bytes{7, 7}));
         ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
-        EXPECT_EQ(v.kind, MINIPSD_KIND_GROUP_END);
+        EXPECT_EQ(v.section_divider_type, MINIPSD_SECTION_GROUP_END);
 
         for (int keep : {0, 1}) {
             const minipsd_read_opts opts{keep};
@@ -729,13 +729,13 @@ TEST(MinipsdWriterTest, AnotherFormatTranslatesWhatTheDocumentKeeps)
     // A real mask 1 x 2, RLE, its rectangle after its flags and colour in the rest of the mask data.
     const Bytes real = {0, 1, 0, 2, 0, 2, 0, 11, 0, 22};
     const Bytes rest = Bytes{0, 255} + be32(0) + be32(0) + be32(2) + be32(1);
-    const minipsd_mask mask{.top = 1, .left = 1, .bottom = 3, .right = 5, .color = 255, .pixels = ramp.data(),
+    const minipsd_mask mask{.top = 1, .left = 1, .bottom = 3, .right = 5, .default_color = 255, .pixels = ramp.data(),
                             .real = {real.data(), real.size()}, .rest = {rest.data(), rest.size()}};
     const Bytes extra = tagged("cinf", {1, 2, 3, 4}) + tagged("Patt", {9, 9});
     const Bytes tail  = be32(0) + tagged("FMsk", Bytes(12, 7)) + tagged("Patt", {5});   // the last one unpadded
     const minipsd_blending_range ranges[1] = {{{{5, 6}, {250, 251}}, {{0, 0}, {255, 255}}}};
     const minipsd_layer layer{.name = "Pic", .rgba = px.data(), .opacity = 255, .top = 1, .left = 1, .bottom = 4, .right = 6,
-                              .extra = {extra.data(), extra.size()}, .mask = &mask, .blending_ranges = ranges,
+                              .additional_info = {extra.data(), extra.size()}, .mask = &mask, .blending_ranges = ranges,
                               .blending_range_count = 1};
     minipsd_doc d = docOf(6, 4, &layer, 1);
     d.layer_tail = {tail.data(), tail.size()};
@@ -794,10 +794,10 @@ TEST(MinipsdWriterTest, AnotherFormatRefusesWhatItCannotTranslate)
     EXPECT_EQ(minipsd_doc_check(&d, &asPsb), MINIPSD_OK) << "nothing kept: nothing to translate";
 
     const Bytes alph = tagged("Alph", {1, 2});
-    layer.extra = {alph.data(), alph.size()};
+    layer.additional_info = {alph.data(), alph.size()};
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK);
     EXPECT_EQ(minipsd_doc_check(&d, &asPsb), MINIPSD_ERR_UNSUPPORTED) << "a long key no file has verified";
-    layer.extra = {};
+    layer.additional_info = {};
 
     struct Case {
         const char *what;
@@ -945,7 +945,7 @@ TEST(MinipsdWriterTest, UnicodeNameGoesToLuniAndAsciiToThePascalString)
     // NUL: written as they are while the name is theirs, the writer's own once it changes.
     const Bytes legacy = {0xAF, 'o', 'l', 'w'};                     // "Zolw" with a Z dot, Windows-1250
     const Bytes luni   = tagged("luni", {0, 0, 0, 5, 0x01, 0x7B, 0, 'o', 0, 'l', 0, 'w', 0, 0, 0, 0});
-    minipsd_layer kept{.name = "\xC5\xBBolw", .rgba = px.data(), .opacity = 255, .extra = view(luni), .name_pascal = view(legacy)};
+    minipsd_layer kept{.name = "\xC5\xBBolw", .rgba = px.data(), .opacity = 255, .additional_info = view(luni), .name_pascal = view(legacy)};
     Psd k = read(write(docOf(2, 2, &kept, 1)));
     EXPECT_EQ(k.layers[0].pascalName, std::string(legacy.begin(), legacy.end())) << "the kept legacy name";
     EXPECT_EQ(k.layers[0].unicodeName, (std::u16string{u'\u017B', u'o', u'l', u'w', 0})) << "the kept 'luni', its NUL too";
@@ -977,7 +977,7 @@ TEST(MinipsdWriterTest, UnicodeNameGoesToLuniAndAsciiToThePascalString)
     };
     for (const auto &n : names) {
         SCOPED_TRACE(n.name ? n.name : "(null)");
-        const minipsd_layer one{.name = n.name, .rgba = px.data(), .opacity = 255, .extra = view(n.luni)};
+        const minipsd_layer one{.name = n.name, .rgba = px.data(), .opacity = 255, .additional_info = view(n.luni)};
         const Psd q = read(write(docOf(2, 2, &one, 1)));
         const std::string mine = n.name ? n.name : "";
         if (n.kept) { EXPECT_EQ(q.layers[0].unicodeName.size(), mine.size() + (n.name ? 1u : 0u)) << "the kept 'luni', its NUL too"; }

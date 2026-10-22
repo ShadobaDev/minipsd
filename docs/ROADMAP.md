@@ -226,7 +226,7 @@ whatever cannot be carried is reported.
       through `minipsd_read`); every 8-bit RGB file of psd-tools' set reads, and its `lost`
       matches what `examples/read_file.c` shows of it; the test frees the file's buffer before
       writing, under ASan.
-- [x] **S5.5** Unknown content kept (`E2`): `blend`, `clipping` and `extra` on the layer,
+- [x] **S5.5** Unknown content kept (`E2`): `blend_mode`, `clipping` and `additional_info` on the layer,
       `resources` and `layer_tail` on the document, written back as given; the reader gains
       `clipping` in the view and `layer_tail` in `minipsd_info`; the document's fields win over
       kept data with the same key (`luni`, 1005, 1039). `MINIPSD_LOST_EXTRA` goes: no release had
@@ -253,12 +253,12 @@ feature; a supplied composite needs nothing. See
 
 - [x] **S6.1** Layers smaller than the canvas: moved to S5.2, which the round trip needs first.
 - [x] **S6.2** Blend modes. Each mode is a four-character key in the layer record: the reader
-      returns it in `minipsd_layer_view.blend`, the writer writes `minipsd_layer.blend` as given
+      returns it in `minipsd_layer_view.blend_mode`, the writer writes `minipsd_layer.blend_mode` as given
       (S5.5); the composed composite draws them all as `norm`. Photoshop's keys are in the
       spec's [Blend modes](SPECIFICATION.md#blend-modes).
       *Done when:* a document with a layer in every mode reads back with every key from
       `psd-tools` (`roundtrip.py`, "blend-modes"); GIMP shows each mode, checked by hand once.
-- [x] **S6.3** Layer groups (`lsct`): `kind` on the layer and in the view; the writer writes
+- [x] **S6.3** Layer groups (`lsct`): `section_divider_type` on the layer and in the view; the writer writes
       the `lsct` block with the group's mode (`pass` by default), or a kept one of the same kind
       as it is; `minipsd_doc_check` checks the nesting.
       *Done when:* nested groups, one closed, written from scratch read back by `psd-tools` with
@@ -395,7 +395,7 @@ feature; a supplied composite needs nothing. See
       - **Read.** The composite first, then layers: grey, CMYK, Lab, multichannel and duotone
         of 8 and 16 bits; grey and RGB of 32; bitmap of 1; indexed of 8.
         As done: `MINIPSD_PLANES` (5) planes, the mode's colour channels then transparency at
-        `color_channels`; 1-bit samples as bytes (no packed form); `color_data` a view; the
+        `color_channels`; 1-bit samples as bytes (no packed form); `color_mode_data` a view; the
         composite un-matted in RGB only (psd-tools does the same; no file shows other modes);
         Photoshop's `Mtrn`/`Mt16`/`Mt32` say the composite has transparency. `roundtrip.py`
         checks every psd-tools file's layers and composite against psd-tools. `minipsd_read`
@@ -432,10 +432,14 @@ feature; a supplied composite needs nothing. See
         budget is refused before a byte is read. Units: the resources whole at init, the
         records whole, one channel or one layer for a decode; decoding by offset, not by a
         view's pointer.
-- [ ] **S6.16** Names, before 0.3.0 (S4.10) freezes them: fields take Adobe's descriptive names in
+- [x] **S6.16** Names, before 0.3.0 (S4.10) freezes them: fields take Adobe's descriptive names in
       snake_case, the four-character key in their comment; where Adobe gives none or an
       ambiguous one, psd-tools'. `kind` and `MINIPSD_KIND_*` (psd-tools' name for `lsct`'s
       "type") become `section_type` and `MINIPSD_SECTION_*`, or stay, decided here.
+      As done: the rule in the spec's API (Names), with its exceptions. `kind` became
+      `section_divider_type` and `MINIPSD_KIND_*` `MINIPSD_SECTION_*`, keeping their group
+      words; `blend` `blend_mode`, `extra` `additional_info`, a mask's `color` `default_color`,
+      `color_data` `color_mode_data`. `dpi`, `format` and the two names stay.
       *Done when:* the rule is in the spec, and every public field follows it or says why not.
 - [ ] **S6.17** Typed views of kept data: what the file's own bytes say, parsed into plain values;
       what needs another tool stays out. No allocation, no tree built: a view in, a small

@@ -224,9 +224,9 @@ static int mpsd__lsct_type(const minipsd_block *block)
     return (int)mpsd__get32(block->data.data);
 }
 
-/* Is there a kept 'lsct' of the layer's own kind?  It is then written as it is, its group mode
+/* Is there a kept 'lsct' of the layer's own type?  It is then written as it is, its group mode
    and sub-type with it, in place of the writer's own. */
-static int mpsd__kept_kind(minipsd_bytes extra, unsigned kind, unsigned psb)
+static int mpsd__kept_section(minipsd_bytes extra, unsigned kind, unsigned psb)
 {
     minipsd_block block;
     size_t        pos = 0, next;
@@ -251,7 +251,7 @@ static void mpsd__own_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned fro
 {
     const char   *name = l->name;
     minipsd_bytes kept;
-    if (named && mpsd__kept_luni(l->extra, from, &kept)) {
+    if (named && mpsd__kept_luni(l->additional_info, from, &kept)) {
         mpsd__put(s, "8BIMluni", 8);
         mpsd__u32(s, (uint32_t)kept.size);
         mpsd__put(s, kept.data, kept.size);
@@ -264,12 +264,12 @@ static void mpsd__own_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned fro
         mpsd__utf16(name, mpsd__unit_out, s);
         mpsd__zeros(s, mpsd__pad(luni, 4) - luni);
     }
-    if (l->kind && !mpsd__kept_kind(l->extra, l->kind, from)) {   /* the group marker, unless kept */
-        const char *mode = l->blend[0] || l->blend[1] || l->blend[2] || l->blend[3] ? l->blend : "pass";
+    if (l->section_divider_type && !mpsd__kept_section(l->additional_info, l->section_divider_type, from)) {   /* the group marker, unless kept */
+        const char *mode = l->blend_mode[0] || l->blend_mode[1] || l->blend_mode[2] || l->blend_mode[3] ? l->blend_mode : "pass";
         mpsd__put(s, "8BIMlsct", 8);
-        mpsd__u32(s, l->kind == MINIPSD_KIND_GROUP_END ? MPSD__LSCT_TYPE : MPSD__LSCT_FULL);
-        mpsd__u32(s, l->kind);
-        if (l->kind != MINIPSD_KIND_GROUP_END) { mpsd__put(s, "8BIM", 4); mpsd__put(s, mode, 4); }
+        mpsd__u32(s, l->section_divider_type == MINIPSD_SECTION_GROUP_END ? MPSD__LSCT_TYPE : MPSD__LSCT_FULL);
+        mpsd__u32(s, l->section_divider_type);
+        if (l->section_divider_type != MINIPSD_SECTION_GROUP_END) { mpsd__put(s, "8BIM", 4); mpsd__put(s, mode, 4); }
     }
 }
 
@@ -278,7 +278,7 @@ static void mpsd__own_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned fro
 static int mpsd__kept_names(const minipsd_layer *l, unsigned psb)
 {
     minipsd_bytes luni;
-    if (mpsd__kept_luni(l->extra, psb, &luni)) {
+    if (mpsd__kept_luni(l->additional_info, psb, &luni)) {
         const size_t units = luni.size >= MPSD__LEN ? mpsd__get32(luni.data) : 0;
         return luni.size >= MPSD__LEN && units <= (luni.size - MPSD__LEN) / 2
             && mpsd__same_name(l->name, luni.data + MPSD__LEN, units * 2, 0);
@@ -288,16 +288,16 @@ static int mpsd__kept_names(const minipsd_layer *l, unsigned psb)
 
 /* Blocks kept from a file, laid out as the from format lays them out, written in the out format,
    after the writer's own, but where the layer's own fields win: 'luni' (mpsd__own_blocks wrote the
-   name) and an 'lsct' of another kind than the layer's go.  minipsd_doc_check has walked them, and
+   name) and an 'lsct' of another type than the layer's go.  minipsd_doc_check has walked them, and
    checked they can change format. */
 static void mpsd__kept_blocks(mpsd__sink *s, const minipsd_layer *l, unsigned from, unsigned out)
 {
-    const minipsd_bytes extra = l->extra;
+    const minipsd_bytes extra = l->additional_info;
     minipsd_block block;
     size_t        pos = 0, next;
     while (pos < extra.size && mpsd__block(extra, pos, from, &block, &next) == MINIPSD_OK) {
         const int type = mpsd__lsct_type(&block);
-        if (!mpsd__tag((const uint8_t *)block.key, "luni") && (type < 0 || type == (int)l->kind)) {
+        if (!mpsd__tag((const uint8_t *)block.key, "luni") && (type < 0 || type == (int)l->section_divider_type)) {
             if (from == out) mpsd__put(s, extra.data + pos, next - pos);
             else mpsd__put_block(s, extra.data + pos, (size_t)(block.data.data - (extra.data + pos)), block.data.size, block.data.size, out);
         }
@@ -313,7 +313,7 @@ static void mpsd__mask_data(mpsd__sink *s, const minipsd_mask *m)
     mpsd__u32(s, (uint32_t)(MPSD__MASK_HEAD + (m->rest.size ? m->rest.size : MPSD__MASK_PAD)));
     mpsd__u32(s, (uint32_t)m->top);    mpsd__u32(s, (uint32_t)m->left);
     mpsd__u32(s, (uint32_t)m->bottom); mpsd__u32(s, (uint32_t)m->right);
-    mpsd__u8(s, m->color);
+    mpsd__u8(s, m->default_color);
     mpsd__u8(s, m->flags);
     if (m->rest.size) mpsd__put(s, m->rest.data, m->rest.size);
     else              mpsd__zeros(s, MPSD__MASK_PAD);
@@ -407,7 +407,7 @@ static void mpsd__layer_record(mpsd__sink *s, const minipsd_doc *d, const minips
         mpsd__putlen(s, sizes[k], out);
     }
     mpsd__put(s, "8BIM", 4);
-    mpsd__put(s, l->blend[0] || l->blend[1] || l->blend[2] || l->blend[3] ? l->blend : "norm", 4);
+    mpsd__put(s, l->blend_mode[0] || l->blend_mode[1] || l->blend_mode[2] || l->blend_mode[3] ? l->blend_mode : "norm", 4);
     mpsd__u8(s, l->opacity);
     mpsd__u8(s, l->clipping);
     mpsd__u8(s, (l->flags & ~MPSD__FLAG_HIDDEN) | (l->hidden ? MPSD__FLAG_HIDDEN : 0x00u));
@@ -624,7 +624,7 @@ static int mpsd__kept_ok(const minipsd_doc *d, unsigned out)
     }
     for (i = 0; i < d->layer_count; ++i) {
         const minipsd_layer *l     = &d->layers[i];
-        const minipsd_bytes  extra = l->extra;
+        const minipsd_bytes  extra = l->additional_info;
         if ((extra.size && !extra.data) || (l->blending_range_count && !l->blending_ranges)
             || (l->name_pascal.size && !l->name_pascal.data)) return MINIPSD_ERR_ARG;
         if (l->name_pascal.size > 255) return MINIPSD_ERR_SIZE;
@@ -680,12 +680,12 @@ static int mpsd__groups_ok(const minipsd_doc *d)
 {
     size_t i, open = 0;
     for (i = 0; i < d->layer_count; ++i) {
-        const unsigned kind = d->layers[i].kind;
-        if (kind == MINIPSD_KIND_GROUP_END) ++open;
-        else if (kind == MINIPSD_KIND_GROUP || kind == MINIPSD_KIND_GROUP_CLOSED) {
+        const unsigned kind = d->layers[i].section_divider_type;
+        if (kind == MINIPSD_SECTION_GROUP_END) ++open;
+        else if (kind == MINIPSD_SECTION_GROUP || kind == MINIPSD_SECTION_GROUP_CLOSED) {
             if (!open) return 0;
             --open;
-        } else if (kind != MINIPSD_KIND_LAYER) {
+        } else if (kind != MINIPSD_SECTION_LAYER) {
             return 0;
         }
     }
