@@ -978,7 +978,8 @@ static int mpsd__zip_channel(minipsd_writer *w, size_t i, int k)
                 = row[mpsd__at(x, (ptrdiff_t)src.step, wide)];
         if (d->compression == MINIPSD_ZIP_PREDICTED) mpsd__predict(out, src.width, mpsd__doc_depth(d));
     }
-    if (w->deflate(w->deflate_user, w->zip_plane, bytes * src.height, w->zip_out, &size) || size > w->zip_room)
+    if (!w->deflate   /* never: minipsd_doc_check asks for one; spelled out for static analysers */
+        || w->deflate(w->deflate_user, w->zip_plane, bytes * src.height, w->zip_out, &size) || size > w->zip_room)
         return MINIPSD_ERR_WRITE;
     w->zip_size    = size;
     w->zip_layer   = i;
