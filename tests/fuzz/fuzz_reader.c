@@ -128,7 +128,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     check_short(r, rc, size);
     if (rc != MINIPSD_OK) return 0;
 
-    while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE) {}
+    for (pos = 0; minipsd_reader_next_resource(r, &pos, &res) == MINIPSD_MORE;) {}
     while ((rc = minipsd_reader_next_layer(r, &layer)) == MINIPSD_MORE) {
         (void)minipsd_layer_name(&layer, name, sizeof name, &need);   /* often too small: truncation too */
         for (pos = 0; minipsd_layer_next_block(&layer, &pos, &block) == MINIPSD_MORE;) {}

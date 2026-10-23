@@ -95,12 +95,12 @@ TEST(MinipsdCompositeTest, ALayerBlendsAtItsRectangleClippedToTheCanvas)
     // A 2 x 2 layer at x 3, y -1 on a 4 x 3 canvas: only its bottom-left pixel lands, at (3, 0).
     const Bytes px = {1, 2, 3, 255,  4, 5, 6, 255,
                       7, 8, 9, 255,  10, 11, 12, 255};
-    const minipsd_layer edge{.name = "Edge", .rgba = px.data(), .opacity = 255, .top = -1, .left = 3, .bottom = 1, .right = 5};
+    const minipsd_layer edge{.name = "Edge", .pixels = px.data(), .opacity = 255, .top = -1, .left = 3, .bottom = 1, .right = 5};
     Bytes want(std::size_t(4) * 3 * 4, 0);
     std::copy(px.begin() + 8, px.begin() + 12, want.begin() + std::ptrdiff_t(3) * 4);
     EXPECT_EQ(composite(4, 3, &edge, 1), matted(want));
 
-    const minipsd_layer outside{.name = "Out", .rgba = px.data(), .opacity = 255, .top = 3, .left = -2, .bottom = 5, .right = 0};
+    const minipsd_layer outside{.name = "Out", .pixels = px.data(), .opacity = 255, .top = 3, .left = -2, .bottom = 5, .right = 0};
     EXPECT_EQ(composite(4, 3, &outside, 1), matted(Bytes(std::size_t(4) * 3 * 4, 0))) << "wholly off the canvas: nothing";
 }
 
@@ -133,8 +133,8 @@ TEST(MinipsdCompositeTest, UnmattingUndoesTheMatteWithinItsRounding)
 TEST(MinipsdCompositeTest, SixteenBitLayersComposeAndMatte)
 {
     const std::uint16_t red[4] = {65535, 0, 0, 65535}, blue[4] = {0, 0, 65535, 32768};
-    const minipsd_layer layers[2] = {{.name = "Red", .rgba = reinterpret_cast<const std::uint8_t *>(red), .opacity = 255},
-                                     {.name = "Blue", .rgba = reinterpret_cast<const std::uint8_t *>(blue), .opacity = 255}};
+    const minipsd_layer layers[2] = {{.name = "Red", .pixels = reinterpret_cast<const std::uint8_t *>(red), .opacity = 255},
+                                     {.name = "Blue", .pixels = reinterpret_cast<const std::uint8_t *>(blue), .opacity = 255}};
     minipsd_doc d = docOf(1, 1, layers, 2);
     d.depth = 16;
     std::uint16_t buffer[4];
@@ -148,7 +148,7 @@ TEST(MinipsdCompositeTest, SixteenBitLayersComposeAndMatte)
     EXPECT_EQ(got[3], 65535);
 
     const std::uint16_t half[4] = {0, 65535, 0, 32768};   // over white: 65535 * (1 - a) + c * a
-    const minipsd_layer one{.name = "Half", .rgba = reinterpret_cast<const std::uint8_t *>(half), .opacity = 255};
+    const minipsd_layer one{.name = "Half", .pixels = reinterpret_cast<const std::uint8_t *>(half), .opacity = 255};
     d = docOf(1, 1, &one, 1);
     d.depth = 16;
     std::memcpy(got, mpsd__composite_row(&c, 0), sizeof got);

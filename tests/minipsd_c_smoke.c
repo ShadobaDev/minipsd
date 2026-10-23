@@ -41,8 +41,8 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
 
     for (i = 0; i < sizeof px; ++i) px[i] = (uint8_t)(i * 17);
     memset(layers, 0, sizeof layers);   /* the structs grow at the end: zero is every default */
-    layers[0].name = "Template"; layers[0].rgba = px;   layers[0].opacity = 255; layers[0].hidden = 0;
-    layers[1].name = "Layer";    layers[1].rgba = NULL; layers[1].opacity = 255; layers[1].hidden = 0;
+    layers[0].name = "Template"; layers[0].pixels = px;   layers[0].opacity = 255; layers[0].hidden = 0;
+    layers[1].name = "Layer";    layers[1].pixels = NULL; layers[1].opacity = 255; layers[1].hidden = 0;
     layers[1].blending_ranges = &blend_if; layers[1].blending_range_count = 1;
     memset(&doc, 0, sizeof doc);
     doc.width = 3; doc.height = 2; doc.dpi = 300.0; doc.layers = layers; doc.layer_count = 2;
@@ -88,13 +88,13 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
         uint8_t            got[sizeof px];
         uint8_t            rws[256];
         char               name[16];
-        size_t             rneed, pos = 0, resources = 0, blocks = 0;
+        size_t             rneed, pos = 0, rpos = 0, resources = 0, blocks = 0;
 
         if (minipsd_reader_workspace_size(&rneed) != MINIPSD_OK || rneed > sizeof rws
             || minipsd_reader_init(&rd, b.data, b.size, rws, rneed, NULL, &info) != MINIPSD_OK
             || info.width != 3 || info.height != 2 || info.layer_count != 2 || minipsd_reader_needed(rd) != 0)
             return -103;
-        while (minipsd_reader_next_resource(rd, &res) == MINIPSD_MORE) ++resources;
+        while (minipsd_reader_next_resource(rd, &rpos, &res) == MINIPSD_MORE) ++resources;
         if (resources != 1)
             return -104;
         {   /* the resource the writer wrote, found and parsed; a version info built by hand */
@@ -208,7 +208,7 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
         minipsd_decode_opts deep;
         smoke_buf           c;
         for (i = 0; i < sizeof px16 / sizeof px16[0]; ++i) px16[i] = (uint16_t)(px[i] * 257u);
-        layers[0].rgba = (const uint8_t *)px16;
+        layers[0].pixels = (const uint8_t *)px16;
         doc.depth      = 16;
         c.data = file; c.size = 0; c.capacity = sizeof file;
         memset(&deep, 0, sizeof deep);

@@ -48,7 +48,7 @@ int main(void)
 {
     static uint8_t rgba[64 * 64 * 4];   /* straight alpha, rows top down */
     /* Fields left out are zero, the defaults: visible, the full canvas, RLE. */
-    minipsd_layer  layer = {.name = "Hello", .rgba = rgba, .opacity = 255};
+    minipsd_layer  layer = {.name = "Hello", .pixels = rgba, .opacity = 255};
     minipsd_doc    doc   = {.width = 64, .height = 64, .dpi = 72.0, .layers = &layer, .layer_count = 1};
     FILE          *f;
     int            i, rc;
@@ -177,7 +177,7 @@ The examples below write this document:
 
 ```c
 minipsd_layer layers[2] = {
-    { .name = "Template", .rgba = rgba, .opacity = 255 },   /* width * height * 4, straight alpha */
+    { .name = "Template", .pixels = rgba, .opacity = 255 },   /* width * height * 4, straight alpha */
     { .name = "Layer", .opacity = 255 },                    /* an empty layer above it */
 };
 minipsd_doc doc = { .width = width, .height = height, .dpi = 300.0, .layers = layers, .layer_count = 2 };
@@ -185,11 +185,11 @@ minipsd_doc doc = { .width = width, .height = height, .dpi = 300.0, .layers = la
 
 Name the fields. The structs only grow at the end, and every field left out is zero, which is
 the default: visible, RLE, and a layer that covers the full canvas. A layer of another size sets
-its rectangle on the canvas, which may reach past the edges; `rgba` then holds that rectangle:
+its rectangle on the canvas, which may reach past the edges; `pixels` then holds that rectangle:
 
 ```c
 /* 64 x 32 pixels, its top-left corner at x 20, y 10 */
-minipsd_layer logo = { .name = "Logo", .rgba = logo_rgba, .opacity = 255,
+minipsd_layer logo = { .name = "Logo", .pixels = logo_rgba, .opacity = 255,
                        .top = 10, .left = 20, .bottom = 42, .right = 84 };
 ```
 
@@ -202,8 +202,8 @@ shows:
 minipsd_mask  fade   = { .top = 0, .left = 0, .bottom = 32, .right = 64, .pixels = ramp };
 minipsd_layer layers[4] = {
     { .name = "</Layer group>", .opacity = 255, .section_divider_type = MINIPSD_SECTION_GROUP_END },
-    { .name = "Logo", .rgba = logo_rgba, .opacity = 255, .bottom = 32, .right = 64, .mask = &fade },
-    { .name = "Shadow", .rgba = shadow_rgba, .opacity = 128, .bottom = 32, .right = 64 },
+    { .name = "Logo", .pixels = logo_rgba, .opacity = 255, .bottom = 32, .right = 64, .mask = &fade },
+    { .name = "Shadow", .pixels = shadow_rgba, .opacity = 128, .bottom = 32, .right = 64 },
     { .name = "Branding", .opacity = 255, .section_divider_type = MINIPSD_SECTION_GROUP },
 };
 ```
@@ -213,10 +213,28 @@ a `uint16_t` in host order, 0 to 65535; the pointers keep their type, so cast:
 
 ```c
 uint16_t     *deep = malloc((size_t)width * height * 4 * sizeof *deep);   /* straight alpha */
-minipsd_layer layer = { .name = "Deep", .rgba = (const uint8_t *)deep, .opacity = 255 };
+minipsd_layer layer = { .name = "Deep", .pixels = (const uint8_t *)deep, .opacity = 255 };
 minipsd_doc   doc = { .width = width, .height = height, .dpi = 300.0, .layers = &layer, .layer_count = 1,
                       .depth = 16 };
 ```
+
+Another colour mode sets `color_mode` (`MINIPSD_MODE_*`). A pixel is then the mode's colour
+channels then transparency, as the file stores them: nothing is converted, and CMYK is inverted
+(255 no ink). The writer composes RGB only, so every other mode brings its composite:
+
+```c
+uint8_t      *cmyka = malloc((size_t)width * height * 5);   /* C, M, Y, K, transparency */
+uint8_t      *flat  = malloc((size_t)width * height * 5);   /* the same, rendered by you */
+minipsd_layer ink = { .name = "Ink", .pixels = cmyka, .opacity = 255 };
+minipsd_doc   doc = { .width = width, .height = height, .dpi = 300.0, .layers = &ink, .layer_count = 1,
+                      .composite = flat, .color_mode = MINIPSD_MODE_CMYK };
+```
+
+RGB and grey also come at 32 bits (`depth` 32), every sample a `float` from 0.0 to 1.0, again with
+a composite. Bitmap, indexed and multichannel documents have no layers, only the composite: a
+bitmap one is `depth` 1, a byte a pixel (0 white, any other black), which the writer packs; an
+indexed one is a palette entry a pixel, its 768-byte palette in `color_mode_data`; a multichannel
+one comes from a file (`minipsd_read`), its composite copied as stored.
 
 A document wider or taller than 30 000 px, a long webtoon strip say, is written as a PSB, the
 large document format, up to 300 000 px a side; nothing else in it changes:
@@ -401,7 +419,8 @@ Only `init` is required. Every step below it is independent of the others, so sk
 do not need: a file manager stops after `init`; a viewer goes straight to the composite, as
 [Read a PSD](#read-a-psd) could; a layer exporter never decodes the composite. Resources and
 layers are iterators: each call returns `MINIPSD_MORE` with one item, then `MINIPSD_OK` when
-there are no more. Calling `init` again restarts both.
+there are no more. The resources' cursor is yours (`pos`, from 0), as a layer's blocks' is: walk
+them as often as you like. The layers' is the reader's: calling `init` again restarts it.
 
 A PSB (Photoshop's large document format, sides up to 300 000 px) reads through the same calls.
 `info.format` is `MINIPSD_PSB` then; the decoded pixels, names and rectangles are no different,
@@ -570,7 +589,8 @@ come as bytes, for a parser of their own. To list what a file holds, walk the re
 name each id:
 
 ```c
-while (minipsd_reader_next_resource(r, &res) == MINIPSD_MORE) {
+size_t pos = 0;
+while (minipsd_reader_next_resource(r, &pos, &res) == MINIPSD_MORE) {
     const char *name = minipsd_resource_id_name(res.id);   /* Adobe's name; NULL if unlisted */
     printf("%u %s, %zu bytes\n", (unsigned)res.id, name ? name : "(unknown)", res.data.size);
 }
@@ -617,6 +637,10 @@ rc = minipsd_write(doc, NULL, to_file, f);
 minipsd_doc_free(doc);
 ```
 
+Every colour mode and depth the writer takes comes through, with its colour mode data (a
+palette, a duotone's inks); a file it could not take back, such as 32-bit CMYK, is
+`MINIPSD_ERR_UNSUPPORTED`.
+
 The document lives in one block: from `MINIPSD_MALLOC`, freed by `minipsd_doc_free`, or in
 memory of yours with `minipsd_read_size` and `minipsd_read_into`. Nothing in it points into the
 file, so the file's bytes can go as soon as the call returns.
@@ -648,7 +672,7 @@ flowchart TD
     read["minipsd_read(data, ..., &opts, &doc, &lost)<br>opts.stored = 1"]
     read -. "every layer's channels and the composite, copied as stored" .-> doc["doc"]
     doc --> pick["the layer to change:<br>minipsd_reader_init, minipsd_reader_next_layer,<br>minipsd_decode_layer, from the same data"]
-    pick --> set["layer.rgba = new pixels<br>layer.stored = NULL"]
+    pick --> set["layer.pixels = new pixels<br>layer.stored = NULL"]
     set --> write["minipsd_write(doc, NULL, callback, user)"]
     write -. "that layer encoded, the others copied" .-> out["the file"]
     classDef minipsd stroke-dasharray: 5 5
@@ -672,6 +696,41 @@ Each is planned work. If a file of yours sets one, please
 [open an issue](https://github.com/ShadobaDev/minipsd/issues) with the file, or with what
 made it (the program, and the feature you used): that is what sets the order of the work.
 [examples/read_file.c](../examples/read_file.c) prints the bits of any file.
+
+## With libvips
+
+minipsd writes and reads PSD; it renders nothing. When your layers are libvips images, let
+libvips flatten them and hand minipsd the result as the document's composite, the image a
+viewer that ignores layers shows. The two share their memory layout (8-bit RGBA, straight
+alpha, rows top down), so nothing is converted.
+[examples/vips_composite.c](../examples/vips_composite.c) is the whole program; its steps:
+
+1. **Layers out of libvips.** `vips_image_write_to_memory` gives a layer's `pixels` as it is
+   (a 3-band image takes `vips_bandjoin_const1(image, 255)` first).
+2. **The composite in libvips.** `vips_composite` onto a transparent canvas of the document's
+   size, each layer at its rectangle (`"x"`, `"y"`), its opacity multiplied into alpha
+   (`vips_linear` on the alpha band), hidden layers and group markers left out, blend keys
+   mapped by the table in [Working with libvips](SPECIFICATION.md#working-with-libvips). Modes
+   without a counterpart, masks, clipping and effects are yours to draw.
+3. **Written by minipsd.** The render goes into `doc.composite`, `composite_matted` 0: the writer
+   mattes it as the format wants.
+4. **Read back** (the example's check): `minipsd_decode_composite` into a buffer that
+   `vips_image_new_from_memory` wraps without a copy gives the render again, exactly where alpha is
+   full and within the un-matting bound elsewhere.
+
+```c
+VipsImage *in[3] = { canvas, background, disc }, *out;
+int modes[2] = { VIPS_BLEND_MODE_OVER, VIPS_BLEND_MODE_MULTIPLY };   /* "norm", "mul " */
+int xs[2] = { 0, -32 }, ys[2] = { 0, 96 };                            /* the layers' left, top */
+VipsArrayInt *x = vips_array_int_new(xs, 2), *y = vips_array_int_new(ys, 2);
+vips_composite(in, &out, 3, modes, "x", x, "y", y, NULL);
+doc.composite = vips_image_write_to_memory(out, &size);   /* width * height * 4, straight alpha */
+```
+
+libvips computes lazily, in strips; minipsd takes a whole layer and a whole composite, so each is
+materialised before writing. Reading, bands of rows (`minipsd_decode_opts`) fit libvips' strips.
+Build the example with `-DMINIPSD_VIPS_EXAMPLE=ON`: on Windows CMake fetches libvips' prebuilt
+build, elsewhere pkg-config finds yours. minipsd itself never depends on libvips.
 
 ## Memory and ownership
 

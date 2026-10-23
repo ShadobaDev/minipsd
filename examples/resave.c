@@ -110,7 +110,7 @@ int main(int argc, char **argv)
     n = (size_t)(layers[index].right - layers[index].left) * (size_t)(layers[index].bottom - layers[index].top);
     for (i = 0; i < n * 4; ++i)
         if (i % 4 != 3) pixels[i] = (uint8_t)(255 - pixels[i]);   /* invert the colour, keep the alpha */
-    layers[index].rgba   = pixels;
+    layers[index].pixels   = pixels;
     layers[index].stored = NULL;                                  /* encode this one */
     doc->layers = layers;
     for (i = 0; i < doc->layer_count; ++i) copied += layers[i].stored != NULL;

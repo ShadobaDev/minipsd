@@ -41,8 +41,7 @@ struct minipsd_reader {
     uint32_t       channels;      /* the composite: how many channels, 1..MPSD__MAX_CHANNELS     */
     int            composite_alpha; /* the composite: non-zero if it has an alpha channel        */
     uint64_t       image_start;   /* the composite: where its channel data starts                */
-    uint64_t       res_start;     /* the resources: where the first and the next one start, and   */
-    uint64_t       res_next;      /* where they end                                               */
+    uint64_t       res_start;     /* the resources: where the first one starts, where they end    */
     uint64_t       res_end;
     uint64_t       li_start;      /* the layer info: its first record, and the end of its content */
     uint64_t       li_end;
@@ -135,9 +134,6 @@ static void mpsd__info_clear(minipsd_info *i)
     i->color_mode_data.data = NULL;
     i->color_mode_data.size = 0;
 }
-
-/* Colour modes: bitmap, grey, indexed, RGB, CMYK, multichannel, duotone, Lab. */
-static int mpsd__mode_ok(uint32_t mode) { return mode <= 4 || (mode >= 7 && mode <= 9); }
 
 /* The layer count at `at`, then the records and their channel data up to `end`: the layer info. */
 static int mpsd__layers_at(minipsd_reader *r, uint64_t at, uint64_t end, minipsd_info *in)
@@ -233,11 +229,11 @@ static int mpsd__scan(minipsd_reader *r, minipsd_info *info)
     /* The image resources, all of them: the resolution and the ICC profile are among them. */
     rc = mpsd__length(r, at, 0, &length);
     if (rc != MINIPSD_OK) return rc;
-    r->res_start = r->res_next = at + MPSD__LEN;
-    r->res_end   = r->res_next + length;
+    r->res_start = at + MPSD__LEN;
+    r->res_end   = r->res_start + length;
     rc = mpsd__have(r, 0, r->res_end);
     if (rc != MINIPSD_OK) return rc;
-    for (at = r->res_next; at < r->res_end;) {                 /* checks every block as well */
+    for (at = r->res_start; at < r->res_end;) {                 /* checks every block as well */
         minipsd_resource res;
         rc = mpsd__resource(r, at, &res, &at);
         if (rc != MINIPSD_OK) return rc;
@@ -273,7 +269,7 @@ static int mpsd__scan(minipsd_reader *r, minipsd_info *info)
     }
     r->layer_count = in.layer_count;
     r->record_next = r->li_start;
-    r->rgb         = in.color_mode == MPSD__MODE_RGB;
+    r->rgb         = in.color_mode == MINIPSD_MODE_RGB;
     r->depth       = in.depth;
     r->shift       = mpsd__shift(in.depth);
     r->colors      = mpsd__colors(in.color_mode, in.channels - (in.composite_has_alpha ? 1u : 0u));
@@ -322,7 +318,7 @@ MINIPSDDEF int minipsd_reader_init(minipsd_reader **out, const void *data, size_
     r->rgb          = 0;
     r->depth        = r->shift = r->colors = 0;
     r->psb          = 0;
-    r->res_start    = r->res_next = r->res_end = 0;
+    r->res_start    = r->res_end = 0;
     r->li_start     = r->li_end = 0;
     r->layer_count  = r->layer_next = 0;
     r->record_next  = r->data_next = 0;
@@ -339,21 +335,24 @@ MINIPSDDEF uint64_t minipsd_reader_needed(const minipsd_reader *r)
     return r ? r->needed : 0;
 }
 
-MINIPSDDEF int minipsd_reader_next_resource(minipsd_reader *r, minipsd_resource *res)
+MINIPSDDEF int minipsd_reader_next_resource(const minipsd_reader *r, size_t *pos, minipsd_resource *res)
 {
-    if (!r || !res || !r->ready) return MINIPSD_ERR_ARG;
-    if (r->res_next >= r->res_end) return MINIPSD_OK;
-    (void)mpsd__resource(r, r->res_next, res, &r->res_next);   /* init checked every block */
+    uint64_t next;
+    int      rc;
+    if (!r || !pos || !res || !r->ready) return MINIPSD_ERR_ARG;
+    if (*pos >= r->res_end - r->res_start) return MINIPSD_OK;
+    rc = mpsd__resource(r, r->res_start + *pos, res, &next);   /* a pos it did not give: checked again */
+    if (rc != MINIPSD_OK) return rc;
+    *pos = (size_t)(next - r->res_start);                      /* the section lies in the buffer */
     return MINIPSD_MORE;
 }
 
 MINIPSDDEF int minipsd_reader_find_resource(const minipsd_reader *r, uint16_t id, minipsd_resource *res)
 {
     minipsd_resource found;
-    uint64_t         at;
+    size_t           pos = 0;
     if (!r || !res || !r->ready) return MINIPSD_ERR_ARG;
-    for (at = r->res_start; at < r->res_end;) {
-        (void)mpsd__resource(r, at, &found, &at);               /* init checked every block */
+    while (minipsd_reader_next_resource(r, &pos, &found) == MINIPSD_MORE) {
         if (found.id == id) {
             *res = found;
             return MINIPSD_OK;

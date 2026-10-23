@@ -183,10 +183,11 @@ Additive. See [Reader](CODE-ARCH.md#reader).
       - Extensibility rules: the reader needs no opt-in macro;
       - README (what it reads), the header's brief, the CMake description (SBOM, `.pc`,
         packages), USE-CASES (what is done), CODE-ARCH (stages).
-- [ ] **S4.10** Release **0.3.0** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md), with stages 4 to 6:
+- [ ] **S4.10** Release **0.3.0** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md), with stages 4 to 6
+      and S7.1, the API frozen from then:
       `minipsd_write_opts` became a parameter of the write calls, a break, so it is a MINOR under
       the pre-1.0 rules. Before it: regenerate [COMPATIBILITY.md](COMPATIBILITY.md) with the new
-      version, and have one CI job fetch psd-tools' files (`MINIPSD_PSD_TOOLS_FILES`), so that
+      version, and have one CI job fetch psd-tools' files (`MINIPSD_PSD_TOOLS_FILES`; done: `linux-gcc`), so that
       Photoshop's ZIP files are checked through zlib there too, not only locally.
 
 ## 5. Round trip and conveniences
@@ -401,7 +402,8 @@ feature; a supplied composite needs nothing. See
         checks every psd-tools file's layers and composite against psd-tools. `minipsd_read`
         stays 8- and 16-bit RGB until the writer takes the other modes.
       - **Write.** The same modes at 1, 8, 16 and 32 bits, each where Photoshop allows it; the
-        palette and the duotone data written as given.
+        palette and the duotone data written as given. *Moved to S6.19*: S6.13 is done for
+        reading.
       *Done when:* psd-tools' files of every mode and depth decode to the samples psd-tools
       gives, and COMPATIBILITY.md has no file described for its mode or depth; documents of
       each mode and depth that minipsd writes decode the same in psd-tools and in minipsd; the
@@ -478,26 +480,44 @@ feature; a supplied composite needs nothing. See
         decide whether that is acceptable. It would give a text layer's text (`TySh`, key
         `Txt `), a smart object's name, effects' flags.
       *Done when:* as S6.17's.
+- [x] **S6.19** Every colour mode and depth written (S6.13's Write half). Reading them is done
+      (S6.13): any mode and depth is described and decoded. The writer takes 8- and 16-bit RGB
+      only (`minipsd_doc` has no colour mode), so this step is writing grey, CMYK, Lab,
+      multichannel and duotone at 8 and 16 bits, grey and RGB at 32, bitmap at 1, indexed at 8,
+      each where Photoshop's files have layers (bitmap, indexed and multichannel have none); the
+      palette and the duotone data written as given. `minipsd_read` then takes every mode. The
+      saver (S7.4) needs it for images that are not RGB.
+      *Done when:* documents of each mode and depth that minipsd writes decode the same in
+      psd-tools and in minipsd, and `minipsd_read` round-trips psd-tools' files of every mode.
 
 ## 7. Interoperability
 
 libvips is where minipsd is meant to be used: as a loader and saver of PSD and PSB, and in
 programs that render a composite with libvips and write the layers with minipsd. Steps 7.2 on are
-the loader and saver; how they reach libvips is not this roadmap's.
+the loader and saver, built first as a plugin in this repository (`libvips-plugin/`): libvips
+foreign classes registered by the program that links them, then, if libvips' prebuilt builds
+load modules, a loadable module. Platemaker uses it, which is the proof; a pull request to libvips
+comes at the end of stage 7, or of 8, with the same files.
 
-- [ ] **S7.1** `examples/vips_composite.c`: a document's composite rendered with libvips
+- [x] **S7.1** `examples/vips_composite.c`: a document's composite rendered with libvips
       (`vips_composite`, blend keys mapped as in the spec's
       [Working with libvips](SPECIFICATION.md#working-with-libvips)), then written with it;
       built and run only when pkg-config finds `vips`. A "With libvips" chapter in
       [MANUAL.md](MANUAL.md). The pattern a program such as Platemaker follows to export layered
       PSDs with 0.3.0.
+      As done: behind `MINIPSD_VIPS_EXAMPLE` (off by default), not pkg-config alone: Windows
+      fetches libvips' prebuilt "web" build pinned to the newest release (8.18.7), elsewhere
+      pkg-config. Layers made in the example, or an 8-bit RGB file's (`minipsd_read`); the file
+      is read back and its composite must be the render, which is the test. CI's `msvc` job
+      runs it; locally it also runs on `tests/fixtures/Test-g-example.psd`. Tracking libvips'
+      master is left for later.
 - [ ] **S7.2** *design.* minipsd as a libvips loader and saver:
       - **Loading.** What the image is: the composite by default, one layer by an option, its
         offset in the metadata. Metadata: ICC profile, resolution, interpretation, sample
         format.
       - **Access.** Strips from several threads (S6.12, S6.14).
       - **Saving.** One image as a layer with its composite, or pages as layers.
-      - **What minipsd still needs.** Every colour mode and depth (S6.13); the row provider (S7.5);
+      - **What minipsd still needs.** The row provider (S7.5);
         the metadata ImageMagick gives (S6.17, P1).
       - **Building.** The build dependency: pkg-config, a meson wrap.
 - [ ] **S7.3** Loader: a PSD or PSB as a libvips image, the composite or a layer, decoded in
@@ -508,7 +528,7 @@ the loader and saver; how they reach libvips is not this roadmap's.
       memory; RLE, or ZIP through zlib.
       *Done when:* psd-tools and GIMP open what it writes, and the loader reads it back the same.
 - [ ] **S7.5** Row provider (`W6`): a layer's or the composite's rows asked from a callback instead
-      of an `rgba` pointer, twice with RLE or ZIP (sizing, then writing), so it must be
+      of an `pixels` pointer, twice with RLE or ZIP (sizing, then writing), so it must be
       deterministic, as libvips pipelines are. The saver then streams.
       *Done when:* the saver writes an image larger than the memory it is given, the bytes the
       same as from memory.
@@ -546,3 +566,9 @@ Large cases. Each would start with a *design* step, and only when a real consume
 - A layer's own alpha and spot channels (ids other than R, G, B, transparency and the masks):
   no file we have holds one, and Photoshop does not write them. Until a file shows one, such a
   layer sets `MINIPSD_LOST_CHANNELS`.
+- The composite's alpha and spot channels in a decoded document: `minipsd_read` without
+  `opts->stored` decodes the composite's colour channels and transparency only, and sets
+  `MINIPSD_LOST_CHANNELS` for the rest; with `opts->stored` every channel is kept (S6.8). Five of
+  psd-tools' files have such channels: `cmyk-alpha-spot.psd`, `cmyk-spot.psd`,
+  `colormodes/4x4_8bit_rgba.psd`, `effects/stroke-without-vector-mask.psd`,
+  `third-party-psds/cactus_top.psd`.

@@ -11,6 +11,7 @@
 #   write_nonblocking  the pull writer into an O_NONBLOCK pipe, with poll          (POSIX only)
 #   read_file          a PSD read whole, described, every layer and the composite decoded
 #   resave             a PSD read as a document, one layer changed, written again   (round trip)
+#   vips_composite     layers flattened by libvips, written with that composite  (MINIPSD_VIPS_EXAMPLE)
 # ---------------------------------------------------------------------------
 
 set(_examples hello_write hello_read write_file write_memory read_file resave)
@@ -114,3 +115,65 @@ foreach(_psd IN LISTS _other_psds)
         COMMAND resave "${_psd}" "${CMAKE_CURRENT_BINARY_DIR}/out-resave/${_name}.psd")
     set_tests_properties(example.resave.${_name} PROPERTIES PASS_REGULAR_EXPRESSION "inverted")
 endforeach()
+
+# vips_composite: libvips renders the composite, minipsd writes the file with it (MINIPSD_VIPS_EXAMPLE,
+# off by default: it needs libvips).  minipsd never depends on libvips; only this example does.
+# Windows fetches libvips' official prebuilt "web" build, pinned (the newest release when set);
+# elsewhere pkg-config finds the installed one.  The example links the C API only.
+option(MINIPSD_VIPS_EXAMPLE "Build and run examples/vips_composite.c against libvips (fetched on Windows)" OFF)
+if(MINIPSD_VIPS_EXAMPLE)
+    if(WIN32)
+        set(MINIPSD_VIPS_VERSION 8.18.7)
+        include(FetchContent)
+        FetchContent_Declare(minipsd_vips
+            URL https://github.com/libvips/build-win64-mxe/releases/download/v${MINIPSD_VIPS_VERSION}/vips-dev-x64-web-${MINIPSD_VIPS_VERSION}.zip
+            URL_HASH SHA256=3a122eb3d588690008216f786338e2f9329dba3c3c2768b5933cf7299d549241
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+            SOURCE_SUBDIR no-cmake-project)   # files only: nothing to add as a subproject
+        FetchContent_MakeAvailable(minipsd_vips)
+        set(_vips "${minipsd_vips_SOURCE_DIR}")
+        add_library(minipsd_libvips INTERFACE IMPORTED)
+        if(MSVC)   # the zip's import libraries
+            target_link_libraries(minipsd_libvips INTERFACE
+                "${_vips}/lib/libvips.lib" "${_vips}/lib/libglib-2.0.lib" "${_vips}/lib/libgobject-2.0.lib")
+        else()     # MinGW links the DLLs themselves
+            target_link_libraries(minipsd_libvips INTERFACE
+                "${_vips}/bin/libvips-42.dll" "${_vips}/bin/libglib-2.0-0.dll" "${_vips}/bin/libgobject-2.0-0.dll")
+        endif()
+        target_include_directories(minipsd_libvips SYSTEM INTERFACE
+            "${_vips}/include" "${_vips}/include/glib-2.0" "${_vips}/lib/glib-2.0/include")
+        set(_vips_path "${_vips}/bin;$ENV{PATH}")   # the DLLs, for the tests
+        string(REPLACE ";" "\\;" _vips_path "${_vips_path}")
+        set(_vips_env "PATH=${_vips_path}")
+    else()
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(VIPS REQUIRED IMPORTED_TARGET vips)
+        add_library(minipsd_libvips INTERFACE IMPORTED)
+        target_link_libraries(minipsd_libvips INTERFACE PkgConfig::VIPS)
+        set(_vips_env "")
+    endif()
+
+    add_executable(vips_composite vips_composite.c)
+    target_link_libraries(vips_composite PRIVATE minipsd::minipsd minipsd_libvips)
+    target_compile_options(vips_composite PRIVATE ${MINIPSD_WARNINGS})
+    set_target_properties(vips_composite PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    if(MSVC)
+        target_compile_definitions(vips_composite PRIVATE _CRT_SECURE_NO_WARNINGS)   # plain fopen
+    endif()
+
+    # The layers made by the example; then, locally, a Photoshop file's (tests/fixtures).  Each run
+    # reads its file back and says whether the composite came back as rendered.
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/out-vips")
+    add_test(NAME example.vips_composite COMMAND vips_composite "${CMAKE_CURRENT_BINARY_DIR}/out-vips/made.psd")
+    set(_vips_tests example.vips_composite)
+    if(_minipsd_fixtures AND EXISTS "${_minipsd_fixtures}/Test-g-example.psd")
+        add_test(NAME example.vips_composite.Test-g-example
+            COMMAND vips_composite "${CMAKE_CURRENT_BINARY_DIR}/out-vips/Test-g-example.psd" "${_minipsd_fixtures}/Test-g-example.psd")
+        list(APPEND _vips_tests example.vips_composite.Test-g-example)
+    endif()
+    # TIMEOUT: libvips' exit has once hung on Windows, after the result; a hang fails fast.
+    set_tests_properties(${_vips_tests} PROPERTIES PASS_REGULAR_EXPRESSION "composite read back: as rendered" TIMEOUT 120)
+    if(_vips_env)
+        set_tests_properties(${_vips_tests} PROPERTIES ENVIRONMENT "${_vips_env}")
+    endif()
+endif()

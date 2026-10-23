@@ -105,7 +105,7 @@ class BlendingRange(ctypes.Structure):
 
 
 class Layer(ctypes.Structure):
-    _fields_ = [("name", ctypes.c_char_p), ("rgba", ctypes.c_void_p),
+    _fields_ = [("name", ctypes.c_char_p), ("pixels", ctypes.c_void_p),
                 ("opacity", ctypes.c_uint8), ("hidden", ctypes.c_uint8),
                 ("top", ctypes.c_int32), ("left", ctypes.c_int32),
                 ("bottom", ctypes.c_int32), ("right", ctypes.c_int32),
@@ -123,7 +123,8 @@ class Doc(ctypes.Structure):
                 ("composite", ctypes.c_void_p), ("composite_matted", ctypes.c_int),
                 ("resources", ctypes.c_void_p), ("resource_count", ctypes.c_size_t), ("layer_tail", Bytes),
                 ("depth", ctypes.c_uint16), ("format", ctypes.c_uint16),
-                ("composite_stored", Bytes), ("composite_channels", ctypes.c_uint16)]
+                ("composite_stored", Bytes), ("composite_channels", ctypes.c_uint16),
+                ("composite_alpha", ctypes.c_uint8), ("color_mode", ctypes.c_uint16), ("color_mode_data", Bytes)]
 
 
 DEFLATE_FN = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
@@ -436,7 +437,7 @@ def groups_and_mask(lib, path):
         ("Outer", None, SECTION_GROUP, b"\0\0\0\0", None),
     ]
     for i, (name, rgba, kind, blend, m) in enumerate(spec):
-        records[i] = Layer(name=name.encode(), rgba=rgba, opacity=255, blend_mode=blend, section_divider_type=kind, mask=m)
+        records[i] = Layer(name=name.encode(), pixels=rgba, opacity=255, blend_mode=blend, section_divider_type=kind, mask=m)
     records[2].blending_ranges, records[2].blending_range_count = ranges, len(BLEND_IF)
     doc = Doc(w, h, 72.0, records, len(spec), None, 0, MINIPSD_RLE)
     out = bytearray()
@@ -498,8 +499,8 @@ def deep(lib, path, compression=MINIPSD_RLE):
     mask_px = [x * 65535 // (lw - 1) for y in range(lh) for x in range(lw)]
     mask = Mask(top=5, left=10, bottom=5 + lh, right=10 + lw, pixels=samples(mask_px))
     records = (Layer * 2)()
-    records[0] = Layer(name=b"Gradient", rgba=samples(base), opacity=255)
-    records[1] = Layer(name=b"Masked", rgba=samples(top), opacity=255, top=5, left=10, bottom=5 + lh, right=10 + lw,
+    records[0] = Layer(name=b"Gradient", pixels=samples(base), opacity=255)
+    records[1] = Layer(name=b"Masked", pixels=samples(top), opacity=255, top=5, left=10, bottom=5 + lh, right=10 + lw,
                        mask=ctypes.pointer(mask))
     doc = Doc(w, h, 72.0, records, 2, None, 0, compression)
     doc.depth = 16
@@ -555,6 +556,172 @@ def check_deep(psd, expected):
     return errors
 
 
+# --- every colour mode the writer takes -----------------------------------------------------------
+
+MODE_GREY, MODE_RGB, MODE_CMYK, MODE_DUOTONE, MODE_LAB = 1, 3, 4, 8, 9
+MODE_COLORS = {MODE_GREY: 1, MODE_RGB: 3, MODE_CMYK: 4, MODE_DUOTONE: 1, MODE_LAB: 3}
+MODES = [(mode, depth, compression) for mode in (MODE_GREY, MODE_CMYK, MODE_LAB, MODE_DUOTONE)
+         for depth, compression in ((8, MINIPSD_RLE), (16, MINIPSD_RLE), (16, MINIPSD_ZIP_PREDICTED))] + [
+         (mode, 32, compression) for mode in (MODE_RGB, MODE_GREY) for compression in (MINIPSD_RLE, MINIPSD_ZIP_PREDICTED)]
+DUOTONE_DATA = bytes(range(40))   # opaque to minipsd and psd-tools: written and read as given
+
+
+def mode_document(lib, path, mode, depth, compression):
+    """A document of the mode and depth: a full-canvas gradient, above it a half-transparent layer at
+    an offset, and a composite of its own (the writer composes RGB only), every sample distinct.
+    Returns the samples, interleaved: the mode's colour channels then transparency."""
+    w, h, lw, lh = 12, 9, 5, 4
+    pixel = MODE_COLORS[mode] + 1
+    full = 1.0 if depth == 32 else (1 << depth) - 1
+    keep = []
+
+    def samples(values):
+        buf = ({8: ctypes.c_uint8, 16: ctypes.c_uint16, 32: ctypes.c_float}[depth] * len(values))(*values)
+        keep.append(buf)
+        return ctypes.cast(buf, ctypes.c_void_p)
+
+    def value(n):   # distinct samples; at 32 bits floats in 0 .. 1 that a float holds exactly
+        return n % 256 / 256 if depth == 32 else n * (full // 255) % (full + 1)
+
+    def image(width, height, seed, alpha):
+        return [full if k == pixel - 1 and alpha is None else alpha if k == pixel - 1 else
+                value(seed * 37 + y * 11 + x * 7 + k * 53)
+                for y in range(height) for x in range(width) for k in range(pixel)]
+
+    half = 0.5 if depth == 32 else full // 2
+    base, top, flat = image(w, h, 1, None), image(lw, lh, 2, half), image(w, h, 3, None)
+    records = (Layer * 2)()
+    records[0] = Layer(name=b"Base", pixels=samples(base), opacity=255)
+    records[1] = Layer(name=b"Top", pixels=samples(top), opacity=255, top=3, left=4, bottom=3 + lh, right=4 + lw)
+    doc = Doc(w, h, 72.0, records, 2, None, 0, compression)
+    doc.composite, doc.depth, doc.color_mode = samples(flat), depth, mode
+    if mode == MODE_DUOTONE:
+        data = ctypes.create_string_buffer(DUOTONE_DATA, len(DUOTONE_DATA))
+        keep.append(data)
+        doc.color_mode_data = Bytes(ctypes.cast(data, ctypes.c_void_p), len(DUOTONE_DATA))
+    out = bytearray()
+
+    def collect(_user, data, size):
+        out.extend(ctypes.string_at(data, size))
+        return 1
+
+    rc = lib.minipsd_write(ctypes.byref(doc), ctypes.byref(WriteOpts(0, deflate)), WRITE_FN(collect), None)
+    if rc == MINIPSD_OK:
+        path.write_bytes(out)
+    return rc, (w, h, lw, lh, pixel, base, top, flat)
+
+
+def check_mode_document(psd, name, mode, depth, expected):
+    """psd-tools reads the header's mode, depth and channels, the mode data, and every channel of
+    both layers and of the composite, sample for sample: written as given, the composite unmatted."""
+    w, h, lw, lh, pixel, base, top, flat = expected
+    fmt = {8: ">B", 16: ">H", 32: ">f"}[depth]
+    errors = []
+
+    def expect(what, got, want):
+        if got != want:
+            errors.append(f"{name}: {what} is {got!r}, expected {want!r}")
+
+    def plane(values, k):
+        return b"".join(struct.pack(fmt, values[i]) for i in range(k, len(values), pixel))
+
+    header = psd._record.header
+    expect("mode", int(header.color_mode), mode)
+    expect("depth", header.depth, depth)
+    expect("channels", header.channels, pixel)
+    expect("mode data", bytes(psd._record.color_mode_data.value), DUOTONE_DATA if mode == MODE_DUOTONE else b"")
+    lmi = psd._record.layer_and_mask_information
+    li = lmi.layer_info
+    if depth == 32:   # in 'Lr32', as Photoshop keeps them, the layer info empty; 'Mt32': the composite's alpha
+        expect("layer info", li.layer_count if li else 0, 0)
+        expect("blocks", [k for k in (b"Mt32", b"Lr32") if lmi.tagged_blocks.get_data(k) is not None], [b"Mt32", b"Lr32"])
+        li = lmi.tagged_blocks.get_data(b"Lr32")
+    expect("layers", len(li.layer_records), 2)
+    for record, channels, values, (rw, rh) in zip(li.layer_records, li.channel_image_data, (base, top), ((w, h), (lw, lh))):
+        for info, data in zip(record.channel_info, channels):
+            k = pixel - 1 if info.id.value == -1 else info.id.value
+            expect(f"'{record.name}' channel {info.id.value}", data.get_data(rw, rh, depth) == plane(values, k), True)
+    merged = psd._record.image_data.get_data(header)
+    for k in range(pixel):
+        expect(f"composite channel {k}", bytes(merged[k]) == plane(flat, k), True)
+    return errors
+
+
+MODE_BITMAP, MODE_INDEXED, MODE_MULTICHANNEL = 0, 2, 7
+# The flat modes: no layers, no transparency.  Bitmap's composite is a byte a pixel, packed by the
+# writer; indexed's one palette entry a pixel; multichannel's only copied, as a file stores it.
+FLAT = [(MODE_BITMAP, 1, MINIPSD_RLE), (MODE_BITMAP, 1, MINIPSD_RAW), (MODE_INDEXED, 8, MINIPSD_RLE),
+        (MODE_MULTICHANNEL, 8, MINIPSD_RLE), (MODE_MULTICHANNEL, 16, MINIPSD_RLE)]
+PALETTE = bytes(i * 5 % 256 for i in range(768))
+MULTICHANNELS = 3
+
+
+def flat_document(lib, path, mode, depth, compression):
+    """A document of a flat mode, its composite every sample distinct (bitmap: a pattern, its width
+    not a multiple of eight).  Returns the composite's channels as the file stores them, packed at 1
+    bit, big-endian at 16."""
+    w, h = 13, 5
+    sample = max(depth // 8, 1)
+    keep = []
+
+    def buffer(data):
+        buf = ctypes.create_string_buffer(bytes(data), len(data))
+        keep.append(buf)
+        return buf
+
+    doc = Doc(w, h, 72.0, None, 0, None, 0, compression)
+    doc.depth, doc.color_mode = depth, mode
+    if mode == MODE_BITMAP:
+        values = [(x * 3 + y * 5) % 7 * 40 for y in range(h) for x in range(w)]   # 0 white, the rest black
+        doc.composite = ctypes.cast(buffer(values), ctypes.c_void_p)
+        rows = [values[y * w:(y + 1) * w] for y in range(h)]
+        want = [b"".join(bytes(sum(1 << (7 - i) for i, v in enumerate(row[x:x + 8]) if v) for x in range(0, w, 8))
+                         for row in rows)]
+    elif mode == MODE_INDEXED:
+        values = [(y * w + x) * 7 % 256 for y in range(h) for x in range(w)]
+        doc.composite = ctypes.cast(buffer(values), ctypes.c_void_p)
+        palette = buffer(PALETTE)
+        doc.color_mode_data = Bytes(ctypes.cast(palette, ctypes.c_void_p), len(PALETTE))
+        want = [bytes(values)]
+    else:
+        spread = ((1 << depth) - 1) // 255   # the 8-bit pattern over the depth's whole range
+        want = [b"".join(((c * 61 + i * 13) % 256 * spread).to_bytes(sample, "big") for i in range(w * h))
+                for c in range(MULTICHANNELS)]
+        stored = buffer(bytes(2) + b"".join(want))   # the file's marker 0: raw
+        doc.composite_stored, doc.composite_channels = Bytes(ctypes.cast(stored, ctypes.c_void_p), len(stored)), MULTICHANNELS
+    out = bytearray()
+
+    def collect(_user, data, size):
+        out.extend(ctypes.string_at(data, size))
+        return 1
+
+    rc = lib.minipsd_write(ctypes.byref(doc), None, WRITE_FN(collect), None)
+    if rc == MINIPSD_OK:
+        path.write_bytes(out)
+    return rc, want
+
+
+def check_flat_document(psd, name, mode, depth, want):
+    """psd-tools reads the header's mode, depth and channels, the palette, no layers, and the
+    composite's channels as written."""
+    errors = []
+
+    def expect(what, got, wanted):
+        if got != wanted:
+            errors.append(f"{name}: {what} is {got!r}, expected {wanted!r}")
+
+    header = psd._record.header
+    expect("mode", int(header.color_mode), mode)
+    expect("depth", header.depth, depth)
+    expect("channels", header.channels, len(want))
+    expect("mode data", bytes(psd._record.color_mode_data.value), PALETTE if mode == MODE_INDEXED else b"")
+    expect("layers", len(psd), 0)
+    merged = psd._record.image_data.get_data(header)
+    for k, plane in enumerate(want):
+        expect(f"composite channel {k}", bytes(merged[k]), plane)
+    return errors
+
+
 # --- files from other programs: read, written back, what is kept compared --------------------------
 
 # Files with text, effects, groups and resources of every kind; read whole, written back as they are.
@@ -568,6 +735,13 @@ KEPT_16 = ["16bit5x5.psd", "colormodes/4x4_16bit_rgb.psd", "adjustments/posteriz
 KEPT_PSB = ["text.psb", "group.psb", "hidden-groups.psb", "layer_mask_data.psb", "unicode_pathname.psb",
             "placedLayer.psb", "layer_comps.psb", "masks.psb"]
 KEPT_PSB_16 = ["16bit5x5.psb"]
+# Every colour mode and depth: grey, CMYK, Lab, duotone, 32-bit with layers in 'Lr32'; bitmap,
+# indexed and multichannel without layers (multichannel's composite always copied).
+KEPT_MODES = ["colormodes/" + n for n in (
+    "4x4_8bit_grayscale.psd", "4x4_16bit_grayscale.psd", "4x4_32bit_grayscale.psd", "4x4_32bit_rgb.psd",
+    "4x4_8bit_cmyk.psd", "4x4_16bit_cmyk.psd", "4x4_8bit_lab.psd", "4x4_16bit_lab.psd", "4x4_8bit_duotone.psd",
+    "4x4_1bit_bitmap.psd", "100x20_1bit_bitmap_rle.psd", "4x4_8bit_index_color.psd",
+    "4x4_16bit_multichannel.psd")] + ["32bit.psd"]
 
 
 def resave(lib, source, path, stored=False, fmt=0, zip_=False):
@@ -662,9 +836,10 @@ def check_kept(name, before, after, stored=False):
     def resources(psd):
         return {key: resource.tobytes() for key, resource in psd.image_resources.items()}
 
-    def header(psd):   # decoded, the composite is written R, G, B and transparency
+    def header(psd):   # decoded, the composite is written with transparency, but in a flat mode
         h = psd._record.header
-        return h.channels if stored else None, h.height, h.width, h.depth, h.color_mode
+        flat = int(h.color_mode) in (MODE_BITMAP, MODE_INDEXED, MODE_MULTICHANNEL)
+        return h.channels if stored or flat else None, h.height, h.width, h.depth, h.color_mode
 
     def rect(rec):
         empty = rec.bottom <= rec.top or rec.right <= rec.left
@@ -681,9 +856,16 @@ def check_kept(name, before, after, stored=False):
     same("global layer mask", mask(gb), mask(ga))
     (rb, cb), (ra, ca) = records(gb), records(ga)
     same("layer count", len(rb), len(ra))
-    if stored:
-        same("composite", before._record.image_data.get_data(before._record.header),
-             after._record.image_data.get_data(after._record.header))
+    def composite(psd):   # at 1 bit, a row's padding bits are not content: written as zeros
+        h = psd._record.header
+        planes = [bytes(c) for c in psd._record.image_data.get_data(h)]
+        if h.depth != 1 or h.width % 8 == 0:
+            return planes
+        row, keep = (h.width + 7) // 8, (0xFF << (8 - h.width % 8)) & 0xFF
+        return [bytes(v & keep if i % row == row - 1 else v for i, v in enumerate(c)) for c in planes]
+
+    if stored or int(before._record.header.color_mode) in (MODE_BITMAP, MODE_INDEXED, MODE_MULTICHANNEL):   # flat: as it was
+        same("composite", composite(before), composite(after))
         vb, va, depth = before.version, after.version, before.depth
 
         def data(rec, c, d, version):
@@ -1037,6 +1219,24 @@ def main():
         errors += found
         print(f"{name}: {'FAILED' if found else 'ok'}")
 
+    for mode, depth, compression in MODES:
+        name = f"mode-{mode}-{depth}{'-zip' if compression else ''}"
+        path = out / f"{name}.psd"
+        rc, expected = mode_document(lib, path, mode, depth, compression)
+        found = [f"{name}: minipsd_write returned {rc}"] if rc != MINIPSD_OK else (
+            check_mode_document(PSDImage.open(path), name, mode, depth, expected) + check_decoded(lib, path))
+        errors += found
+        print(f"{name}: {'FAILED' if found else 'ok'}")
+
+    for mode, depth, compression in FLAT:
+        name = f"flat-{mode}-{depth}{'-raw' if compression else ''}"
+        path = out / f"{name}.psd"
+        rc, want = flat_document(lib, path, mode, depth, compression)
+        found = [f"{name}: minipsd_write returned {rc}"] if rc != MINIPSD_OK else (
+            check_flat_document(PSDImage.open(path), name, mode, depth, want) + check_decoded(lib, path))
+        errors += found
+        print(f"{name}: {'FAILED' if found else 'ok'}")
+
     for source in (out / "groups-masks.psd", out / "deep-16.psd"):
         found = check_zip(lib, source, out)
         errors += found
@@ -1046,7 +1246,8 @@ def main():
     if files is None:
         print("kept content: skipped, no psd-tools files (MINIPSD_PSD_TOOLS_FILES)")
     # Decoded (ZIP through zlib), and 16-bit ones also as stored.
-    kept = [(n, False) for n in KEPT_FILES + KEPT_PSB + KEPT_16 + KEPT_PSB_16] + [(n, True) for n in KEPT_16 + KEPT_PSB_16]
+    kept = [(n, False) for n in KEPT_FILES + KEPT_PSB + KEPT_16 + KEPT_PSB_16 + KEPT_MODES] + [
+        (n, True) for n in KEPT_16 + KEPT_PSB_16 + KEPT_MODES]
     # As it is, then in the other format: PSD as PSB, PSB as PSD, every channel stored, so that its
     # RLE count table is what changes width.
     converted = [((n, True), True) for n in dict.fromkeys(n for n, _ in kept)]

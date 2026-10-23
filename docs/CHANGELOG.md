@@ -3,11 +3,15 @@
 Changes between releases, for users of minipsd. Versioning follows the pre-1.0 rules in
 [TODO.md](TODO.md): breaking changes bump the MINOR, additions and fixes the PATCH.
 
-## [Unreleased]
+## [0.3.0] — 2026-10-23
 
 **Breaking:** `minipsd_write`, `minipsd_writer_workspace_size`, `minipsd_writer_init` and
 `minipsd_doc_check` take a `const minipsd_write_opts *` after the document. To migrate, pass
 `NULL`: the document is written as before.
+
+**Breaking:** `minipsd_layer.rgba` is `minipsd_layer.pixels`: the mode's colour channels then
+transparency, which in RGB is the same R, G, B, A as before. To migrate, rename the field; a
+positional initialiser needs no change.
 
 ### Added
 - The reader, first part: `minipsd_reader_init` describes a PSD held in memory (size, depth,
@@ -26,6 +30,9 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   composite's transparency with a global `Mtrn`, `Mt16` or `Mt32` block rather than a negative
   layer count; both count.
 - `examples/read_file.c`: a PSD described layer by layer, every layer and the composite decoded.
+- `examples/vips_composite.c`: layers flattened by libvips (`vips_composite`, blend modes mapped)
+  and written with that composite, then read back; built with `MINIPSD_VIPS_EXAMPLE`, which on
+  Windows fetches libvips' prebuilt build. A "With libvips" chapter in the manual.
 - `examples/hello_write.c` and `examples/hello_read.c`: the shortest programs that write and read
   a PSD, which open a rewritten [MANUAL.md](MANUAL.md): call-order diagrams, a file read in
   parts, memory, return codes and configuration.
@@ -36,7 +43,13 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   `minipsd_doc`. The writer writes that image, matted against white unless marked as already
   matted, and composes nothing. Without one the layers are composed as before, now documented as
   a best effort.
-- `minipsd_read`: a whole 8- or 16-bit RGB file into a `minipsd_doc` that `minipsd_write` takes as it
+- Every colour mode and depth written: `color_mode` and `color_mode_data` at the end of
+  `minipsd_doc` (`MINIPSD_MODE_*`, Adobe's numbers; 0 is RGB unless `depth` is 1, bitmap). Grey,
+  CMYK, Lab, duotone and multichannel at 8 and 16 bits, RGB and grey at 32 (`float` samples, the
+  layers in `Lr32`), indexed at 8 with its palette, bitmap at 1 (a byte a pixel, packed by the
+  writer); bitmap, indexed and multichannel without layers. No colour is converted; every mode
+  but RGB, and 32 bits, brings its composite, and a supplied one is written as given.
+- `minipsd_read`: a whole file of any mode and depth the writer takes into a `minipsd_doc` that `minipsd_write` takes as it
   is, every byte copied into one block so the file can be freed at once; `minipsd_doc_free`;
   `minipsd_read_size` and `minipsd_read_into` for the caller's own memory. `lost`
   (`MINIPSD_LOST_*`) says what the document could not carry: extra channels.
@@ -113,7 +126,7 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   still wins.
 - A stored layer without a transparency channel is written without one, as its file has it,
   instead of with an opaque one.
-- A layer's all-zero rectangle means the full canvas only with `rgba`: stored channels take the
+- A layer's all-zero rectangle means the full canvas only with `pixels`: stored channels take the
   rectangle as it is.
 - A layer's names kept from a file: `name_pascal` at the end of `minipsd_layer` holds its legacy
   name as stored, and while `name` still says what the file's names say, the legacy name and the
