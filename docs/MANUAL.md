@@ -48,7 +48,7 @@ int main(void)
 {
     static uint8_t rgba[64 * 64 * 4];   /* straight alpha, rows top down */
     /* Fields left out are zero, the defaults: visible, the full canvas, RLE. */
-    minipsd_layer  layer = {.name = "Hello", .rgba = rgba, .opacity = 255};
+    minipsd_layer  layer = {.name = "Hello", .pixels = rgba, .opacity = 255};
     minipsd_doc    doc   = {.width = 64, .height = 64, .dpi = 72.0, .layers = &layer, .layer_count = 1};
     FILE          *f;
     int            i, rc;
@@ -177,7 +177,7 @@ The examples below write this document:
 
 ```c
 minipsd_layer layers[2] = {
-    { .name = "Template", .rgba = rgba, .opacity = 255 },   /* width * height * 4, straight alpha */
+    { .name = "Template", .pixels = rgba, .opacity = 255 },   /* width * height * 4, straight alpha */
     { .name = "Layer", .opacity = 255 },                    /* an empty layer above it */
 };
 minipsd_doc doc = { .width = width, .height = height, .dpi = 300.0, .layers = layers, .layer_count = 2 };
@@ -185,11 +185,11 @@ minipsd_doc doc = { .width = width, .height = height, .dpi = 300.0, .layers = la
 
 Name the fields. The structs only grow at the end, and every field left out is zero, which is
 the default: visible, RLE, and a layer that covers the full canvas. A layer of another size sets
-its rectangle on the canvas, which may reach past the edges; `rgba` then holds that rectangle:
+its rectangle on the canvas, which may reach past the edges; `pixels` then holds that rectangle:
 
 ```c
 /* 64 x 32 pixels, its top-left corner at x 20, y 10 */
-minipsd_layer logo = { .name = "Logo", .rgba = logo_rgba, .opacity = 255,
+minipsd_layer logo = { .name = "Logo", .pixels = logo_rgba, .opacity = 255,
                        .top = 10, .left = 20, .bottom = 42, .right = 84 };
 ```
 
@@ -202,8 +202,8 @@ shows:
 minipsd_mask  fade   = { .top = 0, .left = 0, .bottom = 32, .right = 64, .pixels = ramp };
 minipsd_layer layers[4] = {
     { .name = "</Layer group>", .opacity = 255, .section_divider_type = MINIPSD_SECTION_GROUP_END },
-    { .name = "Logo", .rgba = logo_rgba, .opacity = 255, .bottom = 32, .right = 64, .mask = &fade },
-    { .name = "Shadow", .rgba = shadow_rgba, .opacity = 128, .bottom = 32, .right = 64 },
+    { .name = "Logo", .pixels = logo_rgba, .opacity = 255, .bottom = 32, .right = 64, .mask = &fade },
+    { .name = "Shadow", .pixels = shadow_rgba, .opacity = 128, .bottom = 32, .right = 64 },
     { .name = "Branding", .opacity = 255, .section_divider_type = MINIPSD_SECTION_GROUP },
 };
 ```
@@ -213,7 +213,7 @@ a `uint16_t` in host order, 0 to 65535; the pointers keep their type, so cast:
 
 ```c
 uint16_t     *deep = malloc((size_t)width * height * 4 * sizeof *deep);   /* straight alpha */
-minipsd_layer layer = { .name = "Deep", .rgba = (const uint8_t *)deep, .opacity = 255 };
+minipsd_layer layer = { .name = "Deep", .pixels = (const uint8_t *)deep, .opacity = 255 };
 minipsd_doc   doc = { .width = width, .height = height, .dpi = 300.0, .layers = &layer, .layer_count = 1,
                       .depth = 16 };
 ```
@@ -650,7 +650,7 @@ flowchart TD
     read["minipsd_read(data, ..., &opts, &doc, &lost)<br>opts.stored = 1"]
     read -. "every layer's channels and the composite, copied as stored" .-> doc["doc"]
     doc --> pick["the layer to change:<br>minipsd_reader_init, minipsd_reader_next_layer,<br>minipsd_decode_layer, from the same data"]
-    pick --> set["layer.rgba = new pixels<br>layer.stored = NULL"]
+    pick --> set["layer.pixels = new pixels<br>layer.stored = NULL"]
     set --> write["minipsd_write(doc, NULL, callback, user)"]
     write -. "that layer encoded, the others copied" .-> out["the file"]
     classDef minipsd stroke-dasharray: 5 5
@@ -683,7 +683,7 @@ viewer that ignores layers shows. The two share their memory layout (8-bit RGBA,
 alpha, rows top down), so nothing is converted.
 [examples/vips_composite.c](../examples/vips_composite.c) is the whole program; its steps:
 
-1. **Layers out of libvips.** `vips_image_write_to_memory` gives a layer's `rgba` as it is
+1. **Layers out of libvips.** `vips_image_write_to_memory` gives a layer's `pixels` as it is
    (a 3-band image takes `vips_bandjoin_const1(image, 255)` first).
 2. **The composite in libvips.** `vips_composite` onto a transparent canvas of the document's
    size, each layer at its rectangle (`"x"`, `"y"`), its opacity multiplied into alpha

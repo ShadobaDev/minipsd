@@ -218,7 +218,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
             if (rc != MINIPSD_OK) return rc;
         }
         layers[i].name    = name;
-        layers[i].rgba    = pixels;
+        layers[i].pixels  = pixels;
         layers[i].opacity = v.opacity;
         layers[i].hidden  = v.hidden;
         layers[i].top     = v.top;    layers[i].left  = v.left;
@@ -271,6 +271,10 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         if (icc) memcpy(icc, info.icc.data, info.icc.size);
         if (d) { d->icc = icc; d->icc_size = info.icc.size; }
     }
+    {   /* the mode, and its data (a palette, a duotone's inks) as the file has it */
+        const minipsd_bytes mode_data = mpsd__copy(a, info.color_mode_data);
+        if (d) { d->color_mode = info.color_mode; d->color_mode_data = mode_data; }
+    }
     /* reachable with a 32-bit size_t (wasm32, armv7) */
     if (a->zip > (uint64_t)(size_t)-1 - MPSD__ALIGN || a->used > (uint64_t)(size_t)-1 - MPSD__ALIGN - a->zip) return MINIPSD_ERR_SIZE;
     if (!d) return MINIPSD_OK;
@@ -285,7 +289,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         rc = minipsd_decode_composite(r, &t, &all);
         if (rc != MINIPSD_OK) return rc;
         layers[0].name    = "Background";
-        layers[0].rgba    = flat;
+        layers[0].pixels  = flat;
         layers[0].opacity = 255;
         layers[0].bottom  = (int32_t)info.height;   /* the rectangle a reader then sees */
         layers[0].right   = (int32_t)info.width;

@@ -85,7 +85,7 @@ static VipsImage *layer_image(const minipsd_layer *l)
 {
     const int  w = (int)(l->right - l->left), h = (int)(l->bottom - l->top);
     VipsImage *wrapped, *srgb, *out;
-    wrapped = vips_image_new_from_memory(l->rgba, (size_t)w * (size_t)h * RGBA, w, h, RGBA, VIPS_FORMAT_UCHAR);
+    wrapped = vips_image_new_from_memory(l->pixels, (size_t)w * (size_t)h * RGBA, w, h, RGBA, VIPS_FORMAT_UCHAR);
     if (!wrapped) return NULL;
     if (vips_copy(wrapped, &srgb, "interpretation", VIPS_INTERPRETATION_sRGB, NULL)) {   /* RGBA, not 4 bands of anything */
         g_object_unref(wrapped);
@@ -123,7 +123,7 @@ static uint8_t *render(const minipsd_doc *d, size_t *unmapped)
     ++n;
     for (i = 0; i < d->layer_count; ++i) {   /* bottom first, as minipsd and vips_composite both list them */
         const minipsd_layer *l = &d->layers[i];
-        if (l->hidden || l->section_divider_type != MINIPSD_SECTION_LAYER || !l->rgba
+        if (l->hidden || l->section_divider_type != MINIPSD_SECTION_LAYER || !l->pixels
             || l->right <= l->left || l->bottom <= l->top)
             continue;
         if (!(in[n] = layer_image(l))) goto done;
@@ -214,15 +214,15 @@ static void make_layers(minipsd_layer layers[4])
     for (x = 0; x < W * H; ++x) hidden[x * RGBA] = hidden[x * RGBA + 3] = FULL;   /* red, never shown */
 
     memset(layers, 0, 4 * sizeof *layers);   /* the structs grow at the end: zero is every default */
-    layers[0].name = "Background"; layers[0].rgba = background; layers[0].opacity = FULL;
+    layers[0].name = "Background"; layers[0].pixels = background; layers[0].opacity = FULL;
     layers[0].right = W; layers[0].bottom = H;
-    layers[1].name = "Disc"; layers[1].rgba = disc; layers[1].opacity = FULL;
+    layers[1].name = "Disc"; layers[1].pixels = disc; layers[1].opacity = FULL;
     memcpy(layers[1].blend_mode, "mul ", 4);
     layers[1].left = -32; layers[1].top = 96; layers[1].right = 96; layers[1].bottom = 224;   /* part off the canvas */
-    layers[2].name = "Panel"; layers[2].rgba = panel; layers[2].opacity = 128;
+    layers[2].name = "Panel"; layers[2].pixels = panel; layers[2].opacity = 128;
     memcpy(layers[2].blend_mode, "scrn", 4);
     layers[2].left = 100; layers[2].top = 40; layers[2].right = 220; layers[2].bottom = 120;
-    layers[3].name = "Hidden"; layers[3].rgba = hidden; layers[3].opacity = FULL; layers[3].hidden = 1;
+    layers[3].name = "Hidden"; layers[3].pixels = hidden; layers[3].opacity = FULL; layers[3].hidden = 1;
     layers[3].right = W; layers[3].bottom = H;
 }
 
@@ -271,6 +271,7 @@ int main(int argc, char **argv)
     off     = written ? check(written, size, flat, doc->width, doc->height) : -1;
     printf("%lu layers, %lu blend modes drawn as normal; composite read back: %s (%ld samples off)\n",
            (unsigned long)doc->layer_count, (unsigned long)unmapped, off == 0 ? "as rendered" : "DIFFERENT", off);
+    fflush(stdout);   /* now: with libvips' prebuilt Windows build, exit does not always flush it */
     failed = off != 0;
 done:
     free(written);

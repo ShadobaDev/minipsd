@@ -105,7 +105,7 @@ class BlendingRange(ctypes.Structure):
 
 
 class Layer(ctypes.Structure):
-    _fields_ = [("name", ctypes.c_char_p), ("rgba", ctypes.c_void_p),
+    _fields_ = [("name", ctypes.c_char_p), ("pixels", ctypes.c_void_p),
                 ("opacity", ctypes.c_uint8), ("hidden", ctypes.c_uint8),
                 ("top", ctypes.c_int32), ("left", ctypes.c_int32),
                 ("bottom", ctypes.c_int32), ("right", ctypes.c_int32),
@@ -123,7 +123,8 @@ class Doc(ctypes.Structure):
                 ("composite", ctypes.c_void_p), ("composite_matted", ctypes.c_int),
                 ("resources", ctypes.c_void_p), ("resource_count", ctypes.c_size_t), ("layer_tail", Bytes),
                 ("depth", ctypes.c_uint16), ("format", ctypes.c_uint16),
-                ("composite_stored", Bytes), ("composite_channels", ctypes.c_uint16)]
+                ("composite_stored", Bytes), ("composite_channels", ctypes.c_uint16),
+                ("composite_alpha", ctypes.c_uint8), ("color_mode", ctypes.c_uint16), ("color_mode_data", Bytes)]
 
 
 DEFLATE_FN = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
@@ -436,7 +437,7 @@ def groups_and_mask(lib, path):
         ("Outer", None, SECTION_GROUP, b"\0\0\0\0", None),
     ]
     for i, (name, rgba, kind, blend, m) in enumerate(spec):
-        records[i] = Layer(name=name.encode(), rgba=rgba, opacity=255, blend_mode=blend, section_divider_type=kind, mask=m)
+        records[i] = Layer(name=name.encode(), pixels=rgba, opacity=255, blend_mode=blend, section_divider_type=kind, mask=m)
     records[2].blending_ranges, records[2].blending_range_count = ranges, len(BLEND_IF)
     doc = Doc(w, h, 72.0, records, len(spec), None, 0, MINIPSD_RLE)
     out = bytearray()
@@ -498,8 +499,8 @@ def deep(lib, path, compression=MINIPSD_RLE):
     mask_px = [x * 65535 // (lw - 1) for y in range(lh) for x in range(lw)]
     mask = Mask(top=5, left=10, bottom=5 + lh, right=10 + lw, pixels=samples(mask_px))
     records = (Layer * 2)()
-    records[0] = Layer(name=b"Gradient", rgba=samples(base), opacity=255)
-    records[1] = Layer(name=b"Masked", rgba=samples(top), opacity=255, top=5, left=10, bottom=5 + lh, right=10 + lw,
+    records[0] = Layer(name=b"Gradient", pixels=samples(base), opacity=255)
+    records[1] = Layer(name=b"Masked", pixels=samples(top), opacity=255, top=5, left=10, bottom=5 + lh, right=10 + lw,
                        mask=ctypes.pointer(mask))
     doc = Doc(w, h, 72.0, records, 2, None, 0, compression)
     doc.depth = 16

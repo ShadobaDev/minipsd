@@ -528,7 +528,7 @@ comes at the end of stage 7, or of 8, with the same files.
       memory; RLE, or ZIP through zlib.
       *Done when:* psd-tools and GIMP open what it writes, and the loader reads it back the same.
 - [ ] **S7.5** Row provider (`W6`): a layer's or the composite's rows asked from a callback instead
-      of an `rgba` pointer, twice with RLE or ZIP (sizing, then writing), so it must be
+      of an `pixels` pointer, twice with RLE or ZIP (sizing, then writing), so it must be
       deterministic, as libvips pipelines are. The saver then streams.
       *Done when:* the saver writes an image larger than the memory it is given, the bytes the
       same as from memory.

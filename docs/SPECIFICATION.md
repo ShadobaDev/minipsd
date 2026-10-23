@@ -178,7 +178,7 @@ its layers and composite as stored: no colour is converted.
 **Defaults and field meanings**
 - A zero-initialised document selects RLE (`MINIPSD_RLE = 0`).
 - `opacity = 0` means a fully transparent layer; it is **not** "default opaque".
-- `rgba = NULL` is an empty layer; `name = NULL` is an empty name.
+- `pixels = NULL` is an empty layer; `name = NULL` is an empty name.
 - Layers are listed bottom first.
 
 **Names**
@@ -236,7 +236,7 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
 | Name | Owner | Size | Must stay valid | May live in |
 |---|---|---|---|---|
 | `minipsd_doc`, `minipsd_layer[]` | caller; borrowed | `sizeof`; `layer_count` layers | the call; for the pull writer, from init for as long as the writer is used | stack, static, heap |
-| raw document data: layer pixels (`rgba`) or stored channels (`stored`), names, ICC profile, the supplied `composite`, kept `additional_info`, `resources` and `layer_tail` | caller; borrowed, read in place, never copied | a layer's rectangle times 4 samples, of 1 or 2 bytes (or its channels' stored size); `width * height * 4` samples for the composite | as `minipsd_doc` | wherever the application keeps it |
+| raw document data: layer pixels (`pixels`) or stored channels (`stored`), names, ICC profile, the supplied `composite`, kept `additional_info`, `resources` and `layer_tail` | caller; borrowed, read in place, never copied | a layer's rectangle times 4 samples, of 1 or 2 bytes (or its channels' stored size); `width * height * 4` samples for the composite | as `minipsd_doc` | wherever the application keeps it |
 | `minipsd_workspace` of the writer | caller; lent to the writer | `minipsd_writer_workspace_size()` | for as long as the writer is used | heap; stack or static sized for the largest document |
 | `minipsd_writer` | inside `minipsd_workspace`; opaque | part of the workspace | as the workspace | the caller keeps only the pointer |
 | raw PSD bytes | passed to the callback of `minipsd_write()` | pieces of up to 4 KiB, in order | the callback copies what it keeps | the callback decides |
@@ -321,7 +321,7 @@ several threads from one reader into one image.
 ## What goes into the file
 
 - PSD (version 1) or, with `format` `MINIPSD_PSB`, PSB (version 2), RGB, 4 channels (R, G, B,
-  transparency), 8 bits per channel or, with `depth` 16, 16: every sample (`rgba`, mask
+  transparency), 8 bits per channel or, with `depth` 16, 16: every sample (`pixels`, mask
   `pixels`, `composite`) is then a `uint16_t` in host order, written big-endian. The layers go
   in the layer info at both depths, or, when `layer_tail` holds an `Lr16` (or `Lr32`) block, in
   that block, where it is, with the layer info empty, as Photoshop's 16-bit files have them; what
@@ -363,7 +363,7 @@ several threads from one reader into one image.
   - the writer's own blocks first, `luni` (a kept one as it is while it says the name) and the
     group marker, then the blocks kept from a file (`additional_info`), as they are and in their order:
     the name wins, and kept `luni` blocks go;
-  - channel data encoded from `rgba`, or copied as it is from `stored` (any compression the
+  - channel data encoded from `pixels`, or copied as it is from `stored` (any compression the
     file had, ZIP included), so a layer that was not changed is not encoded again; a stored
     layer without transparency is written without one (three colour channels);
   - groups (`section_divider_type`), bottom first: a divider (`lsct` type 3), the group's layers, then the
@@ -599,7 +599,7 @@ does, and its memory images are minipsd's buffers, with no conversion:
 | colour | sRGB, or the document's ICC profile | `interpretation` sRGB, the profile in `icc-profile-data` |
 
 - **From libvips to minipsd:** `vips_image_write_to_memory` gives a buffer that is a layer's
-  `rgba` as it is; a 3-band image takes `vips_bandjoin_const1(image, 255)` first.
+  `pixels` as it is; a 3-band image takes `vips_bandjoin_const1(image, 255)` first.
 - **From minipsd to libvips:** decode with `minipsd_target_rgba`, then wrap the buffer with
   `vips_image_new_from_memory(buffer, size, width, height, 4, VIPS_FORMAT_UCHAR)`, no copy.
 - **Rendering layers:** `vips_composite` takes the layers with their positions (the layer

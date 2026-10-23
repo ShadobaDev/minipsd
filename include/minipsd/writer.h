@@ -31,6 +31,13 @@
 /* The document's format: what its kept bytes are laid out as, 1 for a PSB (detail/format.h). */
 static unsigned mpsd__doc_psb(const minipsd_doc *d) { return d->format == MINIPSD_PSB; }
 
+/* The file's colour mode: color_mode, whose 0 is RGB unless depth is 1 (bitmap, the only 1-bit
+   mode). */
+static unsigned mpsd__doc_mode(const minipsd_doc *d)
+{
+    return d->color_mode || d->depth == 1 ? d->color_mode : (unsigned)MINIPSD_MODE_RGB;
+}
+
 /* The format written: opts->format, or else the document's own; 1 for a PSB. */
 static unsigned mpsd__out_psb(const minipsd_doc *d, const minipsd_write_opts *opts)
 {
@@ -121,7 +128,7 @@ static mpsd__source mpsd__channel_source(const minipsd_doc *d, const minipsd_lay
             src.samples = r.height ? full : NULL;
             src.step    = 0;
         } else {
-            src.samples = r.height ? l->rgba + ((size_t)mpsd__channel_of[k] << wide) : NULL;
+            src.samples = r.height ? l->pixels + ((size_t)mpsd__channel_of[k] << wide) : NULL;
             src.step    = (size_t)MPSD__RGBA << wide;
         }
         src.width   = r.width;
@@ -718,8 +725,11 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *d, const minipsd_write_opts 
     res = d->dpi * MPSD__FIXED_ONE + 0.5;
     if ((d->layer_count && !d->layers) || (!d->layer_count && !d->composite && !d->composite_stored.size) || d->layer_count > MPSD__MAX_LAYERS || !(res >= 1.0 && res < 4294967296.0)
         || (d->depth != 0 && d->depth != MPSD__CH_8BIT && d->depth != MPSD__CH_16BIT) || d->format > MINIPSD_PSB
-        || d->compression < MINIPSD_RLE || d->compression > MINIPSD_ZIP_PREDICTED || (mpsd__zip(d) && !(opts && opts->deflate)))
+        || d->compression < MINIPSD_RLE || d->compression > MINIPSD_ZIP_PREDICTED || (mpsd__zip(d) && !(opts && opts->deflate))
+        || (d->color_mode_data.size && !d->color_mode_data.data))
         return MINIPSD_ERR_ARG;
+    if (mpsd__doc_mode(d) != MINIPSD_MODE_RGB) return MINIPSD_ERR_UNSUPPORTED;   /* TODO(S6.19): every mode */
+    if (d->color_mode_data.size) return MINIPSD_ERR_ARG;                         /* RGB has none */
     rc = mpsd__kept_ok(d, out);
     if (rc != MINIPSD_OK) return rc;
     if (!mpsd__groups_ok(d)) return MINIPSD_ERR_ARG;
@@ -733,14 +743,14 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *d, const minipsd_write_opts 
         const minipsd_layer *l = &d->layers[i];
         const int64_t w = (int64_t)l->right - l->left, h = (int64_t)l->bottom - l->top;
         int k;
-        if (w < 0 || h < 0 || (!l->rgba && !l->stored && w && h)) return MINIPSD_ERR_ARG;
+        if (w < 0 || h < 0 || (!l->pixels && !l->stored && w && h)) return MINIPSD_ERR_ARG;
         if (w > mpsd__max_side(out) || h > mpsd__max_side(out)) return MINIPSD_ERR_SIZE;
         rc = l->mask ? mpsd__mask_ok(d, l->mask, out) : MINIPSD_OK;
         for (k = MPSD__CH_MASK; rc == MINIPSD_OK && k < mpsd__channel_count(l); ++k) rc = mpsd__retable_ok(d, l, k, out);
         if (rc != MINIPSD_OK) return rc;
         if (mpsd__layer_extra_size(l, mpsd__doc_psb(d), out) > MPSD__MAX_SECTION) return MINIPSD_ERR_SIZE;
         if (!l->stored) continue;
-        if (!l->rgba && !d->composite && !d->composite_stored.size) return MINIPSD_ERR_ARG;   /* nothing to compose it from */
+        if (!l->pixels && !d->composite && !d->composite_stored.size) return MINIPSD_ERR_ARG;   /* nothing to compose it from */
         for (k = 0; k < MPSD__RGBA; ++k) {          /* transparency may be missing */
             const mpsd__rect r = mpsd__layer_rect(d, l);
             if ((k != MINIPSD_CH_A || l->stored[k].size)
@@ -767,9 +777,10 @@ static void mpsd__head(mpsd__sink *s, const minipsd_doc *d, uint64_t info, unsig
     mpsd__u32(s, d->height);
     mpsd__u32(s, d->width);
     mpsd__u16(s, mpsd__doc_wide(d) ? 16 : 8); /* bits per channel    */
-    mpsd__u16(s, MPSD__MODE_RGB);
+    mpsd__u16(s, mpsd__doc_mode(d));
 
-    mpsd__u32(s, 0);                          /* colour mode data    */
+    mpsd__u32(s, (uint32_t)d->color_mode_data.size);   /* colour mode data: a palette, inks */
+    mpsd__put(s, d->color_mode_data.data, d->color_mode_data.size);
 
     mpsd__u32(s, (uint32_t)mpsd__resources_size(d));
     mpsd__resources(s, d);

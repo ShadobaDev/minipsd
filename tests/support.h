@@ -51,7 +51,7 @@ struct Layer {
     std::uint8_t opacity = 0, flags = 0;
     std::vector<int>  channelIds;
     std::vector<int>  compression;   // per channel
-    Bytes rgba;                      // decoded, interleaved; empty for an empty layer
+    Bytes pixels;                    // decoded, interleaved RGBA; empty for an empty layer
 };
 
 struct Psd {
@@ -176,14 +176,14 @@ Psd read(const Bytes &b)
     for (int i = 0; i < count; ++i) {
         Layer &l = p.layers[i];
         const auto w = static_cast<std::uint32_t>(l.right - l.left), h = static_cast<std::uint32_t>(l.bottom - l.top);
-        if (w && h) l.rgba.assign(std::size_t(w) * h * 4, 0);
+        if (w && h) l.pixels.assign(std::size_t(w) * h * 4, 0);
         for (std::size_t c = 0; c < l.channelIds.size(); ++c) {
             const std::size_t start = r.pos();
             const int comp = r.u16();
             l.compression.push_back(comp);
             std::vector<std::uint16_t> counts;
             if (comp == 1) for (std::uint32_t y = 0; y < h; ++y) counts.push_back(r.u16());
-            if (w && h) readPlane(r, comp, counts, w, h, l.rgba, rgbaOffset(l.channelIds[c]));
+            if (w && h) readPlane(r, comp, counts, w, h, l.pixels, rgbaOffset(l.channelIds[c]));
             if (r.pos() - start != lengths[i][c]) throw std::runtime_error("channel length does not match its record");
         }
     }

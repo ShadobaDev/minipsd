@@ -26,9 +26,9 @@ TEST(MinipsdDocumentTest, AcceptsAPlainDocument)
 
     // A rectangle may lie anywhere, on the canvas or off it; an empty layer's has no area.
     const minipsd_layer anywhere[3] = {
-        {.name = "Off", .rgba = px.data(), .opacity = 255, .top = -2147483647 - 1, .left = 9, .bottom = -2147483647 + 1, .right = 11},
-        {.name = "Edge", .rgba = px.data(), .opacity = 255, .top = 1, .left = 1, .bottom = 3, .right = 3},
-        {.name = "Empty", .rgba = nullptr, .opacity = 255, .top = 5, .left = 5, .bottom = 5, .right = 9}};
+        {.name = "Off", .pixels = px.data(), .opacity = 255, .top = -2147483647 - 1, .left = 9, .bottom = -2147483647 + 1, .right = 11},
+        {.name = "Edge", .pixels = px.data(), .opacity = 255, .top = 1, .left = 1, .bottom = 3, .right = 3},
+        {.name = "Empty", .pixels = nullptr, .opacity = 255, .top = 5, .left = 5, .bottom = 5, .right = 9}};
     const minipsd_doc r = docOf(2, 2, anywhere, 3);
     EXPECT_EQ(minipsd_doc_check(&r, nullptr), MINIPSD_OK);
 }
@@ -53,6 +53,16 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
     }
     d = docOf(2, 2, &layer, 1); d.icc_size = 4;
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "ICC size without data";
+    // The colour mode: 0 and RGB are RGB; the others wait for the writer (S6.19); RGB has no mode data.
+    const std::uint8_t palette[3] = {1, 2, 3};
+    d = docOf(2, 2, &layer, 1); d.color_mode = MINIPSD_MODE_RGB;
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK) << "RGB named";
+    d.color_mode = MINIPSD_MODE_CMYK;
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_UNSUPPORTED) << "CMYK, not yet";
+    d = docOf(2, 2, &layer, 1); d.color_mode_data = {palette, sizeof palette};
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "mode data for RGB";
+    d.color_mode_data = {nullptr, 3};
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "mode data size without data";
     for (const auto &[w, h] : {std::pair<std::uint32_t, std::uint32_t>{0, 2}, {2, 0},
                                {MINIPSD_MAX_SIDE + 1, 2}, {2, MINIPSD_MAX_SIDE + 1}}) {
         d = docOf(w, h, &layer, 1);
@@ -60,13 +70,13 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
     }
 
     // Rectangles: inverted, an area without pixels, a side PSD's 16-bit row counts cannot hold.
-    struct Case { std::int32_t top, left, bottom, right; const std::uint8_t *rgba; int rc; };
+    struct Case { std::int32_t top, left, bottom, right; const std::uint8_t *pixels; int rc; };
     for (const Case &c : {Case{2, 0, 1, 2, px.data(), MINIPSD_ERR_ARG}, Case{0, 2, 2, 1, px.data(), MINIPSD_ERR_ARG},
                           Case{0, 0, 2, 2, nullptr, MINIPSD_ERR_ARG},
                           Case{0, 0, 1, MINIPSD_MAX_SIDE + 1, px.data(), MINIPSD_ERR_SIZE},
                           Case{-MINIPSD_MAX_SIDE, 0, 1, 1, px.data(), MINIPSD_ERR_SIZE},
                           Case{-2147483647 - 1, 0, 2147483647, 1, px.data(), MINIPSD_ERR_SIZE}}) {
-        const minipsd_layer bad{.name = "R", .rgba = c.rgba, .opacity = 255,
+        const minipsd_layer bad{.name = "R", .pixels = c.pixels, .opacity = 255,
                                 .top = c.top, .left = c.left, .bottom = c.bottom, .right = c.right};
         d = docOf(2, 2, &bad, 1);
         EXPECT_EQ(minipsd_doc_check(&d, nullptr), c.rc) << c.top << ", " << c.left << ", " << c.bottom << ", " << c.right;
@@ -86,7 +96,7 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
     d = docOf(2, 2, &layer, 1); d.layer_tail = {nullptr, 4};
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "a layer tail size without data";
     for (const minipsd_bytes extra : {minipsd_bytes{nullptr, 12}, minipsd_bytes{one, 1}}) {
-        const minipsd_layer bad{.name = "L", .rgba = px.data(), .opacity = 255, .additional_info = extra};
+        const minipsd_layer bad{.name = "L", .pixels = px.data(), .opacity = 255, .additional_info = extra};
         d = docOf(2, 2, &bad, 1);
         EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "extra of " << extra.size << " bytes";
     }
@@ -98,7 +108,7 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
         static minipsd_bytes four[4];
         static minipsd_layer l;
         for (minipsd_bytes &c : four) c = {ch.data(), ch.size()};
-        l = {.name = "S", .rgba = rgba, .opacity = 255, .top = 0, .left = 0, .bottom = 2, .right = 2, .stored = four};
+        l = {.name = "S", .pixels = rgba, .opacity = 255, .top = 0, .left = 0, .bottom = 2, .right = 2, .stored = four};
         minipsd_doc s = docOf(2, 2, &l, 1);
         s.composite = composite;
         return minipsd_doc_check(&s, nullptr);
@@ -114,7 +124,7 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
     // Groups nest bottom first: a divider, the layers, the top record.
     auto groups = [&](std::initializer_list<std::uint8_t> kinds) {
         std::vector<minipsd_layer> ls;
-        for (std::uint8_t k : kinds) ls.push_back({.name = "G", .rgba = nullptr, .opacity = 255, .section_divider_type = k});
+        for (std::uint8_t k : kinds) ls.push_back({.name = "G", .pixels = nullptr, .opacity = 255, .section_divider_type = k});
         const minipsd_doc g = docOf(2, 2, ls.data(), ls.size());
         return minipsd_doc_check(&g, nullptr);
     };
@@ -127,7 +137,7 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
 
     // Masks: a rectangle not inverted, pixels for an area, a side PSD can count.
     auto masked = [&](const minipsd_mask &m) {
-        const minipsd_layer ml{.name = "M", .rgba = px.data(), .opacity = 255, .mask = &m};
+        const minipsd_layer ml{.name = "M", .pixels = px.data(), .opacity = 255, .mask = &m};
         const minipsd_doc md = docOf(2, 2, &ml, 1);
         return minipsd_doc_check(&md, nullptr);
     };

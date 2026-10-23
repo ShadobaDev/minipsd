@@ -35,7 +35,7 @@ The API is [include/minipsd.h](include/minipsd.h); the implementation is in
 #include "minipsd.h"
 
 minipsd_layer layers[2] = {
-    { .name = "Template", .rgba = rgba, .opacity = 255 },   /* bottom, the full canvas */
+    { .name = "Template", .pixels = rgba, .opacity = 255 },   /* bottom, the full canvas */
     { .name = "Layer", .opacity = 255 },                    /* empty layer above it    */
 };
 minipsd_doc doc = { .width = width, .height = height, .dpi = 300.0, .layers = layers, .layer_count = 2 };

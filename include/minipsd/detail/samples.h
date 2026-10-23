@@ -16,13 +16,6 @@
 
 #include <string.h>
 
-/* --- colour modes, as the header stores them --- */
-
-#define MPSD__MODE_RGB          3
-#define MPSD__MODE_CMYK         4
-#define MPSD__MODE_MULTICHANNEL 7
-#define MPSD__MODE_LAB          9
-
 /* --- colour channels count --- */
 
 #define MPSD__SINGLE_COLOR_CHAN     1
@@ -35,9 +28,9 @@
 static unsigned mpsd__colors(unsigned mode, unsigned channels)
 {
     switch (mode) {
-    case MPSD__MODE_RGB: case MPSD__MODE_LAB: return MPSD__TRIPLE_COLOR_CHAN;
-    case MPSD__MODE_CMYK:                     return MPSD__QUADRUPLE_COLOR_CHAN;
-    case MPSD__MODE_MULTICHANNEL:             return channels;
+    case MINIPSD_MODE_RGB: case MINIPSD_MODE_LAB: return MPSD__TRIPLE_COLOR_CHAN;
+    case MINIPSD_MODE_CMYK:                     return MPSD__QUADRUPLE_COLOR_CHAN;
+    case MINIPSD_MODE_MULTICHANNEL:             return channels;
     default:                                  return MPSD__SINGLE_COLOR_CHAN;
     }
 }

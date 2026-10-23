@@ -41,8 +41,8 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
 
     for (i = 0; i < sizeof px; ++i) px[i] = (uint8_t)(i * 17);
     memset(layers, 0, sizeof layers);   /* the structs grow at the end: zero is every default */
-    layers[0].name = "Template"; layers[0].rgba = px;   layers[0].opacity = 255; layers[0].hidden = 0;
-    layers[1].name = "Layer";    layers[1].rgba = NULL; layers[1].opacity = 255; layers[1].hidden = 0;
+    layers[0].name = "Template"; layers[0].pixels = px;   layers[0].opacity = 255; layers[0].hidden = 0;
+    layers[1].name = "Layer";    layers[1].pixels = NULL; layers[1].opacity = 255; layers[1].hidden = 0;
     layers[1].blending_ranges = &blend_if; layers[1].blending_range_count = 1;
     memset(&doc, 0, sizeof doc);
     doc.width = 3; doc.height = 2; doc.dpi = 300.0; doc.layers = layers; doc.layer_count = 2;
@@ -208,7 +208,7 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
         minipsd_decode_opts deep;
         smoke_buf           c;
         for (i = 0; i < sizeof px16 / sizeof px16[0]; ++i) px16[i] = (uint16_t)(px[i] * 257u);
-        layers[0].rgba = (const uint8_t *)px16;
+        layers[0].pixels = (const uint8_t *)px16;
         doc.depth      = 16;
         c.data = file; c.size = 0; c.capacity = sizeof file;
         memset(&deep, 0, sizeof deep);

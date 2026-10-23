@@ -24,7 +24,7 @@
  *
  * \code
  *     minipsd_layer layers[2] = {
- *         { .name = "Template", .rgba = rgba, .opacity = 255 },   // bottom, the full canvas
+ *         { .name = "Template", .pixels = rgba, .opacity = 255 },   // bottom, the full canvas
  *         { .name = "Layer", .opacity = 255 },                    // empty, above it
  *     };
  *     minipsd_doc doc = { .width = width, .height = height, .dpi = 300.0, .layers = layers, .layer_count = 2 };
@@ -191,6 +191,24 @@ enum {
 };
 
 /**
+ * \brief Colour modes, numbered as the file's header numbers them (minipsd_info.color_mode).
+ *
+ * minipsd converts no colour: samples are what the mode stores, and the ICC profile or the colour
+ * mode data says what they mean.  In a document, color_mode 0 is RGB, the default, unless depth is
+ * 1: bitmap is the only 1-bit mode, so 0 then means bitmap.
+ */
+enum {
+    MINIPSD_MODE_BITMAP       = 0, /*!< 1 bit: black and white; composite only, no layers.          */
+    MINIPSD_MODE_GREY         = 1, /*!< One channel.                                                */
+    MINIPSD_MODE_INDEXED      = 2, /*!< One channel of palette entries (color_mode_data); no layers. */
+    MINIPSD_MODE_RGB          = 3, /*!< Red, green, blue.                                           */
+    MINIPSD_MODE_CMYK         = 4, /*!< Cyan, magenta, yellow, black, stored inverted (255: no ink). */
+    MINIPSD_MODE_MULTICHANNEL = 7, /*!< N channels of no stated meaning; no layers.                 */
+    MINIPSD_MODE_DUOTONE      = 8, /*!< One channel; the inks and curves in color_mode_data.        */
+    MINIPSD_MODE_LAB          = 9  /*!< L, a, b.                                                    */
+};
+
+/**
  * \brief Channel compression.  Zero is RLE, so a zero-initialised document gets the compact one.
  *
  * ZIP is for the layers' and masks' channels, through the caller's deflate
@@ -327,13 +345,15 @@ typedef struct minipsd_mask {
  */
 typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Padding): fields are only added at the end */
     const char    *name;        /*!< UTF-8; NULL means "".                                            */
-    const uint8_t *rgba;        /*!< (right - left) * (bottom - top) * 4 samples, rows top down, straight
-                                    (not premultiplied) alpha; NULL means an empty layer.  A sample is
-                                    a byte, or with depth 16 a uint16_t in host order (two bytes).  */
+    const uint8_t *pixels;      /*!< (right - left) * (bottom - top) pixels, rows top down, each the
+                                    mode's colour channels then transparency (RGB: R, G, B, A),
+                                    straight (not premultiplied) alpha, as minipsd_target_interleaved
+                                    decodes them; NULL means an empty layer.  A sample is a byte, or
+                                    with depth 16 a uint16_t in host order (two bytes).            */
     uint8_t        opacity;     /*!< 255 is opaque, 0 is fully transparent.                            */
     uint8_t        hidden;      /*!< Non-zero: the layer starts hidden (and stays out of the composite). */
     int32_t        top, left, bottom, right; /*!< The layer's rectangle on the canvas, as in
-                                    minipsd_layer_view; all four zero, with rgba and no stored: the
+                                    minipsd_layer_view; all four zero, with pixels and no stored: the
                                     full canvas.  It may reach past the canvas, or lie wholly
                                     outside it.  An empty layer's has no area.                     */
     char           blend_mode[4]; /*!< The blend mode's four-character key, such as "mul "; all zero:
@@ -347,12 +367,12 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
                                     effects, groups, ...), as minipsd_layer_view.additional_info
                                     holds them: written after the layer's own name, except a
                                     'luni' block, since name wins.                                 */
-    const minipsd_bytes *stored; /*!< NULL: rgba is encoded.  Otherwise four channels as a file
+    const minipsd_bytes *stored; /*!< NULL: pixels are encoded.  Otherwise four channels as a file
                                     stores them (R, G, B, transparency, as minipsd_layer_view.channel:
                                     the compression marker, then the rows), copied as they are
-                                    instead of encoding rgba: a layer never decoded is never encoded
+                                    instead of encoding pixels: a layer never decoded is never encoded
                                     again.  Each is checked against the rectangle; transparency of
-                                    size 0 is none, and written as none.  rgba may then be NULL, as long
+                                    size 0 is none, and written as none.  pixels may then be NULL, as long
                                     as the document supplies its composite.                       */
     uint8_t        section_divider_type; /*!< MINIPSD_SECTION_*: a layer, or a group's top record or
                                     divider.  Groups nest bottom first: a divider, the group's
@@ -390,8 +410,10 @@ typedef struct minipsd_doc {
     size_t               icc_size;       /*!< Size of icc in bytes; 0 when icc is NULL.      */
     int                  compression;    /*!< MINIPSD_RLE, MINIPSD_RAW, or MINIPSD_ZIP(_PREDICTED)
                                               with minipsd_write_opts.deflate.                */
-    const uint8_t       *composite;      /*!< The composite (merged) image: width * height * 4
-                                              samples, rows top down, straight alpha, written
+    const uint8_t       *composite;      /*!< The composite (merged) image: width * height
+                                              pixels laid out as a layer's (the mode's colour
+                                              channels then transparency), rows top down,
+                                              straight alpha, written
                                               whatever the layers hold.  NULL: composite_stored
                                               is copied; without it too, composed from the
                                               layers, a best effort (see "What it writes").  */
@@ -414,7 +436,7 @@ typedef struct minipsd_doc {
                                               Empty: no global mask, no blocks (an empty global
                                               mask is written).                               */
     uint16_t             depth;          /*!< Bits per channel: 0 or 8, or 16, where every sample
-                                              (rgba, mask pixels, composite) is a uint16_t in
+                                              (pixels, mask pixels, composite) is a uint16_t in
                                               host order, 0 .. 65535.                         */
     uint16_t             format;         /*!< MINIPSD_PSD (or 0) or MINIPSD_PSB: what the
                                               document is.  Everything kept from a file
@@ -441,6 +463,13 @@ typedef struct minipsd_doc {
                                               composite_stored: a supplied or composed
                                               composite always has transparency.  minipsd_read
                                               sets the file's.                                 */
+    uint16_t             color_mode;     /*!< MINIPSD_MODE_*: what the samples are; 0 is RGB
+                                              (bitmap with depth 1).  minipsd_read sets the
+                                              file's.                                         */
+    minipsd_bytes        color_mode_data; /*!< The colour mode data, written as given: an
+                                              indexed document's palette, a duotone's inks
+                                              and curves (minipsd_info.color_mode_data); size
+                                              0 for every other mode.                         */
 } minipsd_doc;
 
 /**
@@ -655,7 +684,7 @@ typedef struct minipsd_info {
     uint32_t      width, height;       /*!< In pixels.                                                 */
     uint16_t      channels;            /*!< Channels of the composite, as stored.                      */
     uint16_t      depth;               /*!< Bits per channel: 1, 8, 16 or 32.                          */
-    uint16_t      color_mode;          /*!< As stored: 0 bitmap, 1 grey, 2 indexed, 3 RGB, 4 CMYK,
+    uint16_t      color_mode;          /*!< MINIPSD_MODE_*, as stored: 0 bitmap, 1 grey, 2 indexed, 3 RGB, 4 CMYK,
                                             7 multichannel, 8 duotone, 9 Lab.                          */
     double        dpi;                 /*!< Horizontal pixels per inch (resource 1005); 0 without it.   */
     minipsd_bytes icc;                 /*!< The ICC profile (resource 1039); size 0 when none.        */

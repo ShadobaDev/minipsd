@@ -1321,11 +1321,11 @@ Chan zipChan(int id, const std::vector<unsigned> &samples, std::uint32_t w, bool
 }
 
 // A 3 x 2 layer, every channel ZIP, two of them predicted, and a ZIP mask the size of the layer
-// holding the red samples; values that wrap when predicted.  rgba is what it decodes to.
+// holding the red samples; values that wrap when predicted.  pixels is what it decodes to.
 struct ZipLayer {
     static constexpr std::uint32_t w = 3, h = 2;
     Rec   rec;
-    Bytes rgba, red;   // interleaved RGBA and the mask, samples in host order
+    Bytes pixels, red;   // interleaved RGBA and the mask, samples in host order
 
     explicit ZipLayer(int depth)
     {
@@ -1344,7 +1344,7 @@ struct ZipLayer {
             else      out.push_back(static_cast<std::uint8_t>(v));
         };
         for (std::size_t i = 0; i < std::size_t(w) * h; ++i) {
-            for (const auto &c : s) put(rgba, c[i]);
+            for (const auto &c : s) put(pixels, c[i]);
             put(red, s[0][i]);
         }
     }
@@ -1737,12 +1737,12 @@ TEST(MinipsdReaderTest, ZipChannelsDecodeThroughTheCallersInflate)
         const std::size_t bytes = depth / 8;
         const ZipLayer z(depth);
         OneLayer l(z.rec, static_cast<unsigned>(depth));
-        Bytes scratch(std::size_t(w) * h * bytes), out(z.rgba.size(), 0xEE);
+        Bytes scratch(std::size_t(w) * h * bytes), out(z.pixels.size(), 0xEE);
         int calls = 0;
         minipsd_decode_opts opts{0, 0, 0, depth, countingInflate, &calls, scratch.data(), scratch.size()};
         minipsd_target t = targetOf(out, w, depth);
         ASSERT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, &opts), MINIPSD_OK);
-        EXPECT_EQ(out, z.rgba) << "prediction undone, 16-bit samples in host order";
+        EXPECT_EQ(out, z.pixels) << "prediction undone, 16-bit samples in host order";
         EXPECT_EQ(calls, 4) << "one channel at a time, through the user pointer";
 
         // A band: the whole channel is inflated, its rows taken from there.
@@ -1750,13 +1750,13 @@ TEST(MinipsdReaderTest, ZipChannelsDecodeThroughTheCallersInflate)
         t = targetOf(band, w, depth);
         opts.y_first = opts.y_count = 1;
         ASSERT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, &opts), MINIPSD_OK);
-        EXPECT_EQ(band, Bytes(z.rgba.begin() + std::ptrdiff_t(band.size()), z.rgba.end()));
+        EXPECT_EQ(band, Bytes(z.pixels.begin() + std::ptrdiff_t(band.size()), z.pixels.end()));
 
         // Bands of one row over a scratch of every channel: the first inflates them, each in its
         // own part, the next take them from there.
         opts.scratch_kept = 1;
         EXPECT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, &opts), MINIPSD_ERR_ARG) << "kept, but one channel's room shares one part";
-        Bytes all(scratch.size() * 4), bands(z.rgba.size(), 0xEE);
+        Bytes all(scratch.size() * 4), bands(z.pixels.size(), 0xEE);
         opts.scratch = all.data();
         opts.scratch_size = all.size();
         calls = 0;
@@ -1767,7 +1767,7 @@ TEST(MinipsdReaderTest, ZipChannelsDecodeThroughTheCallersInflate)
             ASSERT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, &opts), MINIPSD_OK);
             std::copy(band.begin(), band.end(), bands.begin() + std::ptrdiff_t(y * band.size()));
         }
-        EXPECT_EQ(bands, z.rgba);
+        EXPECT_EQ(bands, z.pixels);
         EXPECT_EQ(calls, 4) << "one inflate a channel, not one a band";
 
         opts.scratch = scratch.data();
@@ -1788,7 +1788,7 @@ TEST(MinipsdReaderTest, ZipChannelsDecodeThroughTheCallersInflate)
         opts.scratch_kept = 0;
 
         // Refused before a sample is written: no room to inflate into.
-        Bytes untouched(z.rgba.size(), 0xEE);
+        Bytes untouched(z.pixels.size(), 0xEE);
         t = targetOf(untouched, w, depth);
         opts.scratch_size = scratch.size() - 1;
         EXPECT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, &opts), MINIPSD_ERR_ARG);
@@ -1796,7 +1796,7 @@ TEST(MinipsdReaderTest, ZipChannelsDecodeThroughTheCallersInflate)
         opts.scratch_size = scratch.size();
         opts.scratch = nullptr;
         EXPECT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, &opts), MINIPSD_ERR_ARG);
-        EXPECT_EQ(untouched, Bytes(z.rgba.size(), 0xEE));
+        EXPECT_EQ(untouched, Bytes(z.pixels.size(), 0xEE));
 
         // A stream that does not inflate, or not to the channel's size, is malformed.
         opts.scratch = scratch.data();
@@ -2207,9 +2207,9 @@ TEST(MinipsdReadTest, AFileBecomesADocumentThatStandsAlone)
 {
     const Bytes px = testImage(5, 3), icc = {1, 2, 3, 4, 5};
     const minipsd_layer layers[3] = {
-        {.name = "\xC5\xBB\xC3\xB3\xC5\x82w", .rgba = px.data(), .opacity = 128, .hidden = 1, .top = -1, .left = 4, .bottom = 2, .right = 9},
-        {.name = "Empty", .rgba = nullptr, .opacity = 255, .top = 3, .left = 3, .bottom = 3, .right = 6},
-        {.name = nullptr, .rgba = px.data(), .opacity = 255, .top = 0, .left = 0, .bottom = 3, .right = 5}};
+        {.name = "\xC5\xBB\xC3\xB3\xC5\x82w", .pixels = px.data(), .opacity = 128, .hidden = 1, .top = -1, .left = 4, .bottom = 2, .right = 9},
+        {.name = "Empty", .pixels = nullptr, .opacity = 255, .top = 3, .left = 3, .bottom = 3, .right = 6},
+        {.name = nullptr, .pixels = px.data(), .opacity = 255, .top = 0, .left = 0, .bottom = 3, .right = 5}};
     minipsd_doc d = docOf(7, 4, layers, 3);
     d.dpi = 72.5; d.icc = icc.data(); d.icc_size = icc.size(); d.compression = MINIPSD_RAW;
     const Bytes original = write(d);
@@ -2233,6 +2233,8 @@ TEST(MinipsdReadTest, AFileBecomesADocumentThatStandsAlone)
     EXPECT_EQ(r->height, 4u);
     EXPECT_EQ(r->dpi, 72.5);
     EXPECT_EQ(Bytes(r->icc, r->icc + r->icc_size), icc);
+    EXPECT_EQ(r->color_mode, MINIPSD_MODE_RGB) << "the file's mode, named";
+    EXPECT_EQ(r->color_mode_data.size, 0u);
     EXPECT_EQ(r->compression, MINIPSD_RAW);
     ASSERT_EQ(r->layer_count, 3u);
     EXPECT_STREQ(r->layers[0].name, layers[0].name);
@@ -2243,8 +2245,8 @@ TEST(MinipsdReadTest, AFileBecomesADocumentThatStandsAlone)
         EXPECT_EQ(a.opacity, b.opacity);
         EXPECT_EQ(a.hidden, b.hidden);
         EXPECT_EQ(std::tie(a.top, a.left, a.bottom, a.right), std::tie(b.top, b.left, b.bottom, b.right));
-        EXPECT_EQ(a.rgba == nullptr, b.rgba == nullptr);
-        if (a.rgba) { EXPECT_EQ(Bytes(a.rgba, a.rgba + px.size()), px); }
+        EXPECT_EQ(a.pixels == nullptr, b.pixels == nullptr);
+        if (a.pixels) { EXPECT_EQ(Bytes(a.pixels, a.pixels + px.size()), px); }
     }
     EXPECT_EQ(r->composite_matted, 1);
     EXPECT_EQ(Bytes(r->composite, r->composite + std::ptrdiff_t(7) * 4 * 4), read(original).composite) << "as stored";
@@ -2359,7 +2361,7 @@ TEST(MinipsdReadTest, ZipLayersAndMasksDecodeThroughTheCallersInflate)
     const minipsd_read_opts zip{0, zlib_stored_inflate, nullptr};
     const Doc d = readDoc(file, nullptr, MINIPSD_OK, nullptr, &zip);
     ASSERT_TRUE(d);
-    EXPECT_EQ(Bytes(d->layers[0].rgba, d->layers[0].rgba + z.rgba.size()), z.rgba);
+    EXPECT_EQ(Bytes(d->layers[0].pixels, d->layers[0].pixels + z.pixels.size()), z.pixels);
     ASSERT_TRUE(d->layers[0].mask);
     EXPECT_EQ(Bytes(d->layers[0].mask->pixels, d->layers[0].mask->pixels + z.red.size()), z.red);
 
@@ -2381,7 +2383,7 @@ TEST(MinipsdReadTest, ZipLayersAndMasksDecodeThroughTheCallersInflate)
     s.layers[0].mask.clear();
     const Doc m = readDoc(build(s).bytes, nullptr, MINIPSD_OK, nullptr, &zip);
     ASSERT_TRUE(m);
-    EXPECT_EQ(Bytes(m->layers[0].rgba, m->layers[0].rgba + z.rgba.size()), z.rgba);
+    EXPECT_EQ(Bytes(m->layers[0].pixels, m->layers[0].pixels + z.pixels.size()), z.pixels);
 }
 
 // Photoshop's empty fill layer, its rectangle inverted, in a file that ends the layer and mask
@@ -2489,7 +2491,7 @@ TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
     EXPECT_EQ(d->dpi, 72.0) << "no resolution stored";
     ASSERT_EQ(d->layer_count, 1u);
     EXPECT_STREQ(d->layers[0].name, "Background");
-    EXPECT_EQ(Bytes(d->layers[0].rgba, d->layers[0].rgba + 16), (Bytes{0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255,
+    EXPECT_EQ(Bytes(d->layers[0].pixels, d->layers[0].pixels + 16), (Bytes{0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255,
                                                                      0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255}));
     EXPECT_EQ(minipsd_doc_check(d.get(), nullptr), MINIPSD_OK) << "the writer takes it as it is";
 
@@ -2529,7 +2531,7 @@ TEST(MinipsdReadTest, AFlat16BitFileIsOpaqueAt65535)
     ASSERT_TRUE(d);
     EXPECT_EQ(d->depth, 16);
     std::uint16_t px[4];
-    std::memcpy(px, d->layers[0].rgba, sizeof px);
+    std::memcpy(px, d->layers[0].pixels, sizeof px);
     EXPECT_EQ(px[0], 0x4040);
     EXPECT_EQ(px[3], 65535);
 }
@@ -3117,8 +3119,8 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
                 EXPECT_EQ(std::tie(a.opacity, a.hidden, a.top, a.left, a.bottom, a.right),
                           std::tie(b.opacity, b.hidden, b.top, b.left, b.bottom, b.right));
                 const std::size_t n = std::size_t(a.right - a.left) * std::size_t(a.bottom - a.top) * 4 * bytes;
-                EXPECT_EQ(a.rgba == nullptr, b.rgba == nullptr);
-                if (a.rgba && b.rgba) { EXPECT_TRUE(std::equal(a.rgba, a.rgba + n, b.rgba)); }
+                EXPECT_EQ(a.pixels == nullptr, b.pixels == nullptr);
+                if (a.pixels && b.pixels) { EXPECT_TRUE(std::equal(a.pixels, a.pixels + n, b.pixels)); }
             }
             EXPECT_TRUE(std::equal(d->composite, d->composite + composite.size(), e->composite));
             expectKeptAlike(file, again);
@@ -3137,8 +3139,8 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
                 const minipsd_layer &a = d->layers[i], &b = f->layers[i];
                 SCOPED_TRACE(i);
                 const std::size_t n = std::size_t(a.right - a.left) * std::size_t(a.bottom - a.top) * 4 * bytes;
-                EXPECT_EQ(a.rgba == nullptr, b.rgba == nullptr);
-                if (a.rgba && b.rgba) { EXPECT_TRUE(std::equal(a.rgba, a.rgba + n, b.rgba)); }
+                EXPECT_EQ(a.pixels == nullptr, b.pixels == nullptr);
+                if (a.pixels && b.pixels) { EXPECT_TRUE(std::equal(a.pixels, a.pixels + n, b.pixels)); }
             }
         }
 

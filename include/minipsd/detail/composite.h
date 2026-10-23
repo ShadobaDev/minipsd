@@ -24,7 +24,7 @@ static unsigned mpsd__doc_wide(const minipsd_doc *d) { return d->depth == MPSD__
 /* The full sample of the document's depth. */
 static uint32_t mpsd__doc_full(const minipsd_doc *d) { return mpsd__full(mpsd__doc_wide(d) ? MPSD__CH_16BIT : MPSD__CH_8BIT); }
 
-static int mpsd__contributes(const minipsd_layer *l) { return l->rgba && !l->hidden && l->opacity; }
+static int mpsd__contributes(const minipsd_layer *l) { return l->pixels && !l->hidden && l->opacity; }
 
 /* A layer's rectangle as written, and the size of its pixels: 0 by 0 for a layer without pixels or
    without area.  All four sides zero with pixels (rgba or stored channels) is the full canvas.
@@ -38,13 +38,13 @@ static mpsd__rect mpsd__layer_rect(const minipsd_doc *d, const minipsd_layer *l)
 {
     mpsd__rect r;
     r.top = l->top; r.left = l->left; r.bottom = l->bottom; r.right = l->right;
-    if (l->rgba && !l->stored && !(r.top | r.left | r.bottom | r.right)) {   /* stored: the file's own rectangle */
+    if (l->pixels && !l->stored && !(r.top | r.left | r.bottom | r.right)) {   /* stored: the file's own rectangle */
         r.bottom = (int32_t)d->height;
         r.right  = (int32_t)d->width;
     }
     r.width  = (uint32_t)((int64_t)r.right - r.left);
     r.height = (uint32_t)((int64_t)r.bottom - r.top);
-    if ((!l->rgba && !l->stored) || r.right <= r.left || r.bottom <= r.top) r.width = r.height = 0;   /* inverted: empty */
+    if ((!l->pixels && !l->stored) || r.right <= r.left || r.bottom <= r.top) r.width = r.height = 0;   /* inverted: empty */
     return r;
 }
 
@@ -76,7 +76,7 @@ static void mpsd__compose(const minipsd_doc *d, uint8_t *row, uint32_t y)
         const int64_t        x1 = r.right < (int64_t)d->width ? r.right : (int64_t)d->width;
         const uint8_t *src;
         if (!mpsd__contributes(l) || ly < 0 || ly >= (int64_t)r.height) continue;
-        src = l->rgba + (size_t)ly * r.width * pixel;
+        src = l->pixels + (size_t)ly * r.width * pixel;
         for (x = x0; x < x1; ++x) {
             uint8_t       *o  = row + (size_t)x * pixel;
             const uint8_t *px = src + (size_t)(x - r.left) * pixel;

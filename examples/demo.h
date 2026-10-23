@@ -38,8 +38,8 @@ static void demo_init(demo *d)
             p[2] = (uint8_t)(70 + (band == 2 ? state >> 16 : 0));
             p[3] = (uint8_t)(band == 0 ? 255 : band == 1 ? 255 - x : state >> 8);
         }
-    d->layers[0].name = "Template"; d->layers[0].rgba = d->pixels; d->layers[0].opacity = 255; d->layers[0].hidden = 0;
-    d->layers[1].name = "Layer";    d->layers[1].rgba = NULL;      d->layers[1].opacity = 255; d->layers[1].hidden = 0;
+    d->layers[0].name = "Template"; d->layers[0].pixels = d->pixels; d->layers[0].opacity = 255; d->layers[0].hidden = 0;
+    d->layers[1].name = "Layer";    d->layers[1].pixels = NULL;      d->layers[1].opacity = 255; d->layers[1].hidden = 0;
     memset(&d->doc, 0, sizeof d->doc);
     d->doc.width = DEMO_W; d->doc.height = DEMO_H; d->doc.dpi = 300.0;
     d->doc.layers = d->layers; d->doc.layer_count = 2; d->doc.compression = MINIPSD_RLE;

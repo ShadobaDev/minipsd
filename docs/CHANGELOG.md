@@ -9,6 +9,10 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
 `minipsd_doc_check` take a `const minipsd_write_opts *` after the document. To migrate, pass
 `NULL`: the document is written as before.
 
+**Breaking:** `minipsd_layer.rgba` is `minipsd_layer.pixels`: the mode's colour channels then
+transparency, which in RGB is the same R, G, B, A as before. To migrate, rename the field; a
+positional initialiser needs no change.
+
 ### Added
 - The reader, first part: `minipsd_reader_init` describes a PSD held in memory (size, depth,
   colour mode, dpi, ICC profile, layer count), from the whole file or a prefix
@@ -116,7 +120,7 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   still wins.
 - A stored layer without a transparency channel is written without one, as its file has it,
   instead of with an opaque one.
-- A layer's all-zero rectangle means the full canvas only with `rgba`: stored channels take the
+- A layer's all-zero rectangle means the full canvas only with `pixels`: stored channels take the
   rectangle as it is.
 - A layer's names kept from a file: `name_pascal` at the end of `minipsd_layer` holds its legacy
   name as stored, and while `name` still says what the file's names say, the legacy name and the

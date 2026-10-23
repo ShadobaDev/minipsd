@@ -58,7 +58,7 @@ TEST(MinipsdWriterTest, OneLayerRoundTripsThroughRle)
     EXPECT_EQ(l.flags, 0);
     EXPECT_EQ(l.pascalName, "Template");
     EXPECT_EQ(l.unicodeName, u"Template");
-    EXPECT_EQ(l.rgba, px);
+    EXPECT_EQ(l.pixels, px);
     EXPECT_EQ(p.compositeCompression, 1);
     EXPECT_EQ(p.composite, matted(px)) << "one layer at full opacity: the composite is the layer, over white";
 }
@@ -73,7 +73,7 @@ TEST(MinipsdWriterTest, RawCompressionRoundTrips)
         const Psd p = read(write(d));
         EXPECT_EQ(p.layers[0].compression, (std::vector<int>{0, 0, 0, 0}));
         EXPECT_EQ(p.compositeCompression, 0);
-        EXPECT_EQ(p.layers[0].rgba, px) << "width " << w;
+        EXPECT_EQ(p.layers[0].pixels, px) << "width " << w;
         EXPECT_EQ(p.composite, matted(px)) << "width " << w;
     }
 }
@@ -88,7 +88,7 @@ TEST(MinipsdWriterTest, EmptyLayerHasNoPixelsAndLeavesTheComposite)
     EXPECT_EQ(p.layers[1].pascalName, "Layer");
     EXPECT_EQ(p.layers[1].bottom, 0);
     EXPECT_EQ(p.layers[1].right, 0);
-    EXPECT_TRUE(p.layers[1].rgba.empty());
+    EXPECT_TRUE(p.layers[1].pixels.empty());
     EXPECT_EQ(p.composite, matted(px));
 }
 
@@ -98,10 +98,10 @@ TEST(MinipsdWriterTest, ALayerIsWrittenAtItsRectangle)
     // rectangle has no area: each record keeps its rectangle, and its channels its own pixels.
     const Bytes small = testImage(3, 2), edge = testImage(4, 5), outside = testImage(2, 2);
     const minipsd_layer layers[4] = {
-        {.name = "Small", .rgba = small.data(), .opacity = 255, .top = 1, .left = 2, .bottom = 3, .right = 5},
-        {.name = "Edge", .rgba = edge.data(), .opacity = 255, .top = -2, .left = 6, .bottom = 3, .right = 10},
-        {.name = "Outside", .rgba = outside.data(), .opacity = 255, .top = 9, .left = -5, .bottom = 11, .right = -3},
-        {.name = "Empty", .rgba = nullptr, .opacity = 255, .top = 4, .left = 4, .bottom = 4, .right = 7}};
+        {.name = "Small", .pixels = small.data(), .opacity = 255, .top = 1, .left = 2, .bottom = 3, .right = 5},
+        {.name = "Edge", .pixels = edge.data(), .opacity = 255, .top = -2, .left = 6, .bottom = 3, .right = 10},
+        {.name = "Outside", .pixels = outside.data(), .opacity = 255, .top = 9, .left = -5, .bottom = 11, .right = -3},
+        {.name = "Empty", .pixels = nullptr, .opacity = 255, .top = 4, .left = 4, .bottom = 4, .right = 7}};
     for (int compression : {MINIPSD_RLE, MINIPSD_RAW}) {
         minipsd_doc d = docOf(8, 4, layers, 4);
         d.compression = compression;
@@ -115,10 +115,10 @@ TEST(MinipsdWriterTest, ALayerIsWrittenAtItsRectangle)
             EXPECT_EQ(p.layers[i].bottom, l.bottom);
             EXPECT_EQ(p.layers[i].right, l.right);
         }
-        EXPECT_EQ(p.layers[0].rgba, small);
-        EXPECT_EQ(p.layers[1].rgba, edge);
-        EXPECT_EQ(p.layers[2].rgba, outside);
-        EXPECT_TRUE(p.layers[3].rgba.empty());
+        EXPECT_EQ(p.layers[0].pixels, small);
+        EXPECT_EQ(p.layers[1].pixels, edge);
+        EXPECT_EQ(p.layers[2].pixels, outside);
+        EXPECT_TRUE(p.layers[3].pixels.empty());
         EXPECT_EQ(p.composite.size(), 8u * 4 * 4) << "the composite stays the canvas";
     }
 
@@ -136,7 +136,7 @@ TEST(MinipsdWriterTest, ASuppliedCompositeIsMattedAndWrittenWithoutComposing)
 {
     const Bytes px = testImage(37, 5);
     const minipsd_layer layers[2] = {{"Template", px.data(), 255, 0},
-                                     {.name = "Offset", .rgba = px.data(), .opacity = 128, .top = 2, .left = -9, .bottom = 7, .right = 28}};
+                                     {.name = "Offset", .pixels = px.data(), .opacity = 128, .top = 2, .left = -9, .bottom = 7, .right = 28}};
     for (int compression : {MINIPSD_RLE, MINIPSD_RAW}) {
         SCOPED_TRACE(compression);
         minipsd_doc d = docOf(37, 5, layers, 2);
@@ -233,7 +233,7 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
                       + tagged("luni", {0, 0, 0, 1, 0, 'Y', 0, 0}) + tysh;             // another stale name, a block
     const minipsd_blending_range ranges[2] = {{{{0, 0}, {255, 255}}, {{59, 60}, {210, 220}}},   // grey, then red
                                               {{{10, 10}, {200, 200}}, {{0, 0}, {255, 255}}}};
-    const minipsd_layer layer{.name = "Mine", .rgba = px.data(), .opacity = 200, .hidden = 1,
+    const minipsd_layer layer{.name = "Mine", .pixels = px.data(), .opacity = 200, .hidden = 1,
                               .blend_mode = {'m', 'u', 'l', ' '}, .clipping = 1, .flags = 0x09, .additional_info = view(extra),
                               .blending_ranges = ranges, .blending_range_count = 2};
     const Bytes cm = {0, 150, 0, 0, 0, 1, 0, 2, 0, 150, 0, 0, 0, 1, 0, 2};   // 150 dpi, shown in centimetres
@@ -324,7 +324,7 @@ TEST(MinipsdWriterTest, GroupsAndMasksAreWritten)
     const Bytes kept = tagged("lsct", {0, 0, 0, 2, '8', 'B', 'I', 'M', 'n', 'o', 'r', 'm', 0, 0, 0, 1});   // with a sub-type
     const minipsd_layer layers[5] = {
         {.name = "</Layer group>", .opacity = 255, .section_divider_type = MINIPSD_SECTION_GROUP_END},
-        {.name = "Masked", .rgba = px.data(), .opacity = 255, .mask = &mask},
+        {.name = "Masked", .pixels = px.data(), .opacity = 255, .mask = &mask},
         {.name = "</Layer group>", .opacity = 255, .section_divider_type = MINIPSD_SECTION_GROUP_END},
         {.name = "Inner", .opacity = 255, .additional_info = view(kept), .section_divider_type = MINIPSD_SECTION_GROUP_CLOSED},
         {.name = "Outer", .opacity = 255, .blend_mode = {'s', 'c', 'r', 'n'}, .section_divider_type = MINIPSD_SECTION_GROUP}};
@@ -432,7 +432,7 @@ TEST(MinipsdWriterTest, GroupsAndMasksAreWritten)
     const Bytes realRaw = {0, 0};
     minipsd_mask withReal = mask;
     withReal.real = view(realRaw);
-    const minipsd_layer one{.name = "Real", .rgba = px.data(), .opacity = 255, .mask = &withReal};
+    const minipsd_layer one{.name = "Real", .pixels = px.data(), .opacity = 255, .mask = &withReal};
     const Bytes file = write(docOf(6, 4, &one, 1));
     Bytes workspace(256);
     minipsd_reader *r = nullptr;
@@ -453,7 +453,7 @@ TEST(MinipsdWriterTest, ChannelsOverNoAreaHaveNoRows)
     const minipsd_mask noArea{.pixels = two};
     const minipsd_layer layers[2] = {
         {.name = "Stored", .opacity = 255, .top = 0, .left = 0, .bottom = 0, .right = 2, .stored = stored},
-        {.name = "Masked", .rgba = px.data(), .opacity = 255, .mask = &noArea}};
+        {.name = "Masked", .pixels = px.data(), .opacity = 255, .mask = &noArea}};
     minipsd_doc d = docOf(2, 2, layers, 2);
     d.composite = canvas.data();
     const Bytes file = write(d);
@@ -511,7 +511,7 @@ TEST(MinipsdWriterTest, SixteenBitDocumentsAreWrittenAndReadBack)
     const auto bytes = [](const std::vector<std::uint16_t> &v) { return reinterpret_cast<const std::uint8_t *>(v.data()); };
     const minipsd_mask mask{.top = 1, .left = 1, .bottom = 3, .right = 5, .default_color = 255, .pixels = bytes(ramp)};
     const minipsd_layer layers[2] = {
-        {.name = "Deep", .rgba = bytes(px), .opacity = 200, .top = 1, .left = 1, .bottom = 4, .right = 6, .mask = &mask},
+        {.name = "Deep", .pixels = bytes(px), .opacity = 200, .top = 1, .left = 1, .bottom = 4, .right = 6, .mask = &mask},
         {.name = "Empty", .opacity = 255}};
     // ZIP through the stored-block deflate and inflate: each written as given, decoded back.
     const minipsd_write_opts zipped{0, zlib_stored_compress, nullptr};
@@ -589,7 +589,7 @@ TEST(MinipsdWriterTest, SixteenBitDocumentsAreWrittenAndReadBack)
                 minipsd_doc *opaque = nullptr;
                 const Bytes f = write(e, MINIPSD_OK, &zipped);
                 ASSERT_EQ(minipsd_read(f.data(), f.size(), nullptr, &inflating, &opaque, nullptr), MINIPSD_OK);
-                const auto *got = reinterpret_cast<const std::uint16_t *>(opaque->layers[0].rgba);
+                const auto *got = reinterpret_cast<const std::uint16_t *>(opaque->layers[0].pixels);
                 for (std::size_t i = 0; i < px.size(); ++i) ASSERT_EQ(got[i], i % 4 == 3 ? 65535 : px[i]) << i;
                 minipsd_doc_free(opaque);
             }
@@ -632,7 +632,7 @@ TEST(MinipsdWriterTest, PsbDocumentsAreWrittenAndReadBack)
     Bytes lnk2 = {'8', 'B', 'I', 'M', 'l', 'n', 'k', '2', 0, 0, 0, 0, 0, 0, 0, 2, 7, 7};   // eight bytes of length
     const minipsd_mask  mask{.top = 1, .left = 1, .bottom = 3, .right = 5, .default_color = 255, .pixels = ramp.data()};
     const minipsd_layer layers[3] = {
-        {.name = "Pic", .rgba = px.data(), .opacity = 200, .top = 1, .left = 1, .bottom = 4, .right = 6,
+        {.name = "Pic", .pixels = px.data(), .opacity = 200, .top = 1, .left = 1, .bottom = 4, .right = 6,
          .additional_info = {lnk2.data(), lnk2.size()}, .mask = &mask},
         {.name = "</Group>", .opacity = 255, .section_divider_type = MINIPSD_SECTION_GROUP_END},
         {.name = "Group", .opacity = 255, .section_divider_type = MINIPSD_SECTION_GROUP}};
@@ -695,7 +695,7 @@ TEST(MinipsdWriterTest, APsbTakesSidesAPsdCannot)
     const std::uint32_t w = 30001;
     Bytes px(std::size_t(w) * 4);
     for (std::size_t i = 0; i < px.size(); ++i) px[i] = static_cast<std::uint8_t>(i % 4 == 3 ? 255 : i * 7);
-    const minipsd_layer layer{.name = "Wide", .rgba = px.data(), .opacity = 255};
+    const minipsd_layer layer{.name = "Wide", .pixels = px.data(), .opacity = 255};
     minipsd_doc d = docOf(w, 1, &layer, 1);
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_SIZE) << "a PSD";
     d.format = MINIPSD_PSB;
@@ -703,7 +703,7 @@ TEST(MinipsdWriterTest, APsbTakesSidesAPsdCannot)
     minipsd_doc *back = nullptr;
     ASSERT_EQ(minipsd_read(file.data(), file.size(), nullptr, nullptr, &back, nullptr), MINIPSD_OK);
     EXPECT_EQ(back->width, w);
-    EXPECT_TRUE(std::equal(px.begin(), px.end(), back->layers[0].rgba));
+    EXPECT_TRUE(std::equal(px.begin(), px.end(), back->layers[0].pixels));
     minipsd_doc_free(back);
 
     d.width = MINIPSD_MAX_SIDE_PSB + 1;
@@ -734,7 +734,7 @@ TEST(MinipsdWriterTest, AnotherFormatTranslatesWhatTheDocumentKeeps)
     const Bytes extra = tagged("cinf", {1, 2, 3, 4}) + tagged("Patt", {9, 9});
     const Bytes tail  = be32(0) + tagged("FMsk", Bytes(12, 7)) + tagged("Patt", {5});   // the last one unpadded
     const minipsd_blending_range ranges[1] = {{{{5, 6}, {250, 251}}, {{0, 0}, {255, 255}}}};
-    const minipsd_layer layer{.name = "Pic", .rgba = px.data(), .opacity = 255, .top = 1, .left = 1, .bottom = 4, .right = 6,
+    const minipsd_layer layer{.name = "Pic", .pixels = px.data(), .opacity = 255, .top = 1, .left = 1, .bottom = 4, .right = 6,
                               .additional_info = {extra.data(), extra.size()}, .mask = &mask, .blending_ranges = ranges,
                               .blending_range_count = 1};
     minipsd_doc d = docOf(6, 4, &layer, 1);
@@ -788,7 +788,7 @@ TEST(MinipsdWriterTest, AnotherFormatRefusesWhatItCannotTranslate)
 {
     const Bytes px = testImage(2, 2);
     const minipsd_write_opts asPsb{MINIPSD_PSB}, asPsd{MINIPSD_PSD}, bad{3};
-    minipsd_layer layer{.name = "L", .rgba = px.data(), .opacity = 255, .bottom = 2, .right = 2};
+    minipsd_layer layer{.name = "L", .pixels = px.data(), .opacity = 255, .bottom = 2, .right = 2};
     minipsd_doc   d = docOf(2, 2, &layer, 1);
     EXPECT_EQ(minipsd_doc_check(&d, &bad), MINIPSD_ERR_ARG);
     EXPECT_EQ(minipsd_doc_check(&d, &asPsb), MINIPSD_OK) << "nothing kept: nothing to translate";
@@ -858,7 +858,7 @@ TEST(MinipsdWriterTest, PassThroughEncodesOnlyTheLayerThatChanged)
     const Bytes a = testImage(37, 5), b = testImage(20, 3), c = testImage(37, 5);
     const Bytes fresh(std::size_t(20) * 3 * 4, 0x55);
     const minipsd_layer layers[3] = {{"A", a.data(), 255, 0},
-                                     {.name = "B", .rgba = b.data(), .opacity = 255, .top = 1, .left = 2, .bottom = 4, .right = 22},
+                                     {.name = "B", .pixels = b.data(), .opacity = 255, .top = 1, .left = 2, .bottom = 4, .right = 22},
                                      {"C", c.data(), 128, 1}};
     // Each layer's four channels as the file stores them, through the reader.
     auto channels = [](const Bytes &file) {
@@ -884,14 +884,14 @@ TEST(MinipsdWriterTest, PassThroughEncodesOnlyTheLayerThatChanged)
         minipsd_doc *r = nullptr;
         ASSERT_EQ(minipsd_read(file.data(), file.size(), nullptr, &keep, &r, nullptr), MINIPSD_OK);
         ASSERT_NE(r->layers[1].stored, nullptr);
-        EXPECT_EQ(r->layers[1].rgba, nullptr) << "nothing decoded";
+        EXPECT_EQ(r->layers[1].pixels, nullptr) << "nothing decoded";
         encodedLayers.clear();
         EXPECT_EQ(write(*r), file) << "copied as stored: the same bytes";
         EXPECT_TRUE(encodedLayers.empty()) << "and nothing encoded";
 
         // Layer B changes: only it is encoded; the others' channels are the input's, byte for byte.
         std::vector<minipsd_layer> edited(r->layers, r->layers + 3);
-        edited[1].rgba = fresh.data();
+        edited[1].pixels = fresh.data();
         edited[1].stored = nullptr;
         minipsd_doc e = *r;
         e.layers = edited.data();
@@ -904,7 +904,7 @@ TEST(MinipsdWriterTest, PassThroughEncodesOnlyTheLayerThatChanged)
         ASSERT_EQ(after.size(), 3u);
         EXPECT_EQ(after[0], before[0]);
         EXPECT_EQ(after[2], before[2]);
-        EXPECT_EQ(read(out).layers[1].rgba, fresh);
+        EXPECT_EQ(read(out).layers[1].pixels, fresh);
         minipsd_doc_free(r);
     }
 }
@@ -921,7 +921,7 @@ TEST(MinipsdWriterTest, RecordsKeepOpacityVisibilityAndPixelsAsGiven)
     EXPECT_EQ(p.layers[1].flags, 0x02) << "hidden";
     EXPECT_EQ(p.layers[1].opacity, 128);
     EXPECT_EQ(p.layers[2].opacity, 0);
-    EXPECT_EQ(p.layers[1].rgba, pink) << "opacity is a layer setting, not baked into its pixels";
+    EXPECT_EQ(p.layers[1].pixels, pink) << "opacity is a layer setting, not baked into its pixels";
     EXPECT_EQ(p.composite, red) << "the composite reaches the file: neither hidden nor clear shows";
 }
 
@@ -945,7 +945,7 @@ TEST(MinipsdWriterTest, UnicodeNameGoesToLuniAndAsciiToThePascalString)
     // NUL: written as they are while the name is theirs, the writer's own once it changes.
     const Bytes legacy = {0xAF, 'o', 'l', 'w'};                     // "Zolw" with a Z dot, Windows-1250
     const Bytes luni   = tagged("luni", {0, 0, 0, 5, 0x01, 0x7B, 0, 'o', 0, 'l', 0, 'w', 0, 0, 0, 0});
-    minipsd_layer kept{.name = "\xC5\xBBolw", .rgba = px.data(), .opacity = 255, .additional_info = view(luni), .name_pascal = view(legacy)};
+    minipsd_layer kept{.name = "\xC5\xBBolw", .pixels = px.data(), .opacity = 255, .additional_info = view(luni), .name_pascal = view(legacy)};
     Psd k = read(write(docOf(2, 2, &kept, 1)));
     EXPECT_EQ(k.layers[0].pascalName, std::string(legacy.begin(), legacy.end())) << "the kept legacy name";
     EXPECT_EQ(k.layers[0].unicodeName, (std::u16string{u'\u017B', u'o', u'l', u'w', 0})) << "the kept 'luni', its NUL too";
@@ -956,7 +956,7 @@ TEST(MinipsdWriterTest, UnicodeNameGoesToLuniAndAsciiToThePascalString)
 
     // Without a 'luni', a legacy name read as Latin-1: kept, and no 'luni' while it is the name.
     const Bytes cafe = {'C', 'a', 'f', 0xE9};
-    minipsd_layer latin{.name = "Caf\xC3\xA9", .rgba = px.data(), .opacity = 255, .name_pascal = view(cafe)};
+    minipsd_layer latin{.name = "Caf\xC3\xA9", .pixels = px.data(), .opacity = 255, .name_pascal = view(cafe)};
     k = read(write(docOf(2, 2, &latin, 1)));
     EXPECT_EQ(k.layers[0].pascalName, "Caf\xE9");
     EXPECT_TRUE(k.layers[0].unicodeName.empty()) << "the file had none";
@@ -977,7 +977,7 @@ TEST(MinipsdWriterTest, UnicodeNameGoesToLuniAndAsciiToThePascalString)
     };
     for (const auto &n : names) {
         SCOPED_TRACE(n.name ? n.name : "(null)");
-        const minipsd_layer one{.name = n.name, .rgba = px.data(), .opacity = 255, .additional_info = view(n.luni)};
+        const minipsd_layer one{.name = n.name, .pixels = px.data(), .opacity = 255, .additional_info = view(n.luni)};
         const Psd q = read(write(docOf(2, 2, &one, 1)));
         const std::string mine = n.name ? n.name : "";
         if (n.kept) { EXPECT_EQ(q.layers[0].unicodeName.size(), mine.size() + (n.name ? 1u : 0u)) << "the kept 'luni', its NUL too"; }
@@ -1087,7 +1087,7 @@ TEST(MinipsdWriterTest, PullTotalIsTheFileSize)
     const Bytes icc = {1, 2, 3, 4, 5};
     const minipsd_layer layers[4] = {{"Template", px.data(), 255, 0}, {"Layer", nullptr, 255, 0},
                                      {"Half \xC5\xBC", px.data(), 128, 1},
-                                     {.name = "Offset", .rgba = px.data(), .opacity = 255, .top = -2, .left = 20, .bottom = 3, .right = 57}};
+                                     {.name = "Offset", .pixels = px.data(), .opacity = 255, .top = -2, .left = 20, .bottom = 3, .right = 57}};
     for (int compression : {MINIPSD_RLE, MINIPSD_RAW})
         for (bool withIcc : {false, true}) {
             minipsd_doc d = docOf(37, 5, layers, 4);
@@ -1106,7 +1106,7 @@ TEST(MinipsdWriterTest, PullWriterFeedsANonBlockingTarget)
     // it did not take and pulls more only once that is gone.
     const Bytes px = testImage(37, 5);
     const minipsd_layer layers[3] = {{"Template", px.data(), 255, 0}, {"Layer", nullptr, 255, 0},
-                                     {.name = "Offset", .rgba = px.data(), .opacity = 255, .top = 4, .left = -30, .bottom = 9, .right = 7}};
+                                     {.name = "Offset", .pixels = px.data(), .opacity = 255, .top = 4, .left = -30, .bottom = 9, .right = 7}};
     for (int compression : {MINIPSD_RLE, MINIPSD_RAW}) {
         minipsd_doc d = docOf(37, 5, layers, 3);
         d.compression = compression;
