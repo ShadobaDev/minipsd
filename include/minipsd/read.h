@@ -127,29 +127,43 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     uint64_t            decoded, canvas;
     uint32_t            loss = 0;
     size_t              i, count, n = 0;
-    unsigned            wide;
+    unsigned            wide, planes;
     uint32_t            side;
-    int                 rc;
+    int                 rc, flat_mode;
 
     rc = minipsd_reader_init(&r, data, size, workspace, sizeof workspace, limits, &info);
     if (rc != MINIPSD_OK) return rc;
-    if (!r->rgb || (r->depth != MPSD__CH_8BIT && r->depth != MPSD__CH_16BIT)) return MINIPSD_ERR_UNSUPPORTED;   /* TODO(S6.19): every mode */
-    wide = r->shift;                                           /* 16-bit samples, aligned for a uint16_t */
-    side = mpsd__max_side(r->psb);
+    {   /* the modes and depths the writer takes: a file it would refuse is refused here */
+        minipsd_doc probe;
+        memset(&probe, 0, sizeof probe);
+        probe.depth                 = info.depth;
+        probe.color_mode            = info.color_mode;
+        probe.color_mode_data       = info.color_mode_data;
+        probe.composite_stored.size = MPSD__MARKER_SIZE;       /* a composite it has */
+        probe.composite_channels    = info.channels;
+        flat_mode = mpsd__doc_flat(&probe);
+        if ((info.color_mode == MINIPSD_MODE_BITMAP) != (info.depth == MPSD__CH_1BIT) || mpsd__doc_mode_ok(&probe) != MINIPSD_OK
+            || (flat_mode && info.layer_count))
+            return MINIPSD_ERR_UNSUPPORTED;
+    }
+    wide   = r->shift;                                         /* wider samples, aligned for their type */
+    planes = r->colors + !flat_mode;                           /* a pixel: the colour channels, then transparency */
+    side   = mpsd__max_side(r->psb);
     memset(&all, 0, sizeof all);                               /* every row, un-matted; new fields zero */
-    all.depth      = wide ? MPSD__CH_16BIT : MPSD__CH_8BIT;
+    all.depth      = (int)r->depth;
     all.inflate      = opts ? opts->inflate : NULL;            /* ZIP channels: without it, unsupported */
     all.inflate_user = opts ? opts->inflate_user : NULL;
     all.scratch      = a->scratch;
     all.scratch_size = (size_t)a->zip;                         /* measured: the block holds it */
     as_stored = all;
     as_stored.keep_matte = 1;
-    canvas  = (uint64_t)info.width * info.height * MPSD__RGBA << wide;
-    /* Stored: the composite copied as it is, every channel, never decoded. */
-    keep_composite = opts && opts->stored && info.channels >= 3;
+    canvas  = (uint64_t)info.width * info.height * planes << wide;
+    /* Stored: the composite copied as it is, every channel, never decoded; multichannel's always. */
+    keep_composite = ((opts && opts->stored) || info.color_mode == MINIPSD_MODE_MULTICHANNEL) && info.channels >= r->colors;
     decoded = keep_composite ? 0 : canvas;                      /* the composite */
-    /* A flat file: its image as one layer; stored, as it is, no layer, the composite copied. */
-    count   = info.layer_count ? info.layer_count : keep_composite ? 0 : 1;
+    /* A file without layers: its image as one layer; stored, as it is, no layer, the composite
+       copied.  The flat modes have none. */
+    count   = info.layer_count ? info.layer_count : keep_composite || flat_mode ? 0 : 1;
     d       = (minipsd_doc *)mpsd__take(a, sizeof *d, 1);
     layers  = (minipsd_layer *)mpsd__take(a, (uint64_t)count * sizeof *layers, 1);
     if (d) {
@@ -161,7 +175,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     for (i = 0; i < info.layer_count; ++i) {
         uint64_t       w, h;
         char          *name;
-        minipsd_bytes  extra, pascal, copies[MPSD__RGBA], *stored = NULL;
+        minipsd_bytes  extra, pascal, copies[MINIPSD_PLANES], *stored = NULL;
         minipsd_mask  *mask = NULL;
         minipsd_blending_range *ranges;
         uint8_t       *mask_pixels = NULL;
@@ -178,17 +192,17 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         /* Stored: every channel copied as it is, never decoded; one without transparency is
            written without one, as the file has it.  An empty layer has nothing to copy. */
         keep = opts && opts->stored && w && h;
-        for (k = 0; k < MINIPSD_CH_A; ++k) keep = keep && v.channel[k].size;   /* R, G, B */
+        for (k = 0; k < (int)r->colors; ++k) keep = keep && v.channel[k].size;   /* the colour channels */
         if (keep) {
-            stored = (minipsd_bytes *)mpsd__take(a, MPSD__RGBA * sizeof *stored, 1);
-            for (k = 0; k < MPSD__RGBA; ++k) copies[k] = mpsd__copy(a, v.channel[k]);
+            stored = (minipsd_bytes *)mpsd__take(a, planes * sizeof *stored, 1);
+            for (k = 0; k < (int)planes; ++k) copies[k] = mpsd__copy(a, v.channel[k]);
         }
-        pixels = w && h && !keep ? (uint8_t *)mpsd__take(a, w * h * MPSD__RGBA << wide, (int)wide) : NULL;
+        pixels = w && h && !keep ? (uint8_t *)mpsd__take(a, w * h * planes << wide, (int)wide) : NULL;
         extra  = mpsd__copy(a, v.additional_info);              /* every block, 'luni' too */
         pascal = mpsd__copy(a, v.name_pascal);
         ranges = (minipsd_blending_range *)mpsd__take(a, (uint64_t)v.blending_range_count * sizeof *ranges, 1);
-        if (pixels) decoded += w * h * MPSD__RGBA << wide;
-        for (k = 0; w && h && !keep && k < MPSD__RGBA; ++k)    /* decoded: pixels, NULL while measuring */
+        if (pixels) decoded += w * h * planes << wide;
+        for (k = 0; w && h && !keep && k < (int)planes; ++k)    /* decoded: pixels, NULL while measuring */
             mpsd__zip_room(a, v.channel[k], w * h << wide);
         if (v.has_mask) {                                       /* the mask: decoded, or stored with the layer */
             const uint64_t mw = (uint64_t)((int64_t)v.mask.right - v.mask.left), mh = (uint64_t)((int64_t)v.mask.bottom - v.mask.top);
@@ -213,7 +227,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         if (!d) continue;
         (void)minipsd_layer_name(&v, name, n, NULL);
         if (pixels) {
-            mpsd__target(&t, pixels, (size_t)(w * MPSD__RGBA << wide), MPSD__RGBA, wide);
+            mpsd__target(&t, pixels, (size_t)(w * planes << wide), planes, wide);
             rc = minipsd_decode_layer(r, &v, &t, &all);
             if (rc != MINIPSD_OK) return rc;
         }
@@ -242,7 +256,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
             if (rc != MINIPSD_OK) return rc;
         }
         if (stored) {
-            for (k = 0; k < MPSD__RGBA; ++k) stored[k] = copies[k];
+            for (k = 0; k < (int)planes; ++k) stored[k] = copies[k];
             layers[i].stored = stored;
         }
     }
@@ -253,7 +267,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         if (r->image_start > size) return MINIPSD_ERR_SHORT;
         composite.data = r->data + (size_t)r->image_start;
         composite.size = size - (size_t)r->image_start;
-        if (!mpsd__stored_ok(composite, info.width, info.channels * info.height, wide, r->psb))   /* as decoding says it */
+        if (!mpsd__stored_ok(composite, info.width, info.channels * info.height, r->depth, r->psb))   /* as decoding says it */
             return composite.size >= MPSD__MARKER_SIZE && mpsd__get16(composite.data) > MPSD__COMP_ZIP_PREDICTED ? MINIPSD_ERR_FORMAT : MINIPSD_ERR_SHORT;
         composite = mpsd__copy(a, composite);
     }
@@ -263,8 +277,8 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         decoded += canvas;
         if (max && decoded > max) return MINIPSD_ERR_LIMIT;
     }
-    if (!keep_composite && info.channels > 3u + (info.composite_has_alpha ? 1u : 0u))
-        loss |= MINIPSD_LOST_CHANNELS;                          /* decoded: R, G, B, transparency */
+    if (!keep_composite && info.channels > r->colors + (info.composite_has_alpha ? 1u : 0u))
+        loss |= MINIPSD_LOST_CHANNELS;                          /* decoded: the colour channels, transparency */
     tail = mpsd__copy_tail(a, r, info.layer_tail);
     if (info.icc.size) {
         uint8_t *icc = (uint8_t *)mpsd__take(a, info.icc.size, 0);
@@ -280,12 +294,12 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     if (!d) return MINIPSD_OK;
 
     if (pixels) {
-        mpsd__target(&t, pixels, (size_t)info.width * MPSD__RGBA << wide, MPSD__RGBA, wide);
+        mpsd__target(&t, pixels, (size_t)info.width * planes << wide, planes, wide);
         rc = minipsd_decode_composite(r, &t, &as_stored);
         if (rc != MINIPSD_OK) return rc;
     }
     if (flat) {
-        mpsd__target(&t, flat, (size_t)info.width * MPSD__RGBA << wide, MPSD__RGBA, wide);
+        mpsd__target(&t, flat, (size_t)info.width * planes << wide, planes, wide);
         rc = minipsd_decode_composite(r, &t, &all);
         if (rc != MINIPSD_OK) return rc;
         layers[0].name    = "Background";
@@ -305,7 +319,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     d->composite_matted = 1;
     d->composite_stored = composite;
     d->composite_channels = keep_composite ? (uint16_t)info.channels : 0;
-    d->composite_alpha    = (uint8_t)(keep_composite && info.composite_has_alpha && info.channels >= MPSD__RGBA);
+    d->composite_alpha    = (uint8_t)(keep_composite && !flat_mode && info.composite_has_alpha && info.channels > r->colors);
     d->layer_tail       = tail;
     d->depth            = info.depth;
     d->format           = info.format;

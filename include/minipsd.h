@@ -46,8 +46,9 @@
  * nothing.
  *
  * \par What it writes
- * An RGB document, as a PSD or (minipsd_doc.format) a PSB, 8 or 16 bits a channel, with a
- * transparency channel:
+ * A document in any colour mode (minipsd_doc.color_mode) at the depths Photoshop has it, as a PSD
+ * or (minipsd_doc.format) a PSB, with a transparency channel but in the flat modes (bitmap,
+ * indexed, multichannel, which have no layers); no colour is converted:
  * - one or more layers, bottom first, each a rectangle anywhere on or off the canvas (by default
  *   the full canvas) or empty, with a name, opacity, visibility, blend key, clipping and flags;
  *   names go out both as a legacy Pascal string (ASCII) and as Unicode ('luni'), followed by any
@@ -66,7 +67,8 @@
  * deflate.
  *
  * Groups (minipsd_layer.section_divider_type) and layer masks (minipsd_layer.mask) are written;
- * text and effects only as blocks kept from a file.  Not written: 32-bit, other colour modes.
+ * text and effects only as blocks kept from a file.  The writer composes 8- and 16-bit RGB only:
+ * other modes and 32 bits bring their composite.
  * PSD caps each side at 30000 px, PSB at 300000; larger documents are refused (MINIPSD_ERR_SIZE).
  *
  * \par Output
@@ -140,10 +142,11 @@ enum {
     MINIPSD_ERR_FORMAT  = -6,       /*!< Reader and typed views: the bytes are not well-formed. */
     MINIPSD_ERR_UNSUPPORTED = -7,   /*!< Valid, but outside what minipsd handles yet: reading,
                                         samples of another depth than the file's, ZIP-compressed
-                                        without the caller's inflate, or a document of a mode
-                                        other than 8- or 16-bit RGB;
-                                        writing in the other format, kept content that cannot
-                                        change format yet.                                      */
+                                        without the caller's inflate, or a document the writer
+                                        could not take back;
+                                        writing a mode at a depth the writer does not take, in
+                                        the other format kept content that cannot change format
+                                        yet.                                                    */
     MINIPSD_ERR_SHORT   = -8,       /*!< Reader: the buffer ends inside data the call needs;
                                         the file may be fine.  minipsd_reader_needed says
                                         how much more.                                          */
@@ -478,8 +481,9 @@ typedef struct minipsd_doc {
     minipsd_bytes        color_mode_data; /*!< The colour mode data, written as given: an
                                               indexed document's palette (768 bytes: 256 red,
                                               256 green, 256 blue), a duotone's inks
-                                              and curves (minipsd_info.color_mode_data); size
-                                              0 for every other mode.                         */
+                                              and curves (minipsd_info.color_mode_data), at
+                                              32 bits whatever the file held (an 'hdrt'
+                                              block: HDR toning); size 0 otherwise.           */
 } minipsd_doc;
 
 /**
@@ -1380,8 +1384,10 @@ MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_li
  * document lives as long as the block.  Each layer comes with its rectangle, opacity, visibility,
  * blend key, clipping, flags, decoded pixels (with opts->stored, its channels as stored) and its
  * blocks as they are; the composite as the file stores it, with composite_matted set, so writing
- * the document gives the same image back.  The document has the file's depth, 8 or 16 bits.  A
- * file without layers gets one, "Background", holding its image.  A file without a resolution
+ * the document gives the same image back.  The document has the file's colour mode, colour mode
+ * data and depth.  A file without layers gets one, "Background", holding its image, but in the
+ * flat modes (bitmap, indexed, multichannel), which have none; multichannel's composite is always
+ * copied as stored.  A file without a resolution
  * gets 72 dpi.  Layers a 16-bit file keeps in its 'Lr16' block become the document's layers; the
  * block stays in layer_tail, empty, where the file had it, and the writer puts the layers back
  * there.  With opts->stored, a file without layers stays without: no layer, the composite copied.
@@ -1398,7 +1404,8 @@ MINIPSDDEF int minipsd_read_size(const void *data, size_t size, const minipsd_li
  * \return MINIPSD_OK or an error code.
  *
  * \retval MINIPSD_ERR_ARG         doc or block is NULL, or block_size is too small.
- * \retval MINIPSD_ERR_UNSUPPORTED Not 8- or 16-bit RGB, ZIP-compressed pixels to decode without
+ * \retval MINIPSD_ERR_UNSUPPORTED A mode at a depth the writer does not take (32-bit CMYK), layers
+ *                                 in a flat mode, ZIP-compressed pixels to decode without
  *                                 opts->inflate (with opts->stored they are copied), a
  *                                 ZIP-compressed composite to decode, or a layer wider or taller than
  *                                 the format allows the writer (MINIPSD_MAX_SIDE, _PSB).

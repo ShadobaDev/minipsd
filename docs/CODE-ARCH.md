@@ -641,8 +641,10 @@ typedef struct minipsd_read_opts {
   parts, and a second stream of another size is `MINIPSD_ERR_WRITE`. The composite stays RLE.
 - **Limits:** `minipsd_limits` as in the reader; `max_decoded_bytes` bounds the sum of the call's
   decoded pixels. A block larger than `SIZE_MAX` is `MINIPSD_ERR_SIZE`.
-- **What it accepts:** 8- and 16-bit RGB, as the decoder; the document has the file's `depth`.
-  Anything else is `MINIPSD_ERR_UNSUPPORTED`. Layers read from `Lr16` are the document's, so
+- **What it accepts:** what the writer takes back: the document has the file's `color_mode`,
+  `color_mode_data` and `depth`, and a file the writer would refuse (a mode at a depth it does not
+  write, layers in a flat mode) is `MINIPSD_ERR_UNSUPPORTED`, checked first with the writer's own
+  `mpsd__doc_mode_ok` on the file's header. Layers read from `Lr16` or `Lr32` are the document's, so
   `layer_tail` keeps that block empty, where it was, and the writer puts them back in it.
 - **No allocator passed at run time.** The caller's block and `MINIPSD_MALLOC` cover both cases;
   a `{alloc, free, user}` variant is an addition when a caller needs one.

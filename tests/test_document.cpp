@@ -100,6 +100,9 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "32-bit RGB without its composite";
     d.composite = cmyk.data();
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK) << "32-bit RGB with it";
+    d.color_mode_data = {inks, sizeof inks};
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK) << "32-bit mode data (HDR toning), as given";
+    d.color_mode_data = {};
     d.color_mode = MINIPSD_MODE_CMYK;
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_UNSUPPORTED) << "32-bit CMYK";
     d = docOf(2, 2, &layer, 1); d.color_mode_data = {inks, sizeof inks};

@@ -735,6 +735,13 @@ KEPT_16 = ["16bit5x5.psd", "colormodes/4x4_16bit_rgb.psd", "adjustments/posteriz
 KEPT_PSB = ["text.psb", "group.psb", "hidden-groups.psb", "layer_mask_data.psb", "unicode_pathname.psb",
             "placedLayer.psb", "layer_comps.psb", "masks.psb"]
 KEPT_PSB_16 = ["16bit5x5.psb"]
+# Every colour mode and depth: grey, CMYK, Lab, duotone, 32-bit with layers in 'Lr32'; bitmap,
+# indexed and multichannel without layers (multichannel's composite always copied).
+KEPT_MODES = ["colormodes/" + n for n in (
+    "4x4_8bit_grayscale.psd", "4x4_16bit_grayscale.psd", "4x4_32bit_grayscale.psd", "4x4_32bit_rgb.psd",
+    "4x4_8bit_cmyk.psd", "4x4_16bit_cmyk.psd", "4x4_8bit_lab.psd", "4x4_16bit_lab.psd", "4x4_8bit_duotone.psd",
+    "4x4_1bit_bitmap.psd", "100x20_1bit_bitmap_rle.psd", "4x4_8bit_index_color.psd",
+    "4x4_16bit_multichannel.psd")] + ["32bit.psd"]
 
 
 def resave(lib, source, path, stored=False, fmt=0, zip_=False):
@@ -829,9 +836,10 @@ def check_kept(name, before, after, stored=False):
     def resources(psd):
         return {key: resource.tobytes() for key, resource in psd.image_resources.items()}
 
-    def header(psd):   # decoded, the composite is written R, G, B and transparency
+    def header(psd):   # decoded, the composite is written with transparency, but in a flat mode
         h = psd._record.header
-        return h.channels if stored else None, h.height, h.width, h.depth, h.color_mode
+        flat = int(h.color_mode) in (MODE_BITMAP, MODE_INDEXED, MODE_MULTICHANNEL)
+        return h.channels if stored or flat else None, h.height, h.width, h.depth, h.color_mode
 
     def rect(rec):
         empty = rec.bottom <= rec.top or rec.right <= rec.left
@@ -848,9 +856,16 @@ def check_kept(name, before, after, stored=False):
     same("global layer mask", mask(gb), mask(ga))
     (rb, cb), (ra, ca) = records(gb), records(ga)
     same("layer count", len(rb), len(ra))
-    if stored:
-        same("composite", before._record.image_data.get_data(before._record.header),
-             after._record.image_data.get_data(after._record.header))
+    def composite(psd):   # at 1 bit, a row's padding bits are not content: written as zeros
+        h = psd._record.header
+        planes = [bytes(c) for c in psd._record.image_data.get_data(h)]
+        if h.depth != 1 or h.width % 8 == 0:
+            return planes
+        row, keep = (h.width + 7) // 8, (0xFF << (8 - h.width % 8)) & 0xFF
+        return [bytes(v & keep if i % row == row - 1 else v for i, v in enumerate(c)) for c in planes]
+
+    if stored or int(before._record.header.color_mode) in (MODE_BITMAP, MODE_INDEXED, MODE_MULTICHANNEL):   # flat: as it was
+        same("composite", composite(before), composite(after))
         vb, va, depth = before.version, after.version, before.depth
 
         def data(rec, c, d, version):
@@ -1231,7 +1246,8 @@ def main():
     if files is None:
         print("kept content: skipped, no psd-tools files (MINIPSD_PSD_TOOLS_FILES)")
     # Decoded (ZIP through zlib), and 16-bit ones also as stored.
-    kept = [(n, False) for n in KEPT_FILES + KEPT_PSB + KEPT_16 + KEPT_PSB_16] + [(n, True) for n in KEPT_16 + KEPT_PSB_16]
+    kept = [(n, False) for n in KEPT_FILES + KEPT_PSB + KEPT_16 + KEPT_PSB_16 + KEPT_MODES] + [
+        (n, True) for n in KEPT_16 + KEPT_PSB_16 + KEPT_MODES]
     # As it is, then in the other format: PSD as PSB, PSB as PSD, every channel stored, so that its
     # RLE count table is what changes width.
     converted = [((n, True), True) for n in dict.fromkeys(n for n, _ in kept)]

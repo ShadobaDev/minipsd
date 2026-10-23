@@ -517,10 +517,10 @@ static uint64_t mpsd__resources_size(const minipsd_doc *d)
     return c.count;
 }
 
-/* A stored channel that fits a width x height rectangle of one-byte or (wide) two-byte samples:
-   the compression marker, then raw rows, or (RLE) a byte count per row (four bytes in a PSB) and
-   rows no longer than they add up to.  ZIP passes as it is. */
-static int mpsd__stored_ok(minipsd_bytes c, uint32_t width, uint32_t height, unsigned wide, unsigned psb)
+/* A stored channel that fits a width x height rectangle of samples of depth bits: the compression
+   marker, then raw rows, or (RLE) a byte count per row (four bytes in a PSB) and rows no longer
+   than they add up to.  ZIP passes as it is. */
+static int mpsd__stored_ok(minipsd_bytes c, uint32_t width, uint32_t height, unsigned depth, unsigned psb)
 {
     const uint64_t counts = (uint64_t)height * mpsd__count_size(psb);
     uint64_t       left, sum = 0;
@@ -529,7 +529,7 @@ static int mpsd__stored_ok(minipsd_bytes c, uint32_t width, uint32_t height, uns
     left = c.size - MPSD__MARKER_SIZE;
     switch (mpsd__get16(c.data)) {
     case MPSD__COMP_RAW:
-        return ((uint64_t)width * height << wide) <= left;
+        return mpsd__row_bytes(width, depth) * height <= left;
     case MPSD__COMP_RLE:
         if (counts > left) return 0;
         for (y = 0; y < height; ++y) sum += mpsd__count(c.data + MPSD__MARKER_SIZE, y, psb);
@@ -686,7 +686,7 @@ static int mpsd__table_ok(const mpsd__source *src, unsigned from, unsigned out)
 {
     uint32_t y;
     if (!mpsd__retable(src, from, out)) return MINIPSD_OK;
-    if (!mpsd__stored_ok(*src->stored, 0, src->height, 0, from))
+    if (!mpsd__stored_ok(*src->stored, 0, src->height, MPSD__CH_8BIT, from))
         return MINIPSD_ERR_ARG;                                   /* a real mask's table: mpsd__mask_ok knew no rows */
     for (y = 0; !out && y < src->height; ++y)                     /* a PSD's counts: two bytes */
         if (mpsd__count(src->stored->data + MPSD__MARKER_SIZE, y, 1) > 0xFFFFu) return MINIPSD_ERR_SIZE;
@@ -710,7 +710,7 @@ static int mpsd__composite_ok(const minipsd_doc *d, unsigned out)
     if (!mpsd__copies_composite(d)) return MINIPSD_OK;
     if (d->composite_channels < mpsd__doc_colors(d) || d->composite_channels > MPSD__MAX_CHANNELS
         || (d->composite_alpha && d->composite_channels < mpsd__doc_pixel(d))
-        || !mpsd__stored_ok(d->composite_stored, d->width, src.height, mpsd__doc_shift(d), mpsd__doc_psb(d)))
+        || !mpsd__stored_ok(d->composite_stored, d->width, src.height, mpsd__doc_depth(d), mpsd__doc_psb(d)))
         return MINIPSD_ERR_ARG;
     return mpsd__table_ok(&src, mpsd__doc_psb(d), out);
 }
@@ -736,18 +736,19 @@ static int mpsd__groups_ok(const minipsd_doc *d)
 static int mpsd__mask_ok(const minipsd_doc *d, const minipsd_mask *m, unsigned out)
 {
     const int64_t  w = (int64_t)m->right - m->left, h = (int64_t)m->bottom - m->top;
-    const unsigned wide = mpsd__doc_shift(d), psb = mpsd__doc_psb(d);
+    const unsigned psb = mpsd__doc_psb(d);
     if (w < 0 || h < 0 || (m->rest.size && !m->rest.data)) return MINIPSD_ERR_ARG;
     if (w > mpsd__max_side(out) || h > mpsd__max_side(out)) return MINIPSD_ERR_SIZE;
-    if (m->stored.size ? !mpsd__stored_ok(m->stored, (uint32_t)w, (uint32_t)h, wide, psb) : (w && h && !m->pixels))
+    if (m->stored.size ? !mpsd__stored_ok(m->stored, (uint32_t)w, (uint32_t)h, mpsd__doc_depth(d), psb) : (w && h && !m->pixels))
         return MINIPSD_ERR_ARG;
-    if (m->real.size && !mpsd__stored_ok(m->real, 0, 0, 0, psb)) return MINIPSD_ERR_ARG;   /* its rectangle is in rest */
+    if (m->real.size && !mpsd__stored_ok(m->real, 0, 0, MPSD__CH_8BIT, psb)) return MINIPSD_ERR_ARG;   /* its rectangle is in rest */
     return MINIPSD_OK;
 }
 
 /* The modes the writer takes, at the depths Photoshop has them: bitmap at 1 bit, indexed at 8,
    the others at 8 and 16; RGB and grey at 32 too.  Duotone brings its colour mode data (inks and
-   curves), indexed its palette, the others none.  Every mode but RGB, and every 32-bit document,
+   curves), indexed its palette; a 32-bit document may bring some (psd-tools' 32-bit files hold an
+   'hdrt' block, HDR toning), the others none.  Every mode but RGB, and every 32-bit document,
    brings its composite, supplied or stored: the writer composes 8- and 16-bit RGB only.  The flat modes (bitmap, indexed, multichannel) have no layers and no
    transparency, and multichannel's composite is only copied: minipsd does not know its channels. */
 static int mpsd__doc_mode_ok(const minipsd_doc *d)
@@ -759,7 +760,8 @@ static int mpsd__doc_mode_ok(const minipsd_doc *d)
         || (depth == MPSD__CH_32BIT && mode != MINIPSD_MODE_RGB && mode != MINIPSD_MODE_GREY))
         return MINIPSD_ERR_UNSUPPORTED;
     if (mode == MINIPSD_MODE_INDEXED ? d->color_mode_data.size != MPSD__PALETTE_SIZE
-                                     : (mode == MINIPSD_MODE_DUOTONE) != (d->color_mode_data.size != 0))
+        : mode == MINIPSD_MODE_DUOTONE ? !d->color_mode_data.size
+        : d->color_mode_data.size && depth != MPSD__CH_32BIT)
         return MINIPSD_ERR_ARG;
     if ((mode != MINIPSD_MODE_RGB || depth == MPSD__CH_32BIT) && !d->composite && !d->composite_stored.size) return MINIPSD_ERR_ARG;
     if (mpsd__doc_flat(d) && (d->layer_count || (d->composite_stored.size && d->composite_alpha))) return MINIPSD_ERR_ARG;
@@ -808,7 +810,7 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *d, const minipsd_write_opts 
         for (k = 0; k < (int)mpsd__doc_pixel(d); ++k) {   /* transparency, the last, may be missing */
             const mpsd__rect r = mpsd__layer_rect(d, l);
             if ((k != (int)mpsd__doc_colors(d) || l->stored[k].size)
-                && !mpsd__stored_ok(l->stored[k], r.width, r.height, mpsd__doc_shift(d), mpsd__doc_psb(d)))
+                && !mpsd__stored_ok(l->stored[k], r.width, r.height, mpsd__doc_depth(d), mpsd__doc_psb(d)))
                 return MINIPSD_ERR_ARG;
         }
         for (k = 0; k < mpsd__ch_mask(d); ++k) {

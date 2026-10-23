@@ -480,7 +480,7 @@ feature; a supplied composite needs nothing. See
         decide whether that is acceptable. It would give a text layer's text (`TySh`, key
         `Txt `), a smart object's name, effects' flags.
       *Done when:* as S6.17's.
-- [ ] **S6.19** Every colour mode and depth written (S6.13's Write half). Reading them is done
+- [x] **S6.19** Every colour mode and depth written (S6.13's Write half). Reading them is done
       (S6.13): any mode and depth is described and decoded. The writer takes 8- and 16-bit RGB
       only (`minipsd_doc` has no colour mode), so this step is writing grey, CMYK, Lab,
       multichannel and duotone at 8 and 16 bits, grey and RGB at 32, bitmap at 1, indexed at 8,
@@ -517,7 +517,7 @@ comes at the end of stage 7, or of 8, with the same files.
         format.
       - **Access.** Strips from several threads (S6.12, S6.14).
       - **Saving.** One image as a layer with its composite, or pages as layers.
-      - **What minipsd still needs.** Every colour mode and depth written (S6.19); the row provider (S7.5);
+      - **What minipsd still needs.** The row provider (S7.5);
         the metadata ImageMagick gives (S6.17, P1).
       - **Building.** The build dependency: pkg-config, a meson wrap.
 - [ ] **S7.3** Loader: a PSD or PSB as a libvips image, the composite or a layer, decoded in

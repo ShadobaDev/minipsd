@@ -218,6 +218,24 @@ minipsd_doc   doc = { .width = width, .height = height, .dpi = 300.0, .layers = 
                       .depth = 16 };
 ```
 
+Another colour mode sets `color_mode` (`MINIPSD_MODE_*`). A pixel is then the mode's colour
+channels then transparency, as the file stores them: nothing is converted, and CMYK is inverted
+(255 no ink). The writer composes RGB only, so every other mode brings its composite:
+
+```c
+uint8_t      *cmyka = malloc((size_t)width * height * 5);   /* C, M, Y, K, transparency */
+uint8_t      *flat  = malloc((size_t)width * height * 5);   /* the same, rendered by you */
+minipsd_layer ink = { .name = "Ink", .pixels = cmyka, .opacity = 255 };
+minipsd_doc   doc = { .width = width, .height = height, .dpi = 300.0, .layers = &ink, .layer_count = 1,
+                      .composite = flat, .color_mode = MINIPSD_MODE_CMYK };
+```
+
+RGB and grey also come at 32 bits (`depth` 32), every sample a `float` from 0.0 to 1.0, again with
+a composite. Bitmap, indexed and multichannel documents have no layers, only the composite: a
+bitmap one is `depth` 1, a byte a pixel (0 white, any other black), which the writer packs; an
+indexed one is a palette entry a pixel, its 768-byte palette in `color_mode_data`; a multichannel
+one comes from a file (`minipsd_read`), its composite copied as stored.
+
 A document wider or taller than 30 000 px, a long webtoon strip say, is written as a PSB, the
 large document format, up to 300 000 px a side; nothing else in it changes:
 
@@ -618,6 +636,10 @@ free(data);                     /* allowed: the document holds copies of everyth
 rc = minipsd_write(doc, NULL, to_file, f);
 minipsd_doc_free(doc);
 ```
+
+Every colour mode and depth the writer takes comes through, with its colour mode data (a
+palette, a duotone's inks); a file it could not take back, such as 32-bit CMYK, is
+`MINIPSD_ERR_UNSUPPORTED`.
 
 The document lives in one block: from `MINIPSD_MALLOC`, freed by `minipsd_doc_free`, or in
 memory of yours with `minipsd_read_size` and `minipsd_read_into`. Nothing in it points into the

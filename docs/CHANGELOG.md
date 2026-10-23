@@ -43,7 +43,13 @@ positional initialiser needs no change.
   `minipsd_doc`. The writer writes that image, matted against white unless marked as already
   matted, and composes nothing. Without one the layers are composed as before, now documented as
   a best effort.
-- `minipsd_read`: a whole 8- or 16-bit RGB file into a `minipsd_doc` that `minipsd_write` takes as it
+- Every colour mode and depth written: `color_mode` and `color_mode_data` at the end of
+  `minipsd_doc` (`MINIPSD_MODE_*`, Adobe's numbers; 0 is RGB unless `depth` is 1, bitmap). Grey,
+  CMYK, Lab, duotone and multichannel at 8 and 16 bits, RGB and grey at 32 (`float` samples, the
+  layers in `Lr32`), indexed at 8 with its palette, bitmap at 1 (a byte a pixel, packed by the
+  writer); bitmap, indexed and multichannel without layers. No colour is converted; every mode
+  but RGB, and 32 bits, brings its composite, and a supplied one is written as given.
+- `minipsd_read`: a whole file of any mode and depth the writer takes into a `minipsd_doc` that `minipsd_write` takes as it
   is, every byte copied into one block so the file can be freed at once; `minipsd_doc_free`;
   `minipsd_read_size` and `minipsd_read_into` for the caller's own memory. `lost`
   (`MINIPSD_LOST_*`) says what the document could not carry: extra channels.

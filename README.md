@@ -56,7 +56,9 @@ for a file (UTF-8 paths on Windows), a buffer and a non-blocking pipe are in
 
 ## What it writes
 
-An RGB document with transparency, 8 or 16 bits a channel: layers anywhere on or off the canvas (by default the
+A document in any colour mode at the depths Photoshop has it (RGB, grey, CMYK, Lab, duotone and
+multichannel at 8 and 16 bits, RGB and grey at 32, indexed at 8, bitmap at 1), no colour
+converted: layers anywhere on or off the canvas (by default the
 full canvas), or empty, with UTF-8 names, opacity and visibility; the merged composite image,
 yours or composed as a best effort; the resolution; an optional ICC profile; groups, layer
 masks, blend modes, clipping, and blocks and resources kept from a file (text, effects), as
@@ -65,7 +67,8 @@ Channels are PackBits RLE or raw, or ZIP through your deflate (zlib's `compress2
 implements none). Each side is limited to 30 000 px, or 300 000 px written as a
 PSB (Photoshop's large document format).
 
-Not written (yet): 32-bit, other colour modes. The full contract is in [docs/SPECIFICATION.md](docs/SPECIFICATION.md).
+The writer composes RGB only: other modes and 32 bits bring their composite. The full contract
+is in [docs/SPECIFICATION.md](docs/SPECIFICATION.md).
 
 ## What it reads
 
@@ -75,8 +78,7 @@ parsed into plain values: resources found by id and named by Adobe's table, the 
 version info (whether the composite is real), guides, alpha channel names, and a layer's id,
 colour label, fill opacity and locks. Pixels of
 every colour mode and depth (1, 8, 16, 32 bits) decode as stored, layers and composite, into
-memory of any layout; 8- and 16-bit RGB files also whole into a document that `minipsd_write`
-takes back. ZIP-compressed channels (Photoshop's 16- and 32-bit layers)
+memory of any layout; and whole into a document that `minipsd_write` takes back. ZIP-compressed channels (Photoshop's 16- and 32-bit layers)
 decode through the caller's inflate (zlib's `uncompress`, libdeflate or miniz: minipsd implements
 no deflate), and are copied as they are when such a file is read and written back. A file can be read from its start only, and untrusted
 files are bounded by caller limits. How it does on 315 files from

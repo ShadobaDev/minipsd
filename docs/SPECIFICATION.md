@@ -43,8 +43,8 @@ A PSD file is a sequence of five sections, all integers **big-endian**:
 
 | # | Section | What minipsd puts there |
 |---|---|---|
-| 1 | **File header** (26 bytes): signature `8BPS`, version (1 = PSD, 2 = PSB), channel count, height, width, bit depth, colour mode | version 1, 4 channels, 8 or 16 bits, RGB |
-| 2 | **Colour mode data**: a length, then a palette for indexed/duotone modes | empty (length 0) |
+| 1 | **File header** (26 bytes): signature `8BPS`, version (1 = PSD, 2 = PSB), channel count, height, width, bit depth, colour mode | the document's version, colour mode and depth; its colour channels and transparency (flat modes: none) |
+| 2 | **Colour mode data**: a length, then a palette for indexed/duotone modes | the document's `color_mode_data`, empty for most modes |
 | 3 | **Image resources**: a length, then `8BIM` blocks, each with a numeric ID | 1005 resolution, optionally 1039 ICC profile |
 | 4 | **Layer and mask information**: layer records (bounds, channels, blend mode, opacity, flags, name, *additional layer info* blocks such as `luni`), then each layer's channel pixel data | the layers |
 | 5 | **Image data**: the merged ("composite") image, used by readers that ignore layers and for thumbnails | the composite |
@@ -222,7 +222,7 @@ its layers and composite as stored: no colour is converted.
 | `MINIPSD_ERR_ALLOC` | -4 | `MINIPSD_MALLOC` returned NULL |
 | `MINIPSD_ERR_OPEN` | -5 | not returned by minipsd; reserved for the caller's file code (`examples/write_file.c`) |
 | `MINIPSD_ERR_FORMAT` | -6 | reader: not a well-formed PSD |
-| `MINIPSD_ERR_UNSUPPORTED` | -7 | reader: a valid file outside what minipsd reads: for decoding, a file of another depth than `opts->depth`, or a ZIP-compressed channel without `opts->inflate`; for `minipsd_read`, a file not 8- or 16-bit RGB; on a 32-bit platform, a PSB whose layer and mask section `size_t` cannot hold |
+| `MINIPSD_ERR_UNSUPPORTED` | -7 | reader: a valid file outside what minipsd reads: for decoding, a file of another depth than `opts->depth`, or a ZIP-compressed channel without `opts->inflate`; for `minipsd_read`, a file the writer could not take back (a mode at a depth it does not write, such as 32-bit CMYK, or layers in a flat mode); writer: a mode at a depth it does not write; on a 32-bit platform, a PSB whose layer and mask section `size_t` cannot hold |
 | `MINIPSD_ERR_SHORT` | -8 | reader: the buffer ends inside data the call needs; read more, `minipsd_reader_needed` says how much |
 | `MINIPSD_ERR_LIMIT` | -9 | reader: over `minipsd_limits`: the canvas's or a layer's side, the layer count, or the bytes of a decode call; the file is not known to be bad |
 | `MINIPSD_ERR_NOT_FOUND` | -10 | a lookup found no such item: `minipsd_reader_find_resource` for an id the file lacks; not a fault of the file |
@@ -320,12 +320,30 @@ several threads from one reader into one image.
 
 ## What goes into the file
 
-- PSD (version 1) or, with `format` `MINIPSD_PSB`, PSB (version 2), RGB, 4 channels (R, G, B,
-  transparency), 8 bits per channel or, with `depth` 16, 16: every sample (`pixels`, mask
-  `pixels`, `composite`) is then a `uint16_t` in host order, written big-endian. The layers go
-  in the layer info at both depths, or, when `layer_tail` holds an `Lr16` (or `Lr32`) block, in
-  that block, where it is, with the layer info empty, as Photoshop's 16-bit files have them; what
-  the block held goes, the document's layers win.
+- PSD (version 1) or, with `format` `MINIPSD_PSB`, PSB (version 2), in the document's colour
+  mode (`color_mode`, `MINIPSD_MODE_*`, Adobe's numbers; 0 is RGB unless `depth` is 1, bitmap)
+  and depth, as Photoshop has them: RGB, grey, CMYK, Lab, duotone and multichannel at 8 and 16
+  bits, RGB and grey also at 32, indexed at 8, bitmap at 1. Another depth of a mode is
+  `MINIPSD_ERR_UNSUPPORTED`; a mode or depth the format does not have, `MINIPSD_ERR_ARG`.
+- **Samples** are the mode's colour channels then transparency (`pixels`, `composite`), as the
+  file stores them: no colour is converted (CMYK inverted, 255 no ink; Lab's L, a, b). A sample
+  is a byte at 8 bits, a `uint16_t` at 16, a `float` (0.0 to 1.0) at 32, in host order, written
+  big-endian; a mask is one channel of the same depth.
+- **The colour mode data** (`color_mode_data`) is written as given: an indexed document's palette
+  (768 bytes), a duotone's inks and curves (required), at 32 bits whatever a file held (psd-tools'
+  32-bit files hold an `hdrt` block, HDR toning); any other mode has none (`MINIPSD_ERR_ARG`).
+- **Every mode but RGB, and every 32-bit document, brings its composite** (`composite` or
+  `composite_stored`, `MINIPSD_ERR_ARG` otherwise): the writer composes 8- and 16-bit RGB only.
+- **The flat modes** (bitmap, indexed, multichannel) have no layers and no transparency, as
+  Photoshop's files: bitmap's composite is a byte a pixel (0 white, any other black), packed
+  eight pixels a byte by the writer, the first the high bit; indexed's one palette entry a
+  pixel; multichannel's only copied (`composite_stored`, `composite_channels` its channels),
+  since minipsd does not know what its channels are.
+- **Where the layers go:** in the layer info at 8 and 16 bits; at 32 in an `Lr32` block after an
+  empty layer info, an empty `Mt32` before it when the composite has transparency, as
+  psd-tools' 32-bit files have them (`8B64` blocks in a PSB); or, when `layer_tail` holds an
+  `Lr16` (or `Lr32`) block, in that block, where it is, with the layer info empty, as
+  Photoshop's 16-bit files have them; what the block held goes, the document's layers win.
 - **No layers:** a document with a composite (supplied or stored) and `layer_count` 0 is written
   flat: an empty layer info and the tail, as `minipsd_read` keeps a flat file with
   `opts->stored`.
@@ -383,17 +401,19 @@ several threads from one reader into one image.
   - the caller's `composite` when set (the full canvas, straight alpha), whatever the layers
     hold: flattening layers is rendering, the caller's domain;
   - otherwise a file's composite kept as it stores it (`composite_stored`, with
-    `composite_channels`: 3 to 56, red, green, blue, then transparency when `composite_alpha`
+    `composite_channels`: up to 56, the mode's colour channels, then transparency when `composite_alpha`
     says so, then alpha and spot channels), copied byte for byte, never decoded nor encoded; the
     header's channel count follows it, and the layer count is negative with `composite_alpha`;
   - otherwise composed as a **best effort, with no guarantee**: the visible layers combined with
     straight-alpha "over", each at its rectangle, clipped to the canvas. Blend modes, masks,
     clipping, groups and effects are not drawn;
-  - transparency (of a supplied or composed composite, always) is the first extra channel,
+  - transparency (of a supplied or composed composite, always, but in a flat mode) is the first extra channel,
     signalled by writing the layer count as a **negative** number, as the format specifies;
-  - **colour is matted against white:** `c*a + max*(1-a)`, `max` being 255 or 65535. Photoshop
-    stores it this way and readers subtract the white back out. The writer mattes, a supplied composite too, unless
-    `composite_matted` says it already is: then it is written byte for byte.
+  - **colour is matted against white:** `c*a + max*(1-a)`, `max` being 255 or 65535 (at 32 bits
+    `c*a + (1-a)`). Photoshop stores it this way and readers subtract the white back out. The
+    writer mattes, a supplied composite too, unless `composite_matted` says it already is: then it
+    is written byte for byte. In RGB only: other modes are written as given, since no file shows
+    how they are matted.
 - **Image resources:** the writer's own two first, each with the name of a kept one of the same
   id, then the resources kept from a file (`resources`), in order, with their names:
   - 1005 ResolutionInfo: dpi as 16.16 fixed point, unit inches; a kept 1005 that says the same
@@ -524,13 +544,15 @@ them; nothing is copied or allocated. Results on real files from other programs:
   layers came from included. Global blocks are padded to four bytes past the length they state.
 - **The colour mode data:** as one raw view (`minipsd_info.color_mode_data`): an indexed file's
   palette, a duotone's inks and curves.
-- **As a document** (`minipsd_read`): 8- and 16-bit RGB files, at their depth; each layer's
+- **As a document** (`minipsd_read`): every file of a mode and depth the writer takes, at its
+  mode and depth, with its colour mode data; each layer's
   rectangle, name, opacity, visibility, blend key, clipping, flags, section divider type, mask, blending ranges, decoded pixels
   (or, with `opts->stored`, its channels as stored, ZIP ones too) and blocks, the composite as
   stored (`composite_matted`; with `opts->stored`, every channel's bytes in `composite_stored`), the dpi (72 when none is stored), the ICC profile, every resource
-  and the layer tail, the `Lr16` its layers came from in it, empty, all copied into one block. A
-  file without layers gets one, "Background", holding its image; with `opts->stored` it stays
-  without, its image the composite, copied. Anything else is reported in `lost` (`MINIPSD_LOST_*`), never
+  and the layer tail, the `Lr16` or `Lr32` its layers came from in it, empty, all copied into one
+  block. A file without layers gets one, "Background", holding its image; with `opts->stored` it
+  stays without, its image the composite, copied, and so does a flat mode's (bitmap, indexed,
+  multichannel), which has no layers: decoded, but multichannel's always copied. Anything else is reported in `lost` (`MINIPSD_LOST_*`), never
   dropped silently.
 - **Round trip:** a file read with `minipsd_read` and written back keeps all its content: what
   any program reads as different (pixels, channels, blocks, resources, settings). Layout the

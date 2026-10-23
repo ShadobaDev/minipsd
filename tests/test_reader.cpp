@@ -2272,10 +2272,19 @@ TEST(MinipsdReadTest, ItRefusesWhatTheReaderRefusesAndWhatItCannotHold)
     lim.max_decoded_bytes += 1;
     readDoc(file, &lost, MINIPSD_OK, &lim);
 
+    // A mode and depth the writer could not take back: 32-bit CMYK; layers in a flat mode (indexed).
     Spec s;
     s.depth = 32;
+    s.mode = MINIPSD_MODE_CMYK;
+    s.channels = 5;
     s.layers = {simpleRec()};
     s.count = -1;
+    readDoc(build(s).bytes, &lost, MINIPSD_ERR_UNSUPPORTED);
+    s.depth = 8;
+    s.mode = MINIPSD_MODE_INDEXED;
+    s.channels = 1;
+    s.colorModeData = Bytes(768, 0);
+    s.count = 1;
     readDoc(build(s).bytes, &lost, MINIPSD_ERR_UNSUPPORTED);
 
     // A layer the writer could not take back: a side above MINIPSD_MAX_SIDE, wide or tall.
