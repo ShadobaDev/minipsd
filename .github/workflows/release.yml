@@ -1,5 +1,5 @@
-# Release: a pushed tag X.Y.Z (bare semver) runs the full CI, checks the tag against the header
-# version and the changelog, and publishes minipsd.h (include/ joined into one file by
+# Release: a pushed tag X.Y.Z (bare semver) checks that CI already passed on its commit on master,
+# checks the tag against the header version and the changelog, and publishes minipsd.h (include/ joined into one file by
 # tools/amalgamate.cmake) + minipsd.h.sha256 as a GitHub Release with a build-provenance attestation. "Run workflow" (workflow_dispatch) does everything except publish,
 # so it is a dry run. See docs/GITHUB-RELEASE.md.
 name: Release
@@ -11,18 +11,34 @@ on:
 
 permissions:
   contents: write        # create the Release
+  actions: read          # find CI's runs on the commit
   id-token: write        # sign the attestation
   attestations: write    # store it
 
 jobs:
-  ci:
-    uses: ./.github/workflows/ci.yml
-
   release:
-    needs: ci
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # master's history, to find the commit in it
+
+      # CI runs on every push to master, so the commit is tested already: the release checks
+      # that rather than testing it again.
+      - name: Check the commit is on master and CI passed on it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "::error::$GITHUB_SHA is not on master: a release is made from what master has"
+            exit 1
+          fi
+          passed=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" \
+                   --status success --json databaseId --jq length)
+          if [ "$passed" -eq 0 ]; then
+            echo "::error::no successful CI run on $GITHUB_SHA: wait for CI to finish, then re-run this job"
+            exit 1
+          fi
 
       - name: Check the tag, the header version and the changelog agree
         run: |

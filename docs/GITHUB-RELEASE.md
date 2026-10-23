@@ -5,8 +5,10 @@ that tag (FetchContent, submodule), so a tag is never moved once pushed.
 
 Pushing the tag starts the [`Release`](../.github/workflows/release.yml) workflow:
 
-1. the full [`CI`](../.github/workflows/ci.yml) on every toolchain, including the `psd-tools`
-   round trip;
+1. a check that the tagged commit is on `master` and that [`CI`](../.github/workflows/ci.yml)
+   (every toolchain, the `psd-tools` round trip) passed on it: CI runs on every push to
+   `master`, so the release does not test it again. A tag pushed before that run ends fails
+   here; re-run the job once CI is green;
 2. a check that the tag equals the `MINIPSD_VERSION_*` macros in `include/minipsd.h` and that
    `docs/CHANGELOG.md` has a section for that version;
 3. `minipsd.h` as a single file: `include/` joined by `tools/amalgamate.cmake`;

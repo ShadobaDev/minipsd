@@ -1,7 +1,7 @@
 # Builds and tests minipsd on every supported toolchain: the unit tests (C99 + C++20), the C++17
 # compile check, the psd-tools round trip (required here, optional locally) and the consumer tests.
 # Then, on Linux, the same tests under sanitizers, clang-tidy and coverage (job "analysis").
-# release.yml calls this workflow before it publishes anything.
+# release.yml publishes only a commit this workflow has passed on master.
 # Branches run nothing until a pull request is ready for review (drafts are skipped); after that,
 # each push to it runs again and cancels the run it replaces.
 name: CI
@@ -12,7 +12,6 @@ on:
   pull_request:
     types: [ opened, synchronize, reopened, ready_for_review ]
   workflow_dispatch:
-  workflow_call:
 
 permissions:
   contents: read
