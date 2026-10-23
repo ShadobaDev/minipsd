@@ -95,9 +95,11 @@ Define before the implementation include:
 
 | Macro | Effect |
 |---|---|
-| `MINIPSD_STATIC` | make every function `static` (nothing exported) |
+| `MINIPSD_STATIC` | make every function `static` (nothing exported); those a file does not call do not warn |
 | `MINIPSD_MALLOC` / `MINIPSD_FREE` | replace `malloc` / `free` |
 | `MINIPSD_NO_MALLOC` | leave out every allocation (`minipsd_write`); the pull writer stays |
+| `MINIPSD_NO_READER` | leave out the reader, the typed views and `minipsd_read`: a program that only writes |
+| `MINIPSD_NO_WRITER` | leave out the writer and `minipsd_read`: a program that only reads |
 
 ## Documentation
 

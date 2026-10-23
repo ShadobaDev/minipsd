@@ -14,7 +14,7 @@
 
 /* Encodes a row of n bytes as the file stores it, out of samples stride bytes apart (one channel
    out of interleaved RGBA), of 1 << shift bytes in host order. */
-static void mpsd__packbits(mpsd__sink *s, const uint8_t *src, size_t n, size_t stride, unsigned shift)
+MPSD__SHARED static void mpsd__packbits(mpsd__sink *s, const uint8_t *src, size_t n, size_t stride, unsigned shift)
 {
     const ptrdiff_t step = (ptrdiff_t)stride;
     uint8_t packet[129];
@@ -47,7 +47,7 @@ static void mpsd__packbits(mpsd__sink *s, const uint8_t *src, size_t n, size_t s
    samples step bytes apart, of 1 << shift bytes in host order.  Returns 0 when the packets do
    not hold width bytes, or one would pass the row's end or the width.  Bytes left after the last
    are ignored: some writers pad a row. */
-static int mpsd__unpackbits(const uint8_t *src, size_t n, uint8_t *dst, ptrdiff_t step, uint32_t width, unsigned shift)
+MPSD__SHARED static int mpsd__unpackbits(const uint8_t *src, size_t n, uint8_t *dst, ptrdiff_t step, uint32_t width, unsigned shift)
 {
     size_t   i = 0, k;
     uint32_t x = 0;

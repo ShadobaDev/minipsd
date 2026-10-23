@@ -19,21 +19,21 @@ typedef struct mpsd__composite {
 } mpsd__composite;
 
 /* The document's bits a sample (0 is 8), and the bytes a sample takes in memory: 1 << shift. */
-static unsigned mpsd__doc_depth(const minipsd_doc *d) { return d->depth ? d->depth : MPSD__CH_8BIT; }
-static unsigned mpsd__doc_shift(const minipsd_doc *d) { return mpsd__shift(mpsd__doc_depth(d)); }
+MPSD__SHARED static unsigned mpsd__doc_depth(const minipsd_doc *d) { return d->depth ? d->depth : MPSD__CH_8BIT; }
+MPSD__SHARED static unsigned mpsd__doc_shift(const minipsd_doc *d) { return mpsd__shift(mpsd__doc_depth(d)); }
 
 /* The full sample of the document's depth (1.0f's bits at 32). */
-static uint32_t mpsd__doc_full(const minipsd_doc *d) { return mpsd__full(mpsd__doc_depth(d)); }
+MPSD__SHARED static uint32_t mpsd__doc_full(const minipsd_doc *d) { return mpsd__full(mpsd__doc_depth(d)); }
 
 /* The file's colour mode: color_mode, whose 0 is RGB unless depth is 1 (bitmap, the only 1-bit
    mode). */
-static unsigned mpsd__doc_mode(const minipsd_doc *d)
+MPSD__SHARED static unsigned mpsd__doc_mode(const minipsd_doc *d)
 {
     return d->color_mode || d->depth == 1 ? d->color_mode : (unsigned)MINIPSD_MODE_RGB;
 }
 
 /* Is the mode flat: bitmap, indexed or multichannel, which have no layers and no transparency? */
-static int mpsd__doc_flat(const minipsd_doc *d)
+MPSD__SHARED static int mpsd__doc_flat(const minipsd_doc *d)
 {
     const unsigned mode = mpsd__doc_mode(d);
     return mode == MINIPSD_MODE_BITMAP || mode == MINIPSD_MODE_INDEXED || mode == MINIPSD_MODE_MULTICHANNEL;
@@ -42,10 +42,10 @@ static int mpsd__doc_flat(const minipsd_doc *d)
 /* The document's colour channels (three in RGB and Lab, four in CMYK, one in grey, duotone, bitmap
    and indexed, the stored composite's in multichannel), and the samples of a pixel: those, then
    transparency unless the mode is flat. */
-static unsigned mpsd__doc_colors(const minipsd_doc *d) { return mpsd__colors(mpsd__doc_mode(d), d->composite_channels); }
-static unsigned mpsd__doc_pixel(const minipsd_doc *d) { return mpsd__doc_colors(d) + !mpsd__doc_flat(d); }
+MPSD__SHARED static unsigned mpsd__doc_colors(const minipsd_doc *d) { return mpsd__colors(mpsd__doc_mode(d), d->composite_channels); }
+MPSD__SHARED static unsigned mpsd__doc_pixel(const minipsd_doc *d) { return mpsd__doc_colors(d) + !mpsd__doc_flat(d); }
 
-static int mpsd__contributes(const minipsd_layer *l) { return l->pixels && !l->hidden && l->opacity; }
+MPSD__SHARED static int mpsd__contributes(const minipsd_layer *l) { return l->pixels && !l->hidden && l->opacity; }
 
 /* A layer's rectangle as written, and the size of its pixels: 0 by 0 for a layer without pixels or
    without area.  All four sides zero with pixels (rgba or stored channels) is the full canvas.
@@ -55,7 +55,7 @@ typedef struct mpsd__rect {
     uint32_t width, height;
 } mpsd__rect;
 
-static mpsd__rect mpsd__layer_rect(const minipsd_doc *d, const minipsd_layer *l)
+MPSD__SHARED static mpsd__rect mpsd__layer_rect(const minipsd_doc *d, const minipsd_layer *l)
 {
     mpsd__rect r;
     r.top = l->top; r.left = l->left; r.bottom = l->bottom; r.right = l->right;
@@ -69,7 +69,7 @@ static mpsd__rect mpsd__layer_rect(const minipsd_doc *d, const minipsd_layer *l)
     return r;
 }
 
-static void mpsd__composite_init(mpsd__composite *c, const minipsd_doc *d, uint8_t *row)
+MPSD__SHARED static void mpsd__composite_init(mpsd__composite *c, const minipsd_doc *d, uint8_t *row)
 {
     c->doc = d;
     c->row = row;
@@ -81,7 +81,7 @@ static void mpsd__composite_init(mpsd__composite *c, const minipsd_doc *d, uint8
 #endif
 
 /* The visible layers' row y blended "over" into row, straight alpha: the best effort. */
-static void mpsd__compose(const minipsd_doc *d, uint8_t *row, uint32_t y)
+MPSD__SHARED static void mpsd__compose(const minipsd_doc *d, uint8_t *row, uint32_t y)
 {
     const unsigned wide = mpsd__doc_shift(d), pixel = (unsigned)MPSD__RGBA << wide;
     const float    max  = (float)mpsd__doc_full(d);
@@ -120,7 +120,7 @@ static void mpsd__compose(const minipsd_doc *d, uint8_t *row, uint32_t y)
    already matted, or of another mode than RGB, as it is (bitmap packed into the caller's row);
    otherwise the supplied row copied, or the layers composed, into the caller's row, then matted
    there. */
-static const uint8_t *mpsd__composite_row(mpsd__composite *c, uint32_t y)
+MPSD__SHARED static const uint8_t *mpsd__composite_row(mpsd__composite *c, uint32_t y)
 {
     const minipsd_doc *d    = c->doc;
     const unsigned     wide = mpsd__doc_shift(d), pixel = mpsd__doc_pixel(d) << wide;
@@ -158,7 +158,7 @@ static const uint8_t *mpsd__composite_row(mpsd__composite *c, uint32_t y)
    bits): c = max - (max - s) * max / a, rounded and clamped; 0 where a is 0, since a transparent
    pixel has no colour.  Exact at a == max; below, matting has already merged nearby colours, about
    max / (2a) levels apart. */
-static uint32_t mpsd__unmatte(uint32_t s, uint32_t a, uint32_t max)
+MPSD__SHARED static uint32_t mpsd__unmatte(uint32_t s, uint32_t a, uint32_t max)
 {
     uint32_t d;
     if (a == 0) return 0;

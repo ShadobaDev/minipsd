@@ -3,6 +3,16 @@
 Changes between releases, for users of minipsd. Versioning follows the pre-1.0 rules in
 [TODO.md](TODO.md): breaking changes bump the MINOR, additions and fixes the PATCH.
 
+## [Unreleased]
+
+### Added
+- `MINIPSD_NO_READER` and `MINIPSD_NO_WRITER`: a build with only the writer or only the reader;
+  `minipsd_read` needs both.
+
+### Fixed
+- Under `MINIPSD_STATIC`, the functions a file does not call no longer warn (`-Wunused-function`
+  in gcc and clang, C4505 in MSVC): each is marked possibly unused.
+
 ## [0.3.0] — 2026-10-23
 
 **Breaking:** `minipsd_write`, `minipsd_writer_workspace_size`, `minipsd_writer_init` and

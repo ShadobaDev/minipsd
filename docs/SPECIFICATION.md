@@ -80,14 +80,18 @@ real readers win (see [Verification](#verification)).
   `-Wconversion -Wsign-conversion -Wshadow -Wcast-qual -Wundef -Wdouble-promotion
   -Wnull-dereference -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes -Wold-style-definition`,
   and with gcc `-Wcast-align -Wduplicated-cond -Wlogical-op` (the list is in
-  `tests/CMakeLists.txt`).
+  `tests/CMakeLists.txt`). So is a program that uses part of it, as C and as C++17: under
+  `MINIPSD_STATIC` calling only `minipsd_write`, and without the reader or the writer
+  (`tests/part_check.c`).
 - Configuration macros (define before the implementation include):
 
 | Macro | Effect |
 |---|---|
-| `MINIPSD_STATIC` | every function is `static`, nothing is exported |
+| `MINIPSD_STATIC` | every function is `static`, nothing is exported; each is marked possibly unused, so a file that calls only some builds without warnings |
 | `MINIPSD_MALLOC` / `MINIPSD_FREE` | replace `malloc` / `free` (define both) |
 | `MINIPSD_NO_MALLOC` | omit every allocation: `minipsd_write` and `<stdlib.h>`; the pull writer stays |
+| `MINIPSD_NO_READER` | omit the reader, the typed views and `minipsd_read`, their types and functions |
+| `MINIPSD_NO_WRITER` | omit the writer and `minipsd_read`; with `MINIPSD_NO_READER`, an error |
 | `MINIPSD_NO_STDIO` | accepted, no effect: minipsd never includes `<stdio.h>` |
 
 - **No I/O.** minipsd opens no file, pipe or socket; bytes go to the caller's buffer or callback.

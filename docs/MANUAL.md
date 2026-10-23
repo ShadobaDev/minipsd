@@ -13,7 +13,7 @@ complete programs here are in [examples/](../examples/), which CI builds and run
 | [Round trip](#round-trip) | a file read into a document, changed, written back; what is kept, what is lost |
 | [Memory and ownership](#memory-and-ownership) | what you allocate, how long it must live |
 | [Return codes](#return-codes) | `MINIPSD_OK`, `MINIPSD_MORE`, errors |
-| [Configuration](#configuration) | `MINIPSD_STATIC`, the allocator, a build without allocation |
+| [Configuration](#configuration) | `MINIPSD_STATIC`, the allocator, a build without allocation, the reader or the writer |
 
 ---
 
@@ -778,6 +778,8 @@ Define before the `#include` in the implementation file:
 
 | Macro | Effect |
 |---|---|
-| `MINIPSD_STATIC` | every function `static`, private to that file: several copies never clash |
+| `MINIPSD_STATIC` | every function `static`, private to that file: several copies never clash, and those you do not call do not warn |
 | `MINIPSD_MALLOC` / `MINIPSD_FREE` | replace `malloc` / `free`; define both |
 | `MINIPSD_NO_MALLOC` | no allocation at all, and no `<stdlib.h>`: `minipsd_write` goes, the pull writer and the reader stay |
+| `MINIPSD_NO_READER` | no reader, typed views or `minipsd_read`: less code for a program that only writes |
+| `MINIPSD_NO_WRITER` | no writer or `minipsd_read`: less code for a program that only reads |

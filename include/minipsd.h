@@ -38,7 +38,10 @@
  * - \c MINIPSD_MALLOC / \c MINIPSD_FREE: replace malloc / free (define both);
  * - \c MINIPSD_NO_MALLOC: leave out every allocation: minipsd_write, minipsd_read and
  *   minipsd_doc_free go (and <stdlib.h>); the pull writer, the reader and minipsd_read_into, on
- *   the caller's memory, stay.
+ *   the caller's memory, stay;
+ * - \c MINIPSD_NO_READER: leave out the reader, the typed views and minipsd_read, for a program
+ *   that only writes;
+ * - \c MINIPSD_NO_WRITER: leave out the writer and minipsd_read, for a program that only reads.
  *
  * minipsd does no I/O of its own and includes no <stdio.h>: files, pipes and sockets are the
  * caller's, fed by minipsd_write or minipsd_writer_fill (examples/ in the repository has each).
@@ -92,6 +95,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#if defined(MINIPSD_NO_READER) && defined(MINIPSD_NO_WRITER)
+#  error "minipsd: MINIPSD_NO_READER and MINIPSD_NO_WRITER together leave nothing"
+#endif
+
 /* --- Version and linkage ------------------------------------------------------------------- */
 
 /**
@@ -109,9 +116,20 @@
 #define MINIPSD_VERSION_STRING \
     MPSD__XSTR(MINIPSD_VERSION_MAJOR) "." MPSD__XSTR(MINIPSD_VERSION_MINOR) "." MPSD__XSTR(MINIPSD_VERSION_PATCH)
 
-/** \brief Linkage of every public function: static under MINIPSD_STATIC, otherwise extern (C). */
+/** \brief Linkage of every public function: static under MINIPSD_STATIC, otherwise extern (C).
+ *
+ * Static, each is marked as possibly unused, so a file that calls only some of them builds
+ * without warnings: GNU's attribute in gcc and clang, [[maybe_unused]] in C++17, and in MSVC
+ * warning C4505 off for the implementation.
+ */
 #ifdef MINIPSD_STATIC
-#  define MINIPSDDEF static
+#  if defined(__GNUC__) || defined(__clang__)
+#    define MINIPSDDEF __attribute__((unused)) static
+#  elif defined(__cplusplus) && (__cplusplus >= 201703L || (defined(_MSVC_LANG) && _MSVC_LANG >= 201703L))
+#    define MINIPSDDEF [[maybe_unused]] static
+#  else
+#    define MINIPSDDEF static
+#  endif
 #elif defined(__cplusplus)
 #  define MINIPSDDEF extern "C"
 #else
@@ -524,6 +542,25 @@ typedef struct minipsd_write_opts {
 } minipsd_write_opts;
 
 /**
+ * \brief Receives the file's bytes, in order.
+ *
+ * \param user The pointer given to minipsd_write.
+ * \param data The next bytes of the file.
+ * \param size How many bytes data holds; never 0.
+ * \return Non-zero on success, 0 to abort the write.
+ */
+typedef int (*minipsd_write_fn)(void *user, const void *data, size_t size);
+
+/** \brief RGB's planes in a target and channels in a layer view; Lab's are L, a, b, transparency. */
+enum {
+    MINIPSD_CH_R = 0, /*!< Red.                                */
+    MINIPSD_CH_G = 1, /*!< Green.                              */
+    MINIPSD_CH_B = 2, /*!< Blue.                               */
+    MINIPSD_CH_A = 3  /*!< Transparency (the channel with id -1). */
+};
+
+#ifndef MINIPSD_NO_WRITER
+/**
  * \brief Checks that a document can be written, without writing anything.
  *
  * The writer runs the same check first; call it alone to validate a document early.  One limit
@@ -559,16 +596,6 @@ typedef struct minipsd_write_opts {
 MINIPSDDEF int minipsd_doc_check(const minipsd_doc *doc, const minipsd_write_opts *opts);
 
 /* --- Writer -------------------------------------------------------------------------------- */
-
-/**
- * \brief Receives the file's bytes, in order.
- *
- * \param user The pointer given to minipsd_write.
- * \param data The next bytes of the file.
- * \param size How many bytes data holds; never 0.
- * \return Non-zero on success, 0 to abort the write.
- */
-typedef int (*minipsd_write_fn)(void *user, const void *data, size_t size);
 
 #ifndef MINIPSD_NO_MALLOC
 /**
@@ -668,7 +695,9 @@ MINIPSDDEF uint64_t minipsd_writer_total(const minipsd_writer *w);
  * \retval MINIPSD_ERR_ARG w or produced is NULL, or buf is NULL with cap above 0.
  */
 MINIPSDDEF int minipsd_writer_fill(minipsd_writer *w, void *buf, size_t cap, size_t *produced);
+#endif /* MINIPSD_NO_WRITER */
 
+#ifndef MINIPSD_NO_READER
 /* --- Reader -------------------------------------------------------------------------------- */
 
 /**
@@ -733,14 +762,6 @@ typedef struct minipsd_info {
  * channels) are other channels, not decoded.
  */
 #define MINIPSD_PLANES 5
-
-/** \brief RGB's planes in a target and channels in a layer view; Lab's are L, a, b, transparency. */
-enum {
-    MINIPSD_CH_R = 0, /*!< Red.                                */
-    MINIPSD_CH_G = 1, /*!< Green.                              */
-    MINIPSD_CH_B = 2, /*!< Blue.                               */
-    MINIPSD_CH_A = 3  /*!< Transparency (the channel with id -1). */
-};
 
 /**
  * \brief One layer record, as minipsd_reader_next_layer reads it.
@@ -1324,7 +1345,9 @@ MINIPSDDEF const char *minipsd_resource_id_name(uint16_t id);
  *         its value; MINIPSD_ERR_ARG for a NULL argument.
  */
 MINIPSDDEF int minipsd_layer_block_settings(const minipsd_layer_view *layer, minipsd_block_settings *out);
+#endif /* MINIPSD_NO_READER */
 
+#if !defined(MINIPSD_NO_READER) && !defined(MINIPSD_NO_WRITER)
 /* --- Document from a file ------------------------------------------------------------------ */
 
 /**
@@ -1430,16 +1453,58 @@ MINIPSDDEF int minipsd_read(const void *data, size_t size, const minipsd_limits 
 MINIPSDDEF void minipsd_doc_free(minipsd_doc *doc);
 #endif
 
+#endif /* reader and writer */
+
 #endif /* MINIPSD_H */
 
 /* ============================================================================================== */
 
 #ifdef MINIPSD_IMPLEMENTATION
+/* Some functions go unused: public ones under MINIPSD_STATIC, and without the reader or the writer
+   the helpers in detail/ that only the other one calls.  Those are marked MPSD__SHARED, possibly
+   unused then, so a full build still warns of one nothing calls.  MSVC's C has no such
+   attribute: warning C4505 is off for the implementation instead. */
+#if defined(MINIPSD_STATIC) || defined(MINIPSD_NO_READER) || defined(MINIPSD_NO_WRITER)
+#  define MPSD__SOME_UNUSED 1
+#else
+#  define MPSD__SOME_UNUSED 0
+#endif
+#if !(defined(MINIPSD_NO_READER) || defined(MINIPSD_NO_WRITER))
+#  define MPSD__SHARED
+#elif defined(__GNUC__) || defined(__clang__)
+#  define MPSD__SHARED __attribute__((unused))
+#elif defined(__cplusplus) && (__cplusplus >= 201703L || (defined(_MSVC_LANG) && _MSVC_LANG >= 201703L))
+#  define MPSD__SHARED [[maybe_unused]]
+#else
+#  define MPSD__SHARED
+#endif
+#if MPSD__SOME_UNUSED && defined(_MSC_VER) && !defined(__clang__)
+#  pragma warning(push)
+#  pragma warning(disable: 4505)   /* an unreferenced static function removed: one not called */
+#endif
 #include "minipsd/base.h"
+/* The helpers the writer and the reader share, before either: the single file the release attaches
+   (tools/amalgamate.cmake) holds each header once, where it is first included, so they must not
+   land inside a part that may be left out. */
+#include "minipsd/detail/bytes.h"
+#include "minipsd/detail/format.h"
+#include "minipsd/detail/samples.h"
+#include "minipsd/detail/utf.h"
+#include "minipsd/detail/packbits.h"
+#include "minipsd/detail/composite.h"
+#ifndef MINIPSD_NO_WRITER
 #include "minipsd/writer.h"
+#endif
+#ifndef MINIPSD_NO_READER
 #include "minipsd/views.h"
 #include "minipsd/reader.h"
+#endif
+#if !defined(MINIPSD_NO_READER) && !defined(MINIPSD_NO_WRITER)
 #include "minipsd/read.h"
+#endif
+#if MPSD__SOME_UNUSED && defined(_MSC_VER) && !defined(__clang__)
+#  pragma warning(pop)
+#endif
 #endif
 
 /*

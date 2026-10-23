@@ -141,10 +141,15 @@ Rules for the split:
   - `MINIPSD_IMPLEMENTATION` is defined once, as today.
   - Each implementation file is guarded by its own `MPSD__<MODULE>_DONE`, so it is built once
     however often `minipsd.h` is included.
-  - `MINIPSD_STATIC` keeps working unchanged.
+  - `MINIPSD_STATIC` keeps working; its functions are marked possibly unused, since a file calls
+    only some.
 - **No unused internals.** The full implementation, compiled with extern linkage, leaves no
-  `static` function unused: that is a warning, and warnings are errors.
-- **Optional subsystems hide behind macros in `minipsd.h`**, the way `MINIPSD_NO_MALLOC` does.
+  `static` function unused: that is a warning, and warnings are errors. Without the reader or
+  the writer (`MINIPSD_NO_READER`, `_NO_WRITER`) the helpers in `detail/` are marked possibly
+  unused (`MPSD__SHARED`), so this check still holds for the full build. `minipsd.h` includes
+  `detail/` before either part, so the single file keeps them whichever part is left out.
+- **Optional subsystems hide behind macros in `minipsd.h`**, the way `MINIPSD_NO_MALLOC`,
+  `MINIPSD_NO_READER` and `MINIPSD_NO_WRITER` do.
 - **Promotion is additive.** `packbits` and `composite` stay internal until a consumer needs
   them. Making one public means adding a declaration to `minipsd.h`, a PATCH change, never a
   rename of anything existing.
