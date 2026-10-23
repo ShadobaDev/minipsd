@@ -164,11 +164,9 @@ static uint64_t mpsd__record_size(uint32_t channels, unsigned psb)
 
 /* A layer's channels by id: -1 transparency, 0 .. colours - 1 the colour channels (0 1 2 red green
    blue), -2 the mask, -3 the real mask; other ids are alpha and spot channels.  The writer writes
-   RGB's in this order: MINIPSD_CH_*, then the two masks. */
+   transparency, the colour channels, then the two masks. */
 #define MPSD__RGBA     4          /* RGB's colour channels and transparency; samples a pixel */
-#define MPSD__CH_MASK  4
-#define MPSD__CH_REAL  5
-#define MPSD__CHANNELS 6          /* the most channels the writer writes a layer */
+#define MPSD__CHANNELS 7          /* the most channels the writer writes a layer: CMYK's four, transparency, two masks */
 
 /* The reader keeps a layer's channels in slots: the colour channels, then transparency, as a
    target's planes (MINIPSD_PLANES), then the two masks. */

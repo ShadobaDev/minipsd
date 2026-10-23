@@ -24,6 +24,18 @@ static unsigned mpsd__doc_wide(const minipsd_doc *d) { return d->depth == MPSD__
 /* The full sample of the document's depth. */
 static uint32_t mpsd__doc_full(const minipsd_doc *d) { return mpsd__full(mpsd__doc_wide(d) ? MPSD__CH_16BIT : MPSD__CH_8BIT); }
 
+/* The file's colour mode: color_mode, whose 0 is RGB unless depth is 1 (bitmap, the only 1-bit
+   mode). */
+static unsigned mpsd__doc_mode(const minipsd_doc *d)
+{
+    return d->color_mode || d->depth == 1 ? d->color_mode : (unsigned)MINIPSD_MODE_RGB;
+}
+
+/* The document's colour channels (three in RGB and Lab, four in CMYK, one in grey and duotone),
+   and the samples of a pixel: those, then transparency. */
+static unsigned mpsd__doc_colors(const minipsd_doc *d) { return mpsd__colors(mpsd__doc_mode(d), 0); }
+static unsigned mpsd__doc_pixel(const minipsd_doc *d) { return mpsd__doc_colors(d) + 1; }
+
 static int mpsd__contributes(const minipsd_layer *l) { return l->pixels && !l->hidden && l->opacity; }
 
 /* A layer's rectangle as written, and the size of its pixels: 0 by 0 for a layer without pixels or
@@ -101,12 +113,13 @@ static void mpsd__compose(const minipsd_doc *d, uint8_t *row, uint32_t y)
 static const uint8_t *mpsd__composite_row(mpsd__composite *c, uint32_t y)
 {
     const minipsd_doc *d    = c->doc;
-    const unsigned     wide = mpsd__doc_wide(d), pixel = (unsigned)MPSD__RGBA << wide;
+    const unsigned     wide = mpsd__doc_wide(d), pixel = mpsd__doc_pixel(d) << wide;
     const uint32_t     max  = mpsd__doc_full(d);
     const size_t       size = (size_t)d->width * pixel;
     uint32_t x;
-    if (!d->composite)              mpsd__compose(d, c->row, y);
-    else if (d->composite_matted)   return d->composite + (size_t)y * size;
+    if (!d->composite)              mpsd__compose(d, c->row, y);   /* RGB only: minipsd_doc_check */
+    else if (d->composite_matted || mpsd__doc_mode(d) != MINIPSD_MODE_RGB)   /* other modes: as given */
+        return d->composite + (size_t)y * size;
     else                            memcpy(c->row, d->composite + (size_t)y * size, size);
     for (x = 0; x < d->width; ++x) {          /* the merged image is stored over white */
         uint8_t       *o = c->row + (size_t)x * pixel;

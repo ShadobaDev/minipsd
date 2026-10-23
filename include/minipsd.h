@@ -367,9 +367,10 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
                                     effects, groups, ...), as minipsd_layer_view.additional_info
                                     holds them: written after the layer's own name, except a
                                     'luni' block, since name wins.                                 */
-    const minipsd_bytes *stored; /*!< NULL: pixels are encoded.  Otherwise four channels as a file
-                                    stores them (R, G, B, transparency, as minipsd_layer_view.channel:
-                                    the compression marker, then the rows), copied as they are
+    const minipsd_bytes *stored; /*!< NULL: pixels are encoded.  Otherwise the mode's colour channels
+                                    then transparency as a file stores them (as
+                                    minipsd_layer_view.channel: the compression marker, then the
+                                    rows), copied as they are
                                     instead of encoding pixels: a layer never decoded is never encoded
                                     again.  Each is checked against the rectangle; transparency of
                                     size 0 is none, and written as none.  pixels may then be NULL, as long
@@ -416,7 +417,9 @@ typedef struct minipsd_doc {
                                               straight alpha, written
                                               whatever the layers hold.  NULL: composite_stored
                                               is copied; without it too, composed from the
-                                              layers, a best effort (see "What it writes").  */
+                                              layers, a best effort (see "What it writes"),
+                                              in RGB only: every other mode needs one.  Other
+                                              modes are written as given, never matted.      */
     int                  composite_matted; /*!< Non-zero: composite is already matted against
                                               white, as the file stores it (what
                                               minipsd_decode_composite gives with keep_matte),
@@ -464,8 +467,8 @@ typedef struct minipsd_doc {
                                               composite always has transparency.  minipsd_read
                                               sets the file's.                                 */
     uint16_t             color_mode;     /*!< MINIPSD_MODE_*: what the samples are; 0 is RGB
-                                              (bitmap with depth 1).  minipsd_read sets the
-                                              file's.                                         */
+                                              (bitmap with depth 1).  Written: RGB, grey, CMYK,
+                                              Lab and duotone.  minipsd_read sets the file's. */
     minipsd_bytes        color_mode_data; /*!< The colour mode data, written as given: an
                                               indexed document's palette, a duotone's inks
                                               and curves (minipsd_info.color_mode_data); size

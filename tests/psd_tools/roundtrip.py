@@ -556,6 +556,86 @@ def check_deep(psd, expected):
     return errors
 
 
+# --- every colour mode the writer takes -----------------------------------------------------------
+
+MODE_GREY, MODE_RGB, MODE_CMYK, MODE_DUOTONE, MODE_LAB = 1, 3, 4, 8, 9
+MODE_COLORS = {MODE_GREY: 1, MODE_RGB: 3, MODE_CMYK: 4, MODE_DUOTONE: 1, MODE_LAB: 3}
+MODES = [(mode, depth, compression) for mode in (MODE_GREY, MODE_CMYK, MODE_LAB, MODE_DUOTONE)
+         for depth, compression in ((8, MINIPSD_RLE), (16, MINIPSD_RLE), (16, MINIPSD_ZIP_PREDICTED))]
+DUOTONE_DATA = bytes(range(40))   # opaque to minipsd and psd-tools: written and read as given
+
+
+def mode_document(lib, path, mode, depth, compression):
+    """A document of the mode and depth: a full-canvas gradient, above it a half-transparent layer at
+    an offset, and a composite of its own (the writer composes RGB only), every sample distinct.
+    Returns the samples, interleaved: the mode's colour channels then transparency."""
+    w, h, lw, lh = 12, 9, 5, 4
+    pixel = MODE_COLORS[mode] + 1
+    full = (1 << depth) - 1
+    keep = []
+
+    def samples(values):
+        buf = ((ctypes.c_uint16 if depth == 16 else ctypes.c_uint8) * len(values))(*values)
+        keep.append(buf)
+        return ctypes.cast(buf, ctypes.c_void_p)
+
+    def image(width, height, seed, alpha):
+        return [full if k == pixel - 1 and alpha is None else alpha if k == pixel - 1 else
+                (seed * 37 + y * 11 + x * 7 + k * 53) * (full // 255) % (full + 1)
+                for y in range(height) for x in range(width) for k in range(pixel)]
+
+    base, top, flat = image(w, h, 1, None), image(lw, lh, 2, full // 2), image(w, h, 3, None)
+    records = (Layer * 2)()
+    records[0] = Layer(name=b"Base", pixels=samples(base), opacity=255)
+    records[1] = Layer(name=b"Top", pixels=samples(top), opacity=255, top=3, left=4, bottom=3 + lh, right=4 + lw)
+    doc = Doc(w, h, 72.0, records, 2, None, 0, compression)
+    doc.composite, doc.depth, doc.color_mode = samples(flat), depth, mode
+    if mode == MODE_DUOTONE:
+        data = ctypes.create_string_buffer(DUOTONE_DATA, len(DUOTONE_DATA))
+        keep.append(data)
+        doc.color_mode_data = Bytes(ctypes.cast(data, ctypes.c_void_p), len(DUOTONE_DATA))
+    out = bytearray()
+
+    def collect(_user, data, size):
+        out.extend(ctypes.string_at(data, size))
+        return 1
+
+    rc = lib.minipsd_write(ctypes.byref(doc), ctypes.byref(WriteOpts(0, deflate)), WRITE_FN(collect), None)
+    if rc == MINIPSD_OK:
+        path.write_bytes(out)
+    return rc, (w, h, lw, lh, pixel, base, top, flat)
+
+
+def check_mode_document(psd, name, mode, depth, expected):
+    """psd-tools reads the header's mode, depth and channels, the mode data, and every channel of
+    both layers and of the composite, sample for sample: written as given, the composite unmatted."""
+    w, h, lw, lh, pixel, base, top, flat = expected
+    fmt = ">H" if depth == 16 else ">B"
+    errors = []
+
+    def expect(what, got, want):
+        if got != want:
+            errors.append(f"{name}: {what} is {got!r}, expected {want!r}")
+
+    def plane(values, k):
+        return b"".join(struct.pack(fmt, values[i]) for i in range(k, len(values), pixel))
+
+    header = psd._record.header
+    expect("mode", int(header.color_mode), mode)
+    expect("depth", header.depth, depth)
+    expect("channels", header.channels, pixel)
+    expect("mode data", bytes(psd._record.color_mode_data.value), DUOTONE_DATA if mode == MODE_DUOTONE else b"")
+    li = psd._record.layer_and_mask_information.layer_info
+    for record, channels, values, (rw, rh) in zip(li.layer_records, li.channel_image_data, (base, top), ((w, h), (lw, lh))):
+        for info, data in zip(record.channel_info, channels):
+            k = pixel - 1 if info.id.value == -1 else info.id.value
+            expect(f"'{record.name}' channel {info.id.value}", data.get_data(rw, rh, depth) == plane(values, k), True)
+    merged = psd._record.image_data.get_data(header)
+    for k in range(pixel):
+        expect(f"composite channel {k}", bytes(merged[k]) == plane(flat, k), True)
+    return errors
+
+
 # --- files from other programs: read, written back, what is kept compared --------------------------
 
 # Files with text, effects, groups and resources of every kind; read whole, written back as they are.
@@ -1035,6 +1115,15 @@ def main():
         found = [f"{name}: minipsd_write returned {rc}"] if rc != MINIPSD_OK else check_deep(PSDImage.open(path), expected)
         if rc == MINIPSD_OK and compression and compressions(PSDImage.open(path)) != {Compression(compression)}:
             found.append(f"{name}: layer channels compressed as {compressions(PSDImage.open(path))}")
+        errors += found
+        print(f"{name}: {'FAILED' if found else 'ok'}")
+
+    for mode, depth, compression in MODES:
+        name = f"mode-{mode}-{depth}{'-zip' if compression else ''}"
+        path = out / f"{name}.psd"
+        rc, expected = mode_document(lib, path, mode, depth, compression)
+        found = [f"{name}: minipsd_write returned {rc}"] if rc != MINIPSD_OK else (
+            check_mode_document(PSDImage.open(path), name, mode, depth, expected) + check_decoded(lib, path))
         errors += found
         print(f"{name}: {'FAILED' if found else 'ok'}")
 

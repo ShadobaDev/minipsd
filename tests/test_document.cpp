@@ -53,13 +53,26 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
     }
     d = docOf(2, 2, &layer, 1); d.icc_size = 4;
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "ICC size without data";
-    // The colour mode: 0 and RGB are RGB; the others wait for the writer (S6.19); RGB has no mode data.
-    const std::uint8_t palette[3] = {1, 2, 3};
+    // The colour mode: 0 and RGB are RGB; grey, CMYK, Lab and duotone bring their composite, which
+    // only RGB's writer can compose; duotone, and only it, its mode data; the flat modes wait (S6.19).
+    const std::uint8_t inks[3] = {1, 2, 3};
+    const Bytes cmyk(2 * 2 * 5, 0);
     d = docOf(2, 2, &layer, 1); d.color_mode = MINIPSD_MODE_RGB;
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK) << "RGB named";
     d.color_mode = MINIPSD_MODE_CMYK;
-    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_UNSUPPORTED) << "CMYK, not yet";
-    d = docOf(2, 2, &layer, 1); d.color_mode_data = {palette, sizeof palette};
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "CMYK without its composite";
+    d.composite = cmyk.data();
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK) << "CMYK with it";
+    d.color_mode = MINIPSD_MODE_DUOTONE;
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "duotone without its inks";
+    d.color_mode_data = {inks, sizeof inks};
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK) << "duotone with them";
+    d.color_mode = MINIPSD_MODE_GREY;
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "mode data for grey";
+    d.color_mode = MINIPSD_MODE_MULTICHANNEL;
+    d.color_mode_data = {};
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_UNSUPPORTED) << "a flat mode, not yet";
+    d = docOf(2, 2, &layer, 1); d.color_mode_data = {inks, sizeof inks};
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "mode data for RGB";
     d.color_mode_data = {nullptr, 3};
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "mode data size without data";
