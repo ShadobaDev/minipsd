@@ -72,6 +72,13 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
     d.color_mode = MINIPSD_MODE_MULTICHANNEL;
     d.color_mode_data = {};
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_UNSUPPORTED) << "a flat mode, not yet";
+    // 32 bits: RGB and grey, as Photoshop has them, with their composite (the writer composes none).
+    d = docOf(2, 2, &layer, 1); d.depth = 32;
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "32-bit RGB without its composite";
+    d.composite = cmyk.data();
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK) << "32-bit RGB with it";
+    d.color_mode = MINIPSD_MODE_CMYK;
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_UNSUPPORTED) << "32-bit CMYK";
     d = docOf(2, 2, &layer, 1); d.color_mode_data = {inks, sizeof inks};
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "mode data for RGB";
     d.color_mode_data = {nullptr, 3};

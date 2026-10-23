@@ -561,7 +561,8 @@ def check_deep(psd, expected):
 MODE_GREY, MODE_RGB, MODE_CMYK, MODE_DUOTONE, MODE_LAB = 1, 3, 4, 8, 9
 MODE_COLORS = {MODE_GREY: 1, MODE_RGB: 3, MODE_CMYK: 4, MODE_DUOTONE: 1, MODE_LAB: 3}
 MODES = [(mode, depth, compression) for mode in (MODE_GREY, MODE_CMYK, MODE_LAB, MODE_DUOTONE)
-         for depth, compression in ((8, MINIPSD_RLE), (16, MINIPSD_RLE), (16, MINIPSD_ZIP_PREDICTED))]
+         for depth, compression in ((8, MINIPSD_RLE), (16, MINIPSD_RLE), (16, MINIPSD_ZIP_PREDICTED))] + [
+         (mode, 32, compression) for mode in (MODE_RGB, MODE_GREY) for compression in (MINIPSD_RLE, MINIPSD_ZIP_PREDICTED)]
 DUOTONE_DATA = bytes(range(40))   # opaque to minipsd and psd-tools: written and read as given
 
 
@@ -571,20 +572,24 @@ def mode_document(lib, path, mode, depth, compression):
     Returns the samples, interleaved: the mode's colour channels then transparency."""
     w, h, lw, lh = 12, 9, 5, 4
     pixel = MODE_COLORS[mode] + 1
-    full = (1 << depth) - 1
+    full = 1.0 if depth == 32 else (1 << depth) - 1
     keep = []
 
     def samples(values):
-        buf = ((ctypes.c_uint16 if depth == 16 else ctypes.c_uint8) * len(values))(*values)
+        buf = ({8: ctypes.c_uint8, 16: ctypes.c_uint16, 32: ctypes.c_float}[depth] * len(values))(*values)
         keep.append(buf)
         return ctypes.cast(buf, ctypes.c_void_p)
 
+    def value(n):   # distinct samples; at 32 bits floats in 0 .. 1 that a float holds exactly
+        return n % 256 / 256 if depth == 32 else n * (full // 255) % (full + 1)
+
     def image(width, height, seed, alpha):
         return [full if k == pixel - 1 and alpha is None else alpha if k == pixel - 1 else
-                (seed * 37 + y * 11 + x * 7 + k * 53) * (full // 255) % (full + 1)
+                value(seed * 37 + y * 11 + x * 7 + k * 53)
                 for y in range(height) for x in range(width) for k in range(pixel)]
 
-    base, top, flat = image(w, h, 1, None), image(lw, lh, 2, full // 2), image(w, h, 3, None)
+    half = 0.5 if depth == 32 else full // 2
+    base, top, flat = image(w, h, 1, None), image(lw, lh, 2, half), image(w, h, 3, None)
     records = (Layer * 2)()
     records[0] = Layer(name=b"Base", pixels=samples(base), opacity=255)
     records[1] = Layer(name=b"Top", pixels=samples(top), opacity=255, top=3, left=4, bottom=3 + lh, right=4 + lw)
@@ -610,7 +615,7 @@ def check_mode_document(psd, name, mode, depth, expected):
     """psd-tools reads the header's mode, depth and channels, the mode data, and every channel of
     both layers and of the composite, sample for sample: written as given, the composite unmatted."""
     w, h, lw, lh, pixel, base, top, flat = expected
-    fmt = ">H" if depth == 16 else ">B"
+    fmt = {8: ">B", 16: ">H", 32: ">f"}[depth]
     errors = []
 
     def expect(what, got, want):
@@ -625,7 +630,13 @@ def check_mode_document(psd, name, mode, depth, expected):
     expect("depth", header.depth, depth)
     expect("channels", header.channels, pixel)
     expect("mode data", bytes(psd._record.color_mode_data.value), DUOTONE_DATA if mode == MODE_DUOTONE else b"")
-    li = psd._record.layer_and_mask_information.layer_info
+    lmi = psd._record.layer_and_mask_information
+    li = lmi.layer_info
+    if depth == 32:   # in 'Lr32', as Photoshop keeps them, the layer info empty; 'Mt32': the composite's alpha
+        expect("layer info", li.layer_count if li else 0, 0)
+        expect("blocks", [k for k in (b"Mt32", b"Lr32") if lmi.tagged_blocks.get_data(k) is not None], [b"Mt32", b"Lr32"])
+        li = lmi.tagged_blocks.get_data(b"Lr32")
+    expect("layers", len(li.layer_records), 2)
     for record, channels, values, (rw, rh) in zip(li.layer_records, li.channel_image_data, (base, top), ((w, h), (lw, lh))):
         for info, data in zip(record.channel_info, channels):
             k = pixel - 1 if info.id.value == -1 else info.id.value

@@ -18,11 +18,12 @@ typedef struct mpsd__composite {
     uint8_t           *row;     /* width * 4 samples, the caller's */
 } mpsd__composite;
 
-/* Is the document 16-bit: two bytes a sample? */
-static unsigned mpsd__doc_wide(const minipsd_doc *d) { return d->depth == MPSD__CH_16BIT; }
+/* The document's bits a sample (0 is 8), and the bytes a sample takes in memory: 1 << shift. */
+static unsigned mpsd__doc_depth(const minipsd_doc *d) { return d->depth ? d->depth : MPSD__CH_8BIT; }
+static unsigned mpsd__doc_shift(const minipsd_doc *d) { return mpsd__shift(mpsd__doc_depth(d)); }
 
-/* The full sample of the document's depth. */
-static uint32_t mpsd__doc_full(const minipsd_doc *d) { return mpsd__full(mpsd__doc_wide(d) ? MPSD__CH_16BIT : MPSD__CH_8BIT); }
+/* The full sample of the document's depth (1.0f's bits at 32). */
+static uint32_t mpsd__doc_full(const minipsd_doc *d) { return mpsd__full(mpsd__doc_depth(d)); }
 
 /* The file's colour mode: color_mode, whose 0 is RGB unless depth is 1 (bitmap, the only 1-bit
    mode). */
@@ -74,7 +75,7 @@ static void mpsd__composite_init(mpsd__composite *c, const minipsd_doc *d, uint8
 /* The visible layers' row y blended "over" into row, straight alpha: the best effort. */
 static void mpsd__compose(const minipsd_doc *d, uint8_t *row, uint32_t y)
 {
-    const unsigned wide = mpsd__doc_wide(d), pixel = (unsigned)MPSD__RGBA << wide;
+    const unsigned wide = mpsd__doc_shift(d), pixel = (unsigned)MPSD__RGBA << wide;
     const float    max  = (float)mpsd__doc_full(d);
     size_t i;
     int64_t x;
@@ -113,7 +114,7 @@ static void mpsd__compose(const minipsd_doc *d, uint8_t *row, uint32_t y)
 static const uint8_t *mpsd__composite_row(mpsd__composite *c, uint32_t y)
 {
     const minipsd_doc *d    = c->doc;
-    const unsigned     wide = mpsd__doc_wide(d), pixel = mpsd__doc_pixel(d) << wide;
+    const unsigned     wide = mpsd__doc_shift(d), pixel = mpsd__doc_pixel(d) << wide;
     const uint32_t     max  = mpsd__doc_full(d);
     const size_t       size = (size_t)d->width * pixel;
     uint32_t x;
@@ -121,7 +122,13 @@ static const uint8_t *mpsd__composite_row(mpsd__composite *c, uint32_t y)
     else if (d->composite_matted || mpsd__doc_mode(d) != MINIPSD_MODE_RGB)   /* other modes: as given */
         return d->composite + (size_t)y * size;
     else                            memcpy(c->row, d->composite + (size_t)y * size, size);
-    for (x = 0; x < d->width; ++x) {          /* the merged image is stored over white */
+    for (x = 0; x < d->width && wide == MPSD__SHIFT_32; ++x) {   /* floats: c * a + (1 - a) */
+        uint8_t    *o = c->row + (size_t)x * pixel;
+        const float a = mpsd__float(o + ((unsigned)MINIPSD_CH_A << wide));
+        unsigned k;
+        for (k = 0; k < MINIPSD_CH_A; ++k) mpsd__set_float(o + (k << wide), mpsd__float(o + (k << wide)) * a + (1.0f - a));
+    }
+    for (x = 0; x < d->width && wide != MPSD__SHIFT_32; ++x) {   /* the merged image is stored over white */
         uint8_t       *o = c->row + (size_t)x * pixel;
         const uint32_t a = mpsd__sample(o + ((unsigned)MINIPSD_CH_A << wide), wide);
         unsigned k;
