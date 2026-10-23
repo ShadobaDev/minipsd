@@ -566,3 +566,9 @@ Large cases. Each would start with a *design* step, and only when a real consume
 - A layer's own alpha and spot channels (ids other than R, G, B, transparency and the masks):
   no file we have holds one, and Photoshop does not write them. Until a file shows one, such a
   layer sets `MINIPSD_LOST_CHANNELS`.
+- The composite's alpha and spot channels in a decoded document: `minipsd_read` without
+  `opts->stored` decodes the composite's colour channels and transparency only, and sets
+  `MINIPSD_LOST_CHANNELS` for the rest; with `opts->stored` every channel is kept (S6.8). Five of
+  psd-tools' files have such channels: `cmyk-alpha-spot.psd`, `cmyk-spot.psd`,
+  `colormodes/4x4_8bit_rgba.psd`, `effects/stroke-without-vector-mask.psd`,
+  `third-party-psds/cactus_top.psd`.

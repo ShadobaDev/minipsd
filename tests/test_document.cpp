@@ -56,7 +56,7 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
     // The colour mode: 0 and RGB are RGB; grey, CMYK, Lab and duotone bring their composite, which
     // only RGB's writer can compose; duotone, and only it of these, its mode data.
     const std::uint8_t inks[3] = {1, 2, 3};
-    const Bytes cmyk(2 * 2 * 5, 0);
+    const Bytes cmyk(std::size_t{2} * 2 * 5, 0);
     d = docOf(2, 2, &layer, 1); d.color_mode = MINIPSD_MODE_RGB;
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK) << "RGB named";
     d.color_mode = MINIPSD_MODE_CMYK;

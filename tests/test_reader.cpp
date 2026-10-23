@@ -2545,6 +2545,45 @@ TEST(MinipsdReadTest, AFlat16BitFileIsOpaqueAt65535)
     EXPECT_EQ(px[3], 65535);
 }
 
+// Modes beyond 8- and 16-bit RGB come back as written: a 32-bit document's layers in 'Lr32', its
+// float composite matted on the way out (c * a + 1 - a); a bitmap's bytes packed eight to a byte,
+// a width that is not a multiple of eight.  Written back, the same content; a second pass, the
+// same bytes.
+TEST(MinipsdReadTest, EveryModeComesBackAsWritten)
+{
+    const std::vector<float> layer = {0.25f, 0.5f, 0.75f, 1.0f, 0.0f, 1.0f, 0.5f, 0.5f};   // 2 x 1, R G B A
+    const minipsd_layer deep{.name = "Deep", .pixels = reinterpret_cast<const std::uint8_t *>(layer.data()), .opacity = 255};
+    minipsd_doc d = docOf(2, 1, &deep, 1);
+    d.depth = 32;
+    d.composite = deep.pixels;
+    const Bytes floats = write(d);
+    const Doc f = readDoc(floats, nullptr);
+    ASSERT_TRUE(f);
+    EXPECT_EQ(f->depth, 32);
+    ASSERT_EQ(f->layer_count, 1u);
+    EXPECT_EQ(std::memcmp(f->layers[0].pixels, layer.data(), layer.size() * sizeof(float)), 0);
+    float composite[8];
+    std::memcpy(composite, f->composite, sizeof composite);
+    EXPECT_EQ(composite[0], 0.25f) << "opaque: as given";
+    EXPECT_EQ(composite[4], 0.5f) << "half transparent black over white";
+    const Bytes again = write(*f);   // the layers now in the kept 'Lr32'
+    const Doc g = readDoc(again, nullptr);
+    ASSERT_TRUE(g);
+    EXPECT_EQ(write(*g), again) << "a second pass changes no byte";
+
+    const Bytes bits = {0, 1, 0, 0, 7, 0, 0, 0, 255, 1};   // 10 x 1: 0 white, any other black
+    minipsd_doc b = docOf(10, 1, nullptr, 0);
+    b.depth = 1;
+    b.composite = bits.data();
+    const Bytes bitmap = write(b);
+    const Doc r = readDoc(bitmap, nullptr);
+    ASSERT_TRUE(r);
+    EXPECT_EQ(r->color_mode, MINIPSD_MODE_BITMAP);
+    EXPECT_EQ(r->layer_count, 0u) << "a flat mode: no Background layer";
+    EXPECT_EQ(Bytes(r->composite, r->composite + bits.size()), (Bytes{0, 1, 0, 0, 1, 0, 0, 0, 1, 1}));
+    EXPECT_EQ(write(*r), bitmap);
+}
+
 // Layers kept in a global block, as Photoshop keeps them at 16 and 32 bits: found after the global
 // layer mask, behind other blocks, each padded to four past its length; the walk stops quietly at
 // what is not a block.  A document read from them leaves that block out of its tail.
