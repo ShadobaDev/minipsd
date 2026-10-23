@@ -35,6 +35,9 @@ static unsigned mpsd__colors(unsigned mode, unsigned channels)
     }
 }
 
+/* Colour modes: bitmap, grey, indexed, RGB, CMYK, multichannel, duotone, Lab. */
+static int mpsd__mode_ok(uint32_t mode) { return mode <= MINIPSD_MODE_CMYK || (mode >= MINIPSD_MODE_MULTICHANNEL && mode <= MINIPSD_MODE_LAB); }
+
 /* --- depths: a sample in memory, a row in the file --- */
 
 #define MPSD__CH_1BIT  1          /* the 1-bit channel size: bitmap, eight pixels a byte  */

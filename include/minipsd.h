@@ -419,7 +419,11 @@ typedef struct minipsd_doc {
                                               is copied; without it too, composed from the
                                               layers, a best effort (see "What it writes"),
                                               in RGB only: every other mode needs one.  Other
-                                              modes are written as given, never matted.      */
+                                              modes are written as given, never matted.  The
+                                              flat modes have no transparency: indexed one
+                                              palette entry a pixel, bitmap a byte a pixel (0
+                                              white, any other black; the writer packs them);
+                                              multichannel takes composite_stored only.      */
     int                  composite_matted; /*!< Non-zero: composite is already matted against
                                               white, as the file stores it (what
                                               minipsd_decode_composite gives with keep_matte),
@@ -438,9 +442,10 @@ typedef struct minipsd_doc {
                                               as Photoshop's 16-bit files have them.
                                               Empty: no global mask, no blocks (an empty global
                                               mask is written).                               */
-    uint16_t             depth;          /*!< Bits per channel: 0 or 8, or 16, where every sample
+    uint16_t             depth;          /*!< Bits per channel: 0 or 8; 16, where every sample
                                               (pixels, mask pixels, composite) is a uint16_t in
-                                              host order, 0 .. 65535.                         */
+                                              host order, 0 .. 65535; 32, a float in host
+                                              order, 0.0 .. 1.0; 1 for bitmap.                */
     uint16_t             format;         /*!< MINIPSD_PSD (or 0) or MINIPSD_PSB: what the
                                               document is.  Everything kept from a file
                                               (stored channels, masks' stored and real, additional_info,
@@ -454,8 +459,9 @@ typedef struct minipsd_doc {
                                               count, channel by channel, then the rows, laid
                                               out as format lays it out.  minipsd_read sets it
                                               with minipsd_read_opts.stored.  Size 0: none.   */
-    uint16_t             composite_channels; /*!< The channels composite_stored holds, 3 to
-                                              56: red, green, blue, then transparency
+    uint16_t             composite_channels; /*!< The channels composite_stored holds, up to
+                                              56: the mode's colour channels (each of them in
+                                              multichannel), then transparency
                                               (composite_alpha) and alpha or spot channels, in
                                               the file's order.  Ignored without
                                               composite_stored.                               */
@@ -467,10 +473,11 @@ typedef struct minipsd_doc {
                                               composite always has transparency.  minipsd_read
                                               sets the file's.                                 */
     uint16_t             color_mode;     /*!< MINIPSD_MODE_*: what the samples are; 0 is RGB
-                                              (bitmap with depth 1).  Written: RGB, grey, CMYK,
-                                              Lab and duotone.  minipsd_read sets the file's. */
+                                              (bitmap with depth 1).  minipsd_read sets the
+                                              file's.                                         */
     minipsd_bytes        color_mode_data; /*!< The colour mode data, written as given: an
-                                              indexed document's palette, a duotone's inks
+                                              indexed document's palette (768 bytes: 256 red,
+                                              256 green, 256 blue), a duotone's inks
                                               and curves (minipsd_info.color_mode_data); size
                                               0 for every other mode.                         */
 } minipsd_doc;

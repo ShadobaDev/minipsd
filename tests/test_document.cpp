@@ -54,7 +54,7 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
     d = docOf(2, 2, &layer, 1); d.icc_size = 4;
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "ICC size without data";
     // The colour mode: 0 and RGB are RGB; grey, CMYK, Lab and duotone bring their composite, which
-    // only RGB's writer can compose; duotone, and only it, its mode data; the flat modes wait (S6.19).
+    // only RGB's writer can compose; duotone, and only it of these, its mode data.
     const std::uint8_t inks[3] = {1, 2, 3};
     const Bytes cmyk(2 * 2 * 5, 0);
     d = docOf(2, 2, &layer, 1); d.color_mode = MINIPSD_MODE_RGB;
@@ -69,9 +69,32 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK) << "duotone with them";
     d.color_mode = MINIPSD_MODE_GREY;
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "mode data for grey";
-    d.color_mode = MINIPSD_MODE_MULTICHANNEL;
+    d.color_mode = 5;
     d.color_mode_data = {};
-    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_UNSUPPORTED) << "a flat mode, not yet";
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "no such mode";
+    // The flat modes: no layers, no transparency.  Indexed brings its palette and is 8-bit; bitmap
+    // is 1-bit, the only 1-bit mode; multichannel's composite is copied, never supplied.
+    const Bytes palette(768, 0);
+    const Bytes stored = {0, 0, 1, 2, 3, 4, 5, 6, 7, 8};   // raw, two channels of 2 x 2
+    d = docOf(2, 2, nullptr, 0); d.composite = cmyk.data(); d.color_mode = MINIPSD_MODE_INDEXED;
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "indexed without its palette";
+    d.color_mode_data = {palette.data(), palette.size()};
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK) << "indexed with it";
+    d.depth = 16;
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_UNSUPPORTED) << "16-bit indexed";
+    d.depth = 8; d.layers = &layer; d.layer_count = 1;
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "indexed with layers";
+    d = docOf(2, 2, nullptr, 0); d.composite = cmyk.data(); d.depth = 1;
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK) << "1 bit: bitmap";
+    d.color_mode = MINIPSD_MODE_GREY;
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "1-bit grey";
+    d = docOf(2, 2, nullptr, 0); d.color_mode = MINIPSD_MODE_MULTICHANNEL; d.composite_channels = 2;
+    d.composite_stored = {stored.data(), stored.size()};
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK) << "multichannel, its composite stored";
+    d.composite_alpha = 1;
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "multichannel with transparency";
+    d.composite_alpha = 0; d.composite = cmyk.data();
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "multichannel supplied";
     // 32 bits: RGB and grey, as Photoshop has them, with their composite (the writer composes none).
     d = docOf(2, 2, &layer, 1); d.depth = 32;
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "32-bit RGB without its composite";

@@ -647,6 +647,81 @@ def check_mode_document(psd, name, mode, depth, expected):
     return errors
 
 
+MODE_BITMAP, MODE_INDEXED, MODE_MULTICHANNEL = 0, 2, 7
+# The flat modes: no layers, no transparency.  Bitmap's composite is a byte a pixel, packed by the
+# writer; indexed's one palette entry a pixel; multichannel's only copied, as a file stores it.
+FLAT = [(MODE_BITMAP, 1, MINIPSD_RLE), (MODE_BITMAP, 1, MINIPSD_RAW), (MODE_INDEXED, 8, MINIPSD_RLE),
+        (MODE_MULTICHANNEL, 8, MINIPSD_RLE), (MODE_MULTICHANNEL, 16, MINIPSD_RLE)]
+PALETTE = bytes(i * 5 % 256 for i in range(768))
+MULTICHANNELS = 3
+
+
+def flat_document(lib, path, mode, depth, compression):
+    """A document of a flat mode, its composite every sample distinct (bitmap: a pattern, its width
+    not a multiple of eight).  Returns the composite's channels as the file stores them, packed at 1
+    bit, big-endian at 16."""
+    w, h = 13, 5
+    sample = max(depth // 8, 1)
+    keep = []
+
+    def buffer(data):
+        buf = ctypes.create_string_buffer(bytes(data), len(data))
+        keep.append(buf)
+        return buf
+
+    doc = Doc(w, h, 72.0, None, 0, None, 0, compression)
+    doc.depth, doc.color_mode = depth, mode
+    if mode == MODE_BITMAP:
+        values = [(x * 3 + y * 5) % 7 * 40 for y in range(h) for x in range(w)]   # 0 white, the rest black
+        doc.composite = ctypes.cast(buffer(values), ctypes.c_void_p)
+        rows = [values[y * w:(y + 1) * w] for y in range(h)]
+        want = [b"".join(bytes(sum(1 << (7 - i) for i, v in enumerate(row[x:x + 8]) if v) for x in range(0, w, 8))
+                         for row in rows)]
+    elif mode == MODE_INDEXED:
+        values = [(y * w + x) * 7 % 256 for y in range(h) for x in range(w)]
+        doc.composite = ctypes.cast(buffer(values), ctypes.c_void_p)
+        palette = buffer(PALETTE)
+        doc.color_mode_data = Bytes(ctypes.cast(palette, ctypes.c_void_p), len(PALETTE))
+        want = [bytes(values)]
+    else:
+        spread = ((1 << depth) - 1) // 255   # the 8-bit pattern over the depth's whole range
+        want = [b"".join(((c * 61 + i * 13) % 256 * spread).to_bytes(sample, "big") for i in range(w * h))
+                for c in range(MULTICHANNELS)]
+        stored = buffer(bytes(2) + b"".join(want))   # the file's marker 0: raw
+        doc.composite_stored, doc.composite_channels = Bytes(ctypes.cast(stored, ctypes.c_void_p), len(stored)), MULTICHANNELS
+    out = bytearray()
+
+    def collect(_user, data, size):
+        out.extend(ctypes.string_at(data, size))
+        return 1
+
+    rc = lib.minipsd_write(ctypes.byref(doc), None, WRITE_FN(collect), None)
+    if rc == MINIPSD_OK:
+        path.write_bytes(out)
+    return rc, want
+
+
+def check_flat_document(psd, name, mode, depth, want):
+    """psd-tools reads the header's mode, depth and channels, the palette, no layers, and the
+    composite's channels as written."""
+    errors = []
+
+    def expect(what, got, wanted):
+        if got != wanted:
+            errors.append(f"{name}: {what} is {got!r}, expected {wanted!r}")
+
+    header = psd._record.header
+    expect("mode", int(header.color_mode), mode)
+    expect("depth", header.depth, depth)
+    expect("channels", header.channels, len(want))
+    expect("mode data", bytes(psd._record.color_mode_data.value), PALETTE if mode == MODE_INDEXED else b"")
+    expect("layers", len(psd), 0)
+    merged = psd._record.image_data.get_data(header)
+    for k, plane in enumerate(want):
+        expect(f"composite channel {k}", bytes(merged[k]), plane)
+    return errors
+
+
 # --- files from other programs: read, written back, what is kept compared --------------------------
 
 # Files with text, effects, groups and resources of every kind; read whole, written back as they are.
@@ -1135,6 +1210,15 @@ def main():
         rc, expected = mode_document(lib, path, mode, depth, compression)
         found = [f"{name}: minipsd_write returned {rc}"] if rc != MINIPSD_OK else (
             check_mode_document(PSDImage.open(path), name, mode, depth, expected) + check_decoded(lib, path))
+        errors += found
+        print(f"{name}: {'FAILED' if found else 'ok'}")
+
+    for mode, depth, compression in FLAT:
+        name = f"flat-{mode}-{depth}{'-raw' if compression else ''}"
+        path = out / f"{name}.psd"
+        rc, want = flat_document(lib, path, mode, depth, compression)
+        found = [f"{name}: minipsd_write returned {rc}"] if rc != MINIPSD_OK else (
+            check_flat_document(PSDImage.open(path), name, mode, depth, want) + check_decoded(lib, path))
         errors += found
         print(f"{name}: {'FAILED' if found else 'ok'}")
 

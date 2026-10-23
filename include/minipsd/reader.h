@@ -135,9 +135,6 @@ static void mpsd__info_clear(minipsd_info *i)
     i->color_mode_data.size = 0;
 }
 
-/* Colour modes: bitmap, grey, indexed, RGB, CMYK, multichannel, duotone, Lab. */
-static int mpsd__mode_ok(uint32_t mode) { return mode <= MINIPSD_MODE_CMYK || (mode >= MINIPSD_MODE_MULTICHANNEL && mode <= MINIPSD_MODE_LAB); }
-
 /* The layer count at `at`, then the records and their channel data up to `end`: the layer info. */
 static int mpsd__layers_at(minipsd_reader *r, uint64_t at, uint64_t end, minipsd_info *in)
 {

@@ -32,10 +32,18 @@ static unsigned mpsd__doc_mode(const minipsd_doc *d)
     return d->color_mode || d->depth == 1 ? d->color_mode : (unsigned)MINIPSD_MODE_RGB;
 }
 
-/* The document's colour channels (three in RGB and Lab, four in CMYK, one in grey and duotone),
-   and the samples of a pixel: those, then transparency. */
-static unsigned mpsd__doc_colors(const minipsd_doc *d) { return mpsd__colors(mpsd__doc_mode(d), 0); }
-static unsigned mpsd__doc_pixel(const minipsd_doc *d) { return mpsd__doc_colors(d) + 1; }
+/* Is the mode flat: bitmap, indexed or multichannel, which have no layers and no transparency? */
+static int mpsd__doc_flat(const minipsd_doc *d)
+{
+    const unsigned mode = mpsd__doc_mode(d);
+    return mode == MINIPSD_MODE_BITMAP || mode == MINIPSD_MODE_INDEXED || mode == MINIPSD_MODE_MULTICHANNEL;
+}
+
+/* The document's colour channels (three in RGB and Lab, four in CMYK, one in grey, duotone, bitmap
+   and indexed, the stored composite's in multichannel), and the samples of a pixel: those, then
+   transparency unless the mode is flat. */
+static unsigned mpsd__doc_colors(const minipsd_doc *d) { return mpsd__colors(mpsd__doc_mode(d), d->composite_channels); }
+static unsigned mpsd__doc_pixel(const minipsd_doc *d) { return mpsd__doc_colors(d) + !mpsd__doc_flat(d); }
 
 static int mpsd__contributes(const minipsd_layer *l) { return l->pixels && !l->hidden && l->opacity; }
 
@@ -109,8 +117,9 @@ static void mpsd__compose(const minipsd_doc *d, uint8_t *row, uint32_t y)
 }
 
 /* The composite's row y as the file stores it, matted against white: a supplied row that is
-   already matted as it is; otherwise the supplied row copied, or the layers composed, into the
-   caller's row, then matted there. */
+   already matted, or of another mode than RGB, as it is (bitmap packed into the caller's row);
+   otherwise the supplied row copied, or the layers composed, into the caller's row, then matted
+   there. */
 static const uint8_t *mpsd__composite_row(mpsd__composite *c, uint32_t y)
 {
     const minipsd_doc *d    = c->doc;
@@ -118,6 +127,13 @@ static const uint8_t *mpsd__composite_row(mpsd__composite *c, uint32_t y)
     const uint32_t     max  = mpsd__doc_full(d);
     const size_t       size = (size_t)d->width * pixel;
     uint32_t x;
+    if (mpsd__doc_depth(d) == MPSD__CH_1BIT) {   /* bitmap: eight pixels a byte, the first the high bit, 1 black */
+        const uint8_t *in = d->composite + (size_t)y * d->width;
+        memset(c->row, 0, (size_t)mpsd__row_bytes(d->width, MPSD__CH_1BIT));
+        for (x = 0; x < d->width; ++x)
+            if (in[x]) c->row[x / MPSD__BYTE_BITS] |= (uint8_t)(1u << (MPSD__BYTE_BITS - 1u - x % MPSD__BYTE_BITS));
+        return c->row;
+    }
     if (!d->composite)              mpsd__compose(d, c->row, y);   /* RGB only: minipsd_doc_check */
     else if (d->composite_matted || mpsd__doc_mode(d) != MINIPSD_MODE_RGB)   /* other modes: as given */
         return d->composite + (size_t)y * size;
