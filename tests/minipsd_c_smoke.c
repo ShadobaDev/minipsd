@@ -182,6 +182,21 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
             if (minipsd_layer_block_settings(&lv, &settings) != MINIPSD_OK || settings.present != 0
                 || settings.fill_opacity != 255)
                 return -121;
+            {   /* the colour label set on the layer's blocks, read back from the bytes alone */
+                uint8_t       run[256 + MINIPSD_BLOCK_SETTINGS_MAX];
+                size_t        run_size = 0;
+                minipsd_bytes edited;
+                settings.present     = MINIPSD_PRESENT_SHEET_COLOR;
+                settings.sheet_color = 3;
+                if (lv.additional_info.size > 256
+                    || minipsd_layer_make_block_settings(&lv.additional_info, lv.format, &settings, run, sizeof run, &run_size) != MINIPSD_OK)
+                    return -124;
+                edited.data = run;
+                edited.size = run_size;
+                if (minipsd_blocks_settings(&edited, lv.format, &settings) != MINIPSD_OK
+                    || settings.present != MINIPSD_PRESENT_SHEET_COLOR || settings.sheet_color != 3)
+                    return -125;
+            }
         }
         if (blocks != 1 || minipsd_reader_next_layer(rd, &lv) != MINIPSD_MORE
             || minipsd_layer_blending_range(&lv, 0, &br) != MINIPSD_OK || br.destination.white[0] != 210

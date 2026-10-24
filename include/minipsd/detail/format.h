@@ -266,4 +266,46 @@ MPSD__SHARED static void mpsd__put_block(mpsd__sink *s, const uint8_t *p, size_t
     mpsd__put(s, p + head, span);
 }
 
+/* --- a layer's fixed-layout blocks: the typed views read them, the setters make them --- */
+
+/* Each block's key, the bytes its value takes, the bytes its data takes (the value first, then
+   zeros: what Photoshop's files in psd-tools' set hold), and its bit in minipsd_block_settings. */
+MPSD__SHARED static const struct { char key[5]; unsigned char size, span, bit; } mpsd__settings[] = {
+    { "lyid", 4, 4, MINIPSD_PRESENT_LAYER_ID },         { "lclr", 2, 8, MINIPSD_PRESENT_SHEET_COLOR },
+    { "iOpa", 1, 4, MINIPSD_PRESENT_FILL_OPACITY },     { "lspf", 4, 4, MINIPSD_PRESENT_PROTECTION_FLAGS },
+    { "knko", 1, 4, MINIPSD_PRESENT_KNOCKOUT },         { "clbl", 1, 4, MINIPSD_PRESENT_BLEND_CLIPPED_ELEMENTS },
+    { "infx", 1, 4, MINIPSD_PRESENT_BLEND_INTERIOR_ELEMENTS }
+};
+#define MPSD__SETTINGS (sizeof mpsd__settings / sizeof mpsd__settings[0])
+
+/* The value of setting k in s. */
+MPSD__SHARED static uint32_t mpsd__setting_get(const minipsd_block_settings *s, size_t k)
+{
+    switch (mpsd__settings[k].bit) {
+    case MINIPSD_PRESENT_LAYER_ID:               return s->layer_id;
+    case MINIPSD_PRESENT_SHEET_COLOR:            return s->sheet_color;
+    case MINIPSD_PRESENT_FILL_OPACITY:           return s->fill_opacity;
+    case MINIPSD_PRESENT_PROTECTION_FLAGS:       return s->protection_flags;
+    case MINIPSD_PRESENT_KNOCKOUT:               return s->knockout;
+    case MINIPSD_PRESENT_BLEND_CLIPPED_ELEMENTS: return s->blend_clipped_elements;
+    default:                                     return s->blend_interior_elements;
+    }
+}
+
+/* Setting k of s set to the value at d, of the setting's size, big-endian. */
+MPSD__SHARED static void mpsd__setting_set(minipsd_block_settings *s, size_t k, const uint8_t *d)
+{
+    const uint32_t v = mpsd__settings[k].size == 4 ? mpsd__get32(d) : mpsd__settings[k].size == 2 ? mpsd__get16(d) : d[0];
+    switch (mpsd__settings[k].bit) {
+    case MINIPSD_PRESENT_LAYER_ID:               s->layer_id = v; break;
+    case MINIPSD_PRESENT_SHEET_COLOR:            s->sheet_color = (uint16_t)v; break;
+    case MINIPSD_PRESENT_FILL_OPACITY:           s->fill_opacity = (uint8_t)v; break;
+    case MINIPSD_PRESENT_PROTECTION_FLAGS:       s->protection_flags = v; break;
+    case MINIPSD_PRESENT_KNOCKOUT:               s->knockout = (uint8_t)v; break;
+    case MINIPSD_PRESENT_BLEND_CLIPPED_ELEMENTS: s->blend_clipped_elements = (uint8_t)v; break;
+    default:                                     s->blend_interior_elements = (uint8_t)v; break;
+    }
+    s->present = (uint8_t)(s->present | mpsd__settings[k].bit);
+}
+
 #endif /* MPSD__FORMAT_DONE */

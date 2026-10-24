@@ -288,43 +288,31 @@ MINIPSDDEF const char *minipsd_resource_id_name(uint16_t id)
 
 /* --- a layer's fixed-layout blocks --- */
 
-/* The blocks minipsd_layer_block_settings reads: key, the bytes its value needs, its present bit. */
-static const struct { char key[5]; unsigned char size, bit; } mpsd__settings[] = {
-    { "lyid", 4, MINIPSD_PRESENT_LAYER_ID },         { "lclr", 2, MINIPSD_PRESENT_SHEET_COLOR },
-    { "iOpa", 1, MINIPSD_PRESENT_FILL_OPACITY },     { "lspf", 4, MINIPSD_PRESENT_PROTECTION_FLAGS },
-    { "knko", 1, MINIPSD_PRESENT_KNOCKOUT },         { "clbl", 1, MINIPSD_PRESENT_BLEND_CLIPPED_ELEMENTS },
-    { "infx", 1, MINIPSD_PRESENT_BLEND_INTERIOR_ELEMENTS }
-};
-
-MINIPSDDEF int minipsd_layer_block_settings(const minipsd_layer_view *layer, minipsd_block_settings *out)
+MINIPSDDEF int minipsd_blocks_settings(const minipsd_bytes *blocks, int format, minipsd_block_settings *out)
 {
     minipsd_block_settings s;
     minipsd_block          block;
-    size_t                 pos = 0, k;
-    int                    rc;
-    if (!layer || !out) return MINIPSD_ERR_ARG;
+    size_t                 pos = 0, next, k;
+    if (!blocks || !out || (!blocks->data && blocks->size) || (format != 0 && format != MINIPSD_PSD && format != MINIPSD_PSB))
+        return MINIPSD_ERR_ARG;
     memset(&s, 0, sizeof s);
     s.fill_opacity = MPSD__FILL_OPAQUE;
-    while ((rc = minipsd_layer_next_block(layer, &pos, &block)) == MINIPSD_MORE) {
-        for (k = 0; k < sizeof mpsd__settings / sizeof mpsd__settings[0]; ++k) {
-            const uint8_t *d = block.data.data;
+    for (; pos < blocks->size; pos = next) {
+        if (mpsd__block(*blocks, pos, format == MINIPSD_PSB, &block, &next) != MINIPSD_OK) return MINIPSD_ERR_FORMAT;
+        for (k = 0; k < MPSD__SETTINGS; ++k) {          /* the first block of each key counts */
             if (!mpsd__tag((const uint8_t *)block.key, mpsd__settings[k].key) || (s.present & mpsd__settings[k].bit)) continue;
             if (block.data.size < mpsd__settings[k].size) return MINIPSD_ERR_FORMAT;
-            s.present |= mpsd__settings[k].bit;
-            switch (mpsd__settings[k].bit) {
-            case MINIPSD_PRESENT_LAYER_ID:                s.layer_id = mpsd__get32(d); break;
-            case MINIPSD_PRESENT_SHEET_COLOR:             s.sheet_color = (uint16_t)mpsd__get16(d); break;
-            case MINIPSD_PRESENT_FILL_OPACITY:            s.fill_opacity = d[0]; break;
-            case MINIPSD_PRESENT_PROTECTION_FLAGS:        s.protection_flags = mpsd__get32(d); break;
-            case MINIPSD_PRESENT_KNOCKOUT:                s.knockout = d[0]; break;
-            case MINIPSD_PRESENT_BLEND_CLIPPED_ELEMENTS:  s.blend_clipped_elements = d[0]; break;
-            default:                                      s.blend_interior_elements = d[0]; break;
-            }
+            mpsd__setting_set(&s, k, block.data.data);
         }
     }
-    if (rc != MINIPSD_OK) return rc;
     *out = s;
     return MINIPSD_OK;
+}
+
+MINIPSDDEF int minipsd_layer_block_settings(const minipsd_layer_view *layer, minipsd_block_settings *out)
+{
+    if (!layer) return MINIPSD_ERR_ARG;
+    return minipsd_blocks_settings(&layer->additional_info, layer->format, out);
 }
 
 #endif /* MPSD__VIEWS_DONE */

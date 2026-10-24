@@ -1362,6 +1362,17 @@ MINIPSDDEF const char *minipsd_resource_id_name(uint16_t id);
  *         its value; MINIPSD_ERR_ARG for a NULL argument.
  */
 MINIPSDDEF int minipsd_layer_block_settings(const minipsd_layer_view *layer, minipsd_block_settings *out);
+
+/**
+ * \brief The same over a run of blocks alone, such as a document's minipsd_layer.additional_info.
+ *
+ * \param blocks The blocks, laid out as format lays them out.
+ * \param format MINIPSD_PSD (or 0) or MINIPSD_PSB: minipsd_doc.format for a document's layer.
+ * \param out    Receives the values.
+ * \return MINIPSD_OK; MINIPSD_ERR_FORMAT for a malformed run of blocks or one of these shorter than
+ *         its value; MINIPSD_ERR_ARG for a NULL argument, a size without data, or another format.
+ */
+MINIPSDDEF int minipsd_blocks_settings(const minipsd_bytes *blocks, int format, minipsd_block_settings *out);
 #endif /* MINIPSD_NO_READER */
 
 #ifndef MINIPSD_NO_WRITER
@@ -1478,6 +1489,36 @@ MINIPSDDEF int minipsd_resource_make_alpha_names(uint16_t id, const char *const 
  */
 MINIPSDDEF int minipsd_resource_make_alpha_identifiers(const uint32_t *ids, size_t count, uint8_t *buf, size_t cap,
                                                        size_t *needed);
+
+/**
+ * \brief The most bytes minipsd_layer_make_block_settings adds to a run: all seven blocks, each a
+ *        twelve-byte header and its data (eight for 'lclr', four for the others).
+ */
+#define MINIPSD_BLOCK_SETTINGS_MAX 116u
+
+/**
+ * \brief A layer's blocks with its settings set, as minipsd_blocks_settings reads them: the run
+ *        given, each block present asks for replaced where it is, added at the end only when the
+ *        run has none.
+ *
+ * Every other block is copied as it is, in its place: text, effects, groups.  Readers take the
+ * first block of a key, so a setting is replaced, never added a second time.  For a new layer,
+ * blocks is empty; the result goes to minipsd_layer.additional_info.
+ *
+ * \param blocks   The layer's blocks (minipsd_layer.additional_info), laid out as format lays them
+ *                 out; NULL is none.
+ * \param format   MINIPSD_PSD (or 0) or MINIPSD_PSB: minipsd_doc.format.
+ * \param settings The values; present says which to set, the others are not read.
+ * \param buf      Receives the run; at most blocks' size plus MINIPSD_BLOCK_SETTINGS_MAX bytes.
+ *                 May be NULL when cap is 0; it must not overlap blocks.
+ * \param cap      The size of buf in bytes.
+ * \param needed   Receives the bytes the run takes; may be NULL.
+ * \return MINIPSD_OK; MINIPSD_MORE when cap is too small (nothing written); MINIPSD_ERR_FORMAT when
+ *         blocks is not a run of well-formed blocks to its end; MINIPSD_ERR_ARG for a NULL settings,
+ *         a size without data, another format, or buf NULL with cap above 0.
+ */
+MINIPSDDEF int minipsd_layer_make_block_settings(const minipsd_bytes *blocks, int format, const minipsd_block_settings *settings,
+                                                 uint8_t *buf, size_t cap, size_t *needed);
 #endif /* MINIPSD_NO_WRITER */
 
 #if !defined(MINIPSD_NO_READER) && !defined(MINIPSD_NO_WRITER)

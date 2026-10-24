@@ -1226,6 +1226,77 @@ TEST(MinipsdReaderTest, FixedLayoutBlocksGiveTheLayersSettings)
     const minipsd_layer_view none{};
     EXPECT_EQ(minipsd_layer_block_settings(nullptr, &s), MINIPSD_ERR_ARG);
     EXPECT_EQ(minipsd_layer_block_settings(&none, nullptr), MINIPSD_ERR_ARG);
+
+    // The setter edits a run: the first block of each key asked for replaced where it is, every
+    // other block as it is, the missing ones added at the end; the view over the bytes alone reads
+    // the result.  A second 'iOpa' stays: readers never see it.
+    const Bytes kept = Out()
+        .raw(luniBlock(u"L"))
+        .raw(block("lclr", Out().u16(4).zeros(6).b))
+        .raw(block("iOpa", Bytes{128, 0, 0, 0}))
+        .raw(block("iOpa", Bytes{7, 0, 0, 0}))
+        .b;
+    minipsd_block_settings set{};
+    set.present     = MINIPSD_PRESENT_SHEET_COLOR | MINIPSD_PRESENT_FILL_OPACITY | MINIPSD_PRESENT_LAYER_ID;
+    set.sheet_color = 6;
+    set.fill_opacity = 50;
+    set.layer_id    = 9;
+    set.knockout    = 2;   // not present: not read
+    const Bytes expected = Out()
+        .raw(luniBlock(u"L"))
+        .raw(block("lclr", Out().u16(6).zeros(6).b))
+        .raw(block("iOpa", Bytes{50, 0, 0, 0}))
+        .raw(block("iOpa", Bytes{7, 0, 0, 0}))
+        .raw(block("lyid", Out().u32(9).b))
+        .b;
+    const minipsd_bytes keptRun{kept.data(), kept.size()};
+    std::size_t need = 0;
+    EXPECT_EQ(minipsd_layer_make_block_settings(&keptRun, MINIPSD_PSD, &set, nullptr, 0, &need), MINIPSD_MORE);
+    ASSERT_EQ(need, expected.size());
+    Bytes edited(kept.size() + MINIPSD_BLOCK_SETTINGS_MAX);   // the bound: one call
+    ASSERT_EQ(minipsd_layer_make_block_settings(&keptRun, 0, &set, edited.data(), edited.size(), &need), MINIPSD_OK);
+    edited.resize(need);
+    EXPECT_EQ(edited, expected);
+    const minipsd_bytes editedRun{edited.data(), edited.size()};
+    minipsd_block_settings back{};
+    ASSERT_EQ(minipsd_blocks_settings(&editedRun, MINIPSD_PSD, &back), MINIPSD_OK);
+    EXPECT_EQ(std::tie(back.present, back.sheet_color, back.fill_opacity, back.layer_id),
+              std::make_tuple(std::uint8_t(set.present), std::uint16_t(6), std::uint8_t(50), 9u));
+    set.present = 0;
+    ASSERT_EQ(minipsd_layer_make_block_settings(&keptRun, MINIPSD_PSD, &set, edited.data(), kept.size(), &need), MINIPSD_OK);
+    EXPECT_EQ(Bytes(edited.begin(), edited.begin() + std::ptrdiff_t(need)), kept) << "nothing asked: the run as it is";
+
+    // A new layer: every block, the bound exactly, read back as set; in a PSB, a long key's
+    // eight-byte length kept as it is.
+    minipsd_block_settings every = s;
+    every.present = 0x7F;
+    Bytes fresh(MINIPSD_BLOCK_SETTINGS_MAX);
+    ASSERT_EQ(minipsd_layer_make_block_settings(nullptr, MINIPSD_PSD, &every, fresh.data(), fresh.size(), &need), MINIPSD_OK);
+    EXPECT_EQ(need, std::size_t{MINIPSD_BLOCK_SETTINGS_MAX});
+    const minipsd_bytes freshRun{fresh.data(), need};
+    ASSERT_EQ(minipsd_blocks_settings(&freshRun, MINIPSD_PSD, &back), MINIPSD_OK);
+    EXPECT_EQ(std::tie(back.present, back.layer_id, back.sheet_color, back.fill_opacity, back.protection_flags, back.knockout,
+                       back.blend_clipped_elements, back.blend_interior_elements),
+              std::tie(every.present, every.layer_id, every.sheet_color, every.fill_opacity, every.protection_flags,
+                       every.knockout, every.blend_clipped_elements, every.blend_interior_elements));
+    const Bytes psb = Out().raw(block("LMsk", Bytes(4, 1), "8BIM", true)).raw(block("lclr", Out().u16(4).zeros(6).b)).b;
+    const minipsd_bytes psbRun{psb.data(), psb.size()};
+    set.present = MINIPSD_PRESENT_SHEET_COLOR;
+    Bytes psbOut(psb.size());
+    ASSERT_EQ(minipsd_layer_make_block_settings(&psbRun, MINIPSD_PSB, &set, psbOut.data(), psbOut.size(), &need), MINIPSD_OK);
+    EXPECT_EQ(psbOut, Out().raw(block("LMsk", Bytes(4, 1), "8BIM", true)).raw(block("lclr", Out().u16(6).zeros(6).b)).b);
+
+    // Refused: a malformed run, before anything is written; a NULL, a size without data, another format.
+    const minipsd_bytes cutRun{cut.data(), cut.size()}, noData{nullptr, 4};
+    EXPECT_EQ(minipsd_layer_make_block_settings(&cutRun, MINIPSD_PSD, &set, edited.data(), edited.size(), nullptr), MINIPSD_ERR_FORMAT);
+    EXPECT_EQ(minipsd_blocks_settings(&cutRun, MINIPSD_PSD, &back), MINIPSD_ERR_FORMAT);
+    EXPECT_EQ(minipsd_layer_make_block_settings(&keptRun, MINIPSD_PSD, nullptr, edited.data(), edited.size(), nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_layer_make_block_settings(&noData, MINIPSD_PSD, &set, edited.data(), edited.size(), nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_layer_make_block_settings(&keptRun, 3, &set, edited.data(), edited.size(), nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_layer_make_block_settings(&keptRun, MINIPSD_PSD, &set, nullptr, 1, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_blocks_settings(nullptr, MINIPSD_PSD, &back), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_blocks_settings(&keptRun, 3, &back), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_blocks_settings(&noData, MINIPSD_PSD, &back), MINIPSD_ERR_ARG);
 }
 
 TEST(MinipsdReaderTest, MalformedRecordsAreRefused)

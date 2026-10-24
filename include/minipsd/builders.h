@@ -202,4 +202,67 @@ MINIPSDDEF int minipsd_resource_make_alpha_identifiers(const uint32_t *ids, size
     return mpsd__made(mpsd__make_alpha_identifiers, &in, buf, cap, needed);
 }
 
+/* --- a layer's fixed-layout blocks --- */
+
+typedef struct mpsd__settings_in {
+    minipsd_bytes                 blocks;
+    unsigned                      psb;
+    const minipsd_block_settings *settings;
+} mpsd__settings_in;
+
+/* Setting k's block: the signature given, its key, the length, the value, then zeros. */
+static void mpsd__setting_out(mpsd__sink *s, const uint8_t *signature, const minipsd_block_settings *settings, size_t k)
+{
+    const uint32_t v = mpsd__setting_get(settings, k);
+    mpsd__put(s, signature, MPSD__BLOCK_KEY);
+    mpsd__put(s, mpsd__settings[k].key, MPSD__BLOCK_KEY);
+    mpsd__u32(s, mpsd__settings[k].span);                 /* a short key's length: four bytes in a PSB too */
+    if (mpsd__settings[k].size == 4)      mpsd__u32(s, v);
+    else if (mpsd__settings[k].size == 2) mpsd__u16(s, v);
+    else                                  mpsd__u8(s, v);
+    mpsd__zeros(s, (size_t)(mpsd__settings[k].span - mpsd__settings[k].size));
+}
+
+/* The run: each block as it is, but the first of each key present asks for, made anew in its
+   place; then those the run lacked, in the table's order.  mpsd__settings_ok walked it. */
+static void mpsd__make_settings(mpsd__sink *s, const void *what)
+{
+    const mpsd__settings_in *in = (const mpsd__settings_in *)what;
+    unsigned      done = 0;
+    size_t        pos, next, k;
+    minipsd_block block;
+    for (pos = 0; pos < in->blocks.size; pos = next) {
+        const uint8_t *p = in->blocks.data + pos;
+        (void)mpsd__block(in->blocks, pos, in->psb, &block, &next);
+        for (k = 0; k < MPSD__SETTINGS; ++k)
+            if (mpsd__tag((const uint8_t *)block.key, mpsd__settings[k].key)) break;
+        if (k < MPSD__SETTINGS && (in->settings->present & mpsd__settings[k].bit) && !(done & mpsd__settings[k].bit)) {
+            mpsd__setting_out(s, p, in->settings, k);
+            done |= mpsd__settings[k].bit;
+        } else {
+            mpsd__put(s, p, next - pos);
+        }
+    }
+    for (k = 0; k < MPSD__SETTINGS; ++k)
+        if ((in->settings->present & mpsd__settings[k].bit) && !(done & mpsd__settings[k].bit))
+            mpsd__setting_out(s, (const uint8_t *)"8BIM", in->settings, k);
+}
+
+MINIPSDDEF int minipsd_layer_make_block_settings(const minipsd_bytes *blocks, int format, const minipsd_block_settings *settings,
+                                                 uint8_t *buf, size_t cap, size_t *needed)
+{
+    static const minipsd_bytes none = { NULL, 0 };
+    mpsd__settings_in          in;
+    minipsd_block              block;
+    size_t                     pos, next;
+    if (!settings || (blocks && !blocks->data && blocks->size) || (format != 0 && format != MINIPSD_PSD && format != MINIPSD_PSB))
+        return MINIPSD_ERR_ARG;
+    in.blocks   = blocks ? *blocks : none;
+    in.psb      = format == MINIPSD_PSB;
+    in.settings = settings;
+    for (pos = 0; pos < in.blocks.size; pos = next)        /* a run of blocks to its end */
+        if (mpsd__block(in.blocks, pos, in.psb, &block, &next) != MINIPSD_OK) return MINIPSD_ERR_FORMAT;
+    return mpsd__made(mpsd__make_settings, &in, buf, cap, needed);
+}
+
 #endif /* MPSD__BUILDERS_DONE */
