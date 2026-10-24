@@ -183,12 +183,18 @@ Additive. See [Reader](CODE-ARCH.md#reader).
       - Extensibility rules: the reader needs no opt-in macro;
       - README (what it reads), the header's brief, the CMake description (SBOM, `.pc`,
         packages), USE-CASES (what is done), CODE-ARCH (stages).
-- [ ] **S4.10** Release **0.3.0** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md), with stages 4 to 6
+- [x] **S4.10** Release **0.3.0** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md), with stages 4 to 6
       and S7.1, the API frozen from then:
       `minipsd_write_opts` became a parameter of the write calls, a break, so it is a MINOR under
       the pre-1.0 rules. Before it: regenerate [COMPATIBILITY.md](COMPATIBILITY.md) with the new
       version, and have one CI job fetch psd-tools' files (`MINIPSD_PSD_TOOLS_FILES`; done: `linux-gcc`), so that
       Photoshop's ZIP files are checked through zlib there too, not only locally.
+- [ ] **S4.11** Release **0.3.1** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md): additions and a fix,
+      so a PATCH. `MINIPSD_STATIC` without unused-function warnings, `MINIPSD_NO_READER` and
+      `MINIPSD_NO_WRITER`, the typed setters (S6.20), the pixel aspect ratio (S6.21); the release
+      workflow checks CI's run on the tagged commit instead of running it again. Before it:
+      [COMPATIBILITY.md](COMPATIBILITY.md) regenerated with the version (done), the PR merged
+      and CI green on `master`.
 
 ## 5. Round trip and conveniences
 
@@ -489,6 +495,26 @@ feature; a supplied composite needs nothing. See
       saver (S7.4) needs it for images that are not RGB.
       *Done when:* documents of each mode and depth that minipsd writes decode the same in
       psd-tools and in minipsd, and `minipsd_read` round-trips psd-tools' files of every mode.
+- [x] **S6.20** Typed setters: the mirror of S6.17's views, for the writer. A struct in, the
+      bytes of a resource or a block out, into the caller's buffer (the size asked first, as
+      `minipsd_layer_name` does), ready for `minipsd_doc.resources` or a layer's
+      `additional_info`: resolution info (1005; today only `dpi` writes it), version info
+      (1057), grid and guides (1032), alpha channel names and identifiers (1045, 1006, 1053),
+      the transparency index (1047), and a layer's block settings (`lyid`, `lclr`, `iOpa`,
+      `lspf`). Today a caller builds those bytes by hand. They go with the writer: under
+      `MINIPSD_NO_WRITER` they are left out, as the views are under `MINIPSD_NO_READER`.
+      *Done when:* each setter's bytes read back through its view to the same struct, and
+      psd-tools reads them as written.
+      Done: 1005 stays `dpi`'s (`MINIPSD_ERR_USE_DOC_FIELD`); the block setter edits the run a
+      layer has (replaced where it is, added only when missing), all seven blocks.
+- [x] **S6.21** The pixel aspect ratio (resource 1064), as `dpi` is the resolution: read into
+      `minipsd_info.pixel_aspect_ratio` (1.0 without it), so a program can refuse non-square
+      pixels; written from `minipsd_doc.pixel_aspect_ratio` (0: none of the writer's own; a kept
+      1064 that says the same stays where it is); `minipsd_read` keeps the file's. The resolution
+      stays square: the ratio is not folded into 1005. Doubles are compared within a tolerance
+      (`detail/floats.h`).
+      *Done when:* psd-tools reads a ratio minipsd writes, and every file of its set reads and
+      writes back unchanged.
 
 ## 7. Interoperability
 
@@ -562,6 +588,9 @@ Large cases. Each would start with a *design* step, and only when a real consume
 - Segment output for zero-copy saves (`E3`).
 - In-place patching of fixed-size fields.
 - Making `packbits` or `composite` public.
+- Typed setters that allocate (S6.20's, through `MINIPSD_MALLOC`): each piece would need freeing
+  after the write, apart from `minipsd_doc_free`, and they would not exist under
+  `MINIPSD_NO_MALLOC`. The size constants make one call with the caller's buffer the common case.
 - The C++ facade.
 - A layer's own alpha and spot channels (ids other than R, G, B, transparency and the masks):
   no file we have holds one, and Photoshop does not write them. Until a file shows one, such a

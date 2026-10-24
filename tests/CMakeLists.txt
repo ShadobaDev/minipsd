@@ -152,6 +152,37 @@ foreach(_check include no-malloc)
     set_target_properties(minipsd-${_check}-check PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 endforeach()
 
+# A program that uses part of minipsd builds without warnings, as C and as C++17: private to it
+# (MINIPSD_STATIC) and calling only minipsd_write, without the reader, without the writer.
+foreach(_variant static no-reader no-writer static-no-reader static-no-writer)
+    set(_defines "")
+    if(_variant MATCHES "static")
+        list(APPEND _defines MINIPSD_STATIC)
+    endif()
+    if(_variant MATCHES "no-reader")
+        list(APPEND _defines MINIPSD_NO_READER)
+    elseif(_variant MATCHES "no-writer")
+        list(APPEND _defines MINIPSD_NO_WRITER)
+    endif()
+    foreach(_lang c cpp)
+        set(_target minipsd-part-${_variant}-${_lang}-check)
+        add_library(${_target} OBJECT part_check.${_lang})
+        target_link_libraries(${_target} PRIVATE minipsd::minipsd)
+        target_compile_definitions(${_target} PRIVATE ${_defines})
+        target_compile_options(${_target} PRIVATE ${MINIPSD_WARNINGS})
+        set_target_properties(${_target} PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+                                                    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+        if(_variant MATCHES "^no-")   # the single file too: a part left out takes no shared helper with it
+            add_library(${_target}-amalgamated OBJECT part_check.${_lang})
+            target_include_directories(${_target}-amalgamated PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/amalgamated")
+            target_compile_definitions(${_target}-amalgamated PRIVATE ${_defines})
+            target_compile_options(${_target}-amalgamated PRIVATE ${MINIPSD_WARNINGS})
+            set_target_properties(${_target}-amalgamated PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+                                                                    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+        endif()
+    endforeach()
+endforeach()
+
 # The reader's fuzz target (fuzz/): replayed here on every file in fuzz/regressions/, which are
 # inputs that once failed; with MINIPSD_FUZZ (the linux-fuzz preset, clang) also built as a
 # libFuzzer target, run by hand and never by CI.

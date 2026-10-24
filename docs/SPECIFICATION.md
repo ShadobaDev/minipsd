@@ -80,14 +80,18 @@ real readers win (see [Verification](#verification)).
   `-Wconversion -Wsign-conversion -Wshadow -Wcast-qual -Wundef -Wdouble-promotion
   -Wnull-dereference -Wformat=2 -Wstrict-prototypes -Wmissing-prototypes -Wold-style-definition`,
   and with gcc `-Wcast-align -Wduplicated-cond -Wlogical-op` (the list is in
-  `tests/CMakeLists.txt`).
+  `tests/CMakeLists.txt`). So is a program that uses part of it, as C and as C++17: under
+  `MINIPSD_STATIC` calling only `minipsd_write`, and without the reader or the writer
+  (`tests/part_check.c`).
 - Configuration macros (define before the implementation include):
 
 | Macro | Effect |
 |---|---|
-| `MINIPSD_STATIC` | every function is `static`, nothing is exported |
+| `MINIPSD_STATIC` | every function is `static`, nothing is exported; each is marked possibly unused, so a file that calls only some builds without warnings |
 | `MINIPSD_MALLOC` / `MINIPSD_FREE` | replace `malloc` / `free` (define both) |
 | `MINIPSD_NO_MALLOC` | omit every allocation: `minipsd_write` and `<stdlib.h>`; the pull writer stays |
+| `MINIPSD_NO_READER` | omit the reader, the typed views and `minipsd_read`, their types and functions |
+| `MINIPSD_NO_WRITER` | omit the writer, the typed setters and `minipsd_read`; with `MINIPSD_NO_READER`, an error |
 | `MINIPSD_NO_STDIO` | accepted, no effect: minipsd never includes `<stdio.h>` |
 
 - **No I/O.** minipsd opens no file, pipe or socket; bytes go to the caller's buffer or callback.
@@ -124,6 +128,10 @@ The declarations, with every parameter and return code, are in
 | `minipsd_resource_id_name(id)` | Adobe's name for a resource id ("Resolution info", "Path information"), to list what a file holds; `NULL` for an id Adobe does not list |
 | `minipsd_resource_transparency_index(res, &index)` | an indexed file's transparent palette entry (1047) |
 | `minipsd_layer_block_settings(layer, &out)` | a layer's fixed-layout blocks parsed: id, colour label, fill opacity, locks, knockout, blending of clipped and interior elements; `present` says which it has |
+| `minipsd_blocks_settings(blocks, format, &out)` | the same over a run of blocks alone, such as a document's `minipsd_layer.additional_info` |
+| `minipsd_resource_make_version_info`, `_grid_and_guides`, `_alpha_names`, `_alpha_identifiers`, `_transparency_index` (`..., buf, cap, &needed`) | typed setters: a resource's bytes made from the values its view reads, into the caller's buffer, for `minipsd_doc.resources`; `minipsd_resource_make_resolution_info` makes nothing (`MINIPSD_ERR_USE_DOC_FIELD`: `dpi` says it) |
+| `minipsd_layer_make_block_settings(blocks, format, &settings, buf, cap, &needed)` | a layer's blocks with its settings set: each replaced where it is, added only when missing, every other block as it is |
+| `minipsd_utf8_to_utf16be(utf8, utf16, cap, &needed)` | UTF-8 text as UTF-16BE, for version info's names: the converse of `minipsd_utf16be_to_utf8` |
 | `minipsd_utf16be_to_utf8(text, utf8, cap, &needed)` | UTF-16BE text from a view (a version info's names) as UTF-8, as `minipsd_layer_name` gives a name |
 | `minipsd_target_rgba(&target, rgba, row_stride)` | a target for interleaved RGBA, the common case |
 | `minipsd_target_rgba16(&target, rgba, row_stride)` | the same for 16-bit samples, `uint16_t` |
@@ -171,7 +179,7 @@ its layers and composite as stored: no colour is converted.
 | `minipsd_info` | what the file says about itself: size, depth, colour mode and its colour channels, colour mode data, dpi, ICC profile, layer count, format (PSD or PSB) |
 | `minipsd_bytes` | a read-only view into the caller's buffer |
 | `minipsd_resource`, `minipsd_layer_view`, `minipsd_block` | an image resource, a layer record, an additional-information block, as views |
-| `minipsd_resolution_info`, `minipsd_version_info`, `minipsd_grid_and_guides`, `minipsd_guide`, `minipsd_block_settings` | typed views: what resources 1005, 1057 and 1032 and a layer's fixed-layout blocks store, parsed; strings stay views |
+| `minipsd_resolution_info`, `minipsd_version_info`, `minipsd_grid_and_guides`, `minipsd_guide`, `minipsd_block_settings` | typed values: what resources 1005, 1057 and 1032 and a layer's fixed-layout blocks store, parsed by the typed views and made by the typed setters; strings stay views |
 | `minipsd_target`, `minipsd_plane` | where decoded samples go: per plane (the colour channels, then transparency) a pointer, a pixel step and a row step; any layout |
 | `minipsd_decode_opts` | the rows to decode, the target's `depth` and, for the composite, `keep_matte`; `NULL` for all rows, 8-bit, un-matted |
 
@@ -226,6 +234,7 @@ its layers and composite as stored: no colour is converted.
 | `MINIPSD_ERR_SHORT` | -8 | reader: the buffer ends inside data the call needs; read more, `minipsd_reader_needed` says how much |
 | `MINIPSD_ERR_LIMIT` | -9 | reader: over `minipsd_limits`: the canvas's or a layer's side, the layer count, or the bytes of a decode call; the file is not known to be bad |
 | `MINIPSD_ERR_NOT_FOUND` | -10 | a lookup found no such item: `minipsd_reader_find_resource` for an id the file lacks; not a fault of the file |
+| `MINIPSD_ERR_USE_DOC_FIELD` | -11 | a typed setter made nothing, since a field of the document says it: resource 1005 is `minipsd_doc.dpi` |
 
 ## Memory and ownership
 
@@ -288,7 +297,7 @@ interact, whatever the table says.
 | `minipsd_layer_name` | yes | reads the view; writes only the caller's buffer |
 | `minipsd_layer_next_block` | yes | each thread its own `pos` |
 | `minipsd_layer_blending_range` | yes | reads the view |
-| `minipsd_resource_*`, `minipsd_layer_block_settings`, `minipsd_utf16be_to_utf8` | yes | read the view; write only the caller's struct, buffer or `pos` (each thread its own); `minipsd_resource_id_name` returns a constant string |
+| `minipsd_resource_*`, `minipsd_layer_block_settings`, `minipsd_blocks_settings`, `minipsd_layer_make_block_settings`, `minipsd_utf16be_to_utf8`, `minipsd_utf8_to_utf16be` | yes | read the view or the values; write only the caller's struct, buffer or `pos` (each thread its own); `minipsd_resource_id_name` returns a constant string |
 | `minipsd_target_rgba`, `minipsd_target_rgba16`, `minipsd_target_interleaved` | yes | fill only the caller's `minipsd_target` |
 | `minipsd_decode_layer` | yes, with the whole file | each thread its own scratch; may run beside the walk (`next_layer`) |
 | `minipsd_decode_mask` | yes, with the whole file | as `minipsd_decode_layer` |
@@ -420,7 +429,31 @@ several threads from one reader into one image.
     dpi is written instead, with its own units and vertical resolution;
   - 1039 ICC profile, only when `icc` is set;
   - a later kept 1005 or 1039 goes: `dpi` and `icc` win;
+  - 1064 pixel aspect ratio, from `pixel_aspect_ratio`: at 0 none of the writer's own, a kept 1064
+    written as it is; above 0, a kept 1064 that says the same (within a tolerance) stays as it is,
+    where it is, otherwise the writer's own (version 2, a double) comes after 1039 and every kept
+    1064 goes. The resolution stays square: the ratio is never folded into 1005. Photoshop's files
+    in psd-tools' set all hold 1.0 (290 version 2, 15 version 1), so another ratio is written as
+    the format lays it out but not verified against a reader;
   - a resource of odd length is padded to even.
+- **Typed setters:** the mirror of the typed views (in [What is read](#what-is-read)): a struct in,
+  the bytes the view reads out, into the caller's buffer, counted first (`needed`, and
+  `MINIPSD_MORE` with nothing written when the buffer is too small). Version info (1057), its
+  names UTF-16BE as the view gives them; grid and guides (1032) from the header and an array,
+  the count given winning over the header's; the alpha channels' names from UTF-8, as Unicode
+  (1045) or as Pascal strings (1006: ASCII, `?` for each other character, at most 255 bytes); their
+  identifiers (1053); the transparency index (1047). Resolution info (1005) is never made: it is
+  `dpi`, and `minipsd_resource_make_resolution_info` says so (`MINIPSD_ERR_USE_DOC_FIELD`). A
+  layer's fixed-layout blocks are set in the run it has, not added to it: the first block of each
+  key `present` asks for is replaced where it is, keeping its signature, one the run lacks is
+  added at the end (in the order `lyid`, `lclr`, `iOpa`, `lspf`, `knko`, `clbl`, `infx`), every
+  other block is copied as it is; a second block of a key would be ignored, since readers take the
+  first. Each block's data takes the bytes Photoshop's files in psd-tools' set hold: eight for
+  `lclr`, four for the others, the value first, then zeros. Constants bound the sizes, so one call
+  with a buffer of that size does: `MINIPSD_TRANSPARENCY_INDEX_SIZE`,
+  `MINIPSD_GRID_AND_GUIDES_SIZE(n)`, `MINIPSD_ALPHA_IDENTIFIERS_SIZE(n)`, and
+  `MINIPSD_BLOCK_SETTINGS_MAX` over the run given. `roundtrip.py` writes a document with every
+  setter's bytes and checks psd-tools reads the values given.
 - **The layer info's padding:** its length padded to even, as the format has it, whatever the
   file read had (Photoshop pads to 4, some programs not at all).
 - **After the layer info:** the kept `layer_tail` (global layer mask, global blocks) as it is,
@@ -484,7 +517,8 @@ them; nothing is copied or allocated. Results on real files from other programs:
     a document whose `format` is the file's, written back as a PSB;
   - four wrong bytes at the start are `MINIPSD_ERR_FORMAT`.
 - **Header and resources:** size, channels, depth, colour mode; dpi from resource 1005
-  (horizontal, 0 without it); the ICC profile from 1039. Every resource, these two included, is
+  (horizontal, 0 without it); the ICC profile from 1039; the pixel aspect ratio from 1064 (1.0
+  without it; one shorter than its 12 bytes is `MINIPSD_ERR_FORMAT`). Every resource, these two included, is
   also returned as a raw view, with its name, in file order, or found by id (the first of it).
 - **Typed views:** what a kept resource stores, parsed into plain values by a function that
   takes the resource and needs no reader: nothing allocated, a string left as a view of its
@@ -519,6 +553,7 @@ them; nothing is copied or allocated. Results on real files from other programs:
   | 1057 version info | `MINIPSD_RES_VERSION_INFO` | `minipsd_resource_version_info` |
   | 1058 EXIF | `MINIPSD_RES_EXIF_DATA_1` | bytes |
   | 1060 XMP | `MINIPSD_RES_XMP_METADATA` | bytes (UTF-8 XML) |
+  | 1064 pixel aspect ratio | `MINIPSD_RES_PIXEL_ASPECT_RATIO` | `minipsd_info.pixel_aspect_ratio`; written from `minipsd_doc.pixel_aspect_ratio` |
   | any other id | | bytes, from `minipsd_reader_next_resource` or `minipsd_reader_find_resource` |
 - **Layer records**, bottom first:
   - the rectangle; one stored inverted (Photoshop's fill layers) comes back empty;

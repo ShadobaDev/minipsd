@@ -22,37 +22,45 @@ typedef struct mpsd__sink {
     int              failed;    /* 1 if the write function returned 0, else 0 */
 } mpsd__sink;
 
-static void mpsd__put(mpsd__sink *s, const void *data, size_t size)
+MPSD__SHARED static void mpsd__put(mpsd__sink *s, const void *data, size_t size)
 {
     s->count += size;
     if (s->fn && !s->failed && size && !s->fn(s->user, data, size))
         s->failed = 1;
 }
 
-static void mpsd__u8(mpsd__sink *s, unsigned v)  { uint8_t b = (uint8_t)v; mpsd__put(s, &b, 1); }
-static void mpsd__u16(mpsd__sink *s, unsigned v) { uint8_t b[2] = { (uint8_t)(v >> 8), (uint8_t)v }; mpsd__put(s, b, 2); }
-static void mpsd__u32(mpsd__sink *s, uint32_t v)
+MPSD__SHARED static void mpsd__u8(mpsd__sink *s, unsigned v)  { uint8_t b = (uint8_t)v; mpsd__put(s, &b, 1); }
+MPSD__SHARED static void mpsd__u16(mpsd__sink *s, unsigned v) { uint8_t b[2] = { (uint8_t)(v >> 8), (uint8_t)v }; mpsd__put(s, b, 2); }
+MPSD__SHARED static void mpsd__u32(mpsd__sink *s, uint32_t v)
 {
     uint8_t b[4] = { (uint8_t)(v >> 24), (uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v };
     mpsd__put(s, b, 4);
 }
-static void mpsd__zeros(mpsd__sink *s, size_t n) { while (n--) mpsd__u8(s, 0); }
+MPSD__SHARED static void mpsd__zeros(mpsd__sink *s, size_t n) { while (n--) mpsd__u8(s, 0); }
 
-static size_t mpsd__pad(size_t n, size_t to) { return (n + to - 1) / to * to; }
+MPSD__SHARED static size_t mpsd__pad(size_t n, size_t to) { return (n + to - 1) / to * to; }
 
 /* The alignment the writer and the reader give their own state inside a caller's workspace. */
 #define MPSD__ALIGN 8u
 
 /* --- input: big-endian integers out of a buffer --- */
 
-static uint32_t mpsd__get16(const uint8_t *p) { return ((uint32_t)p[0] << 8) | p[1]; }
-static uint32_t mpsd__get32(const uint8_t *p) { return (mpsd__get16(p) << 16) | mpsd__get16(p + 2); }
-static uint64_t mpsd__get64(const uint8_t *p) { return ((uint64_t)mpsd__get32(p) << 32) | mpsd__get32(p + 4); }
+MPSD__SHARED static uint32_t mpsd__get16(const uint8_t *p) { return ((uint32_t)p[0] << 8) | p[1]; }
+MPSD__SHARED static uint32_t mpsd__get32(const uint8_t *p) { return (mpsd__get16(p) << 16) | mpsd__get16(p + 2); }
+MPSD__SHARED static uint64_t mpsd__get64(const uint8_t *p) { return ((uint64_t)mpsd__get32(p) << 32) | mpsd__get32(p + 4); }
 
-static void mpsd__set16(uint8_t *p, uint32_t v) { p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v; }
+MPSD__SHARED static double mpsd__get_f64(const uint8_t *p)
+{
+    const uint64_t bits = mpsd__get64(p);
+    double         v;
+    memcpy(&v, &bits, sizeof v);
+    return v;
+}
+
+MPSD__SHARED static void mpsd__set16(uint8_t *p, uint32_t v) { p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v; }
 
 /* Four bytes equal to a four-character tag. */
-static int mpsd__tag(const uint8_t *p, const char *tag)
+MPSD__SHARED static int mpsd__tag(const uint8_t *p, const char *tag)
 {
     size_t i;
     for (i = 0; i < 4; ++i)

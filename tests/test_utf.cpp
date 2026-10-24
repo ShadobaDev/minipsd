@@ -80,6 +80,17 @@ TEST(MinipsdUtfTest, Utf16BeDecodesPairsAndReplacesUnpairedSurrogates)
     EXPECT_EQ(minipsd_utf16be_to_utf8(&text, got.data(), needed, nullptr), MINIPSD_OK);
     EXPECT_EQ(got, utf8 + '\0');
 
+    // And back: the converse gives the units, measured first, a pair for the turtle.
+    const std::uint8_t units[] = {0x00, 0x41, 0x20, 0xAC, 0xD8, 0x3D, 0xDC, 0x22};
+    std::uint8_t made[sizeof units];
+    EXPECT_EQ(minipsd_utf8_to_utf16be("A\xE2\x82\xAC\xF0\x9F\x90\xA2", nullptr, 0, &needed), MINIPSD_MORE);
+    ASSERT_EQ(needed, sizeof units);
+    EXPECT_EQ(minipsd_utf8_to_utf16be("A\xE2\x82\xAC\xF0\x9F\x90\xA2", made, sizeof made, nullptr), MINIPSD_OK);
+    EXPECT_EQ(Bytes(made, made + sizeof made), Bytes(units, units + sizeof units));
+    EXPECT_EQ(minipsd_utf8_to_utf16be(nullptr, made, sizeof made, &needed), MINIPSD_OK);
+    EXPECT_EQ(needed, 0u) << "NULL is empty";
+    EXPECT_EQ(minipsd_utf8_to_utf16be("A", nullptr, 1, nullptr), MINIPSD_ERR_ARG);
+
     // A U+0000 ends the text; an odd last byte is dropped; empty is empty.
     const std::uint8_t ended[] = {0x00, 0x41, 0x00, 0x00, 0x00, 0x42}, odd[] = {0x00, 0x41, 0x00};
     char small[4];

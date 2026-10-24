@@ -13,7 +13,7 @@
 #include "bytes.h"
 
 /* Decodes one UTF-8 code point; malformed input yields U+FFFD and moves on by one byte. */
-static uint32_t mpsd__utf8(const unsigned char **p)
+MPSD__SHARED static uint32_t mpsd__utf8(const unsigned char **p)
 {
     const unsigned char *s = *p;
     uint32_t cp;
@@ -32,7 +32,7 @@ static uint32_t mpsd__utf8(const unsigned char **p)
 }
 
 /* Calls back with each UTF-16 unit of a UTF-8 string; returns how many there were. */
-static size_t mpsd__utf16(const char *utf8, void (*unit)(void *, unsigned), void *ctx)
+MPSD__SHARED static size_t mpsd__utf16(const char *utf8, void (*unit)(void *, unsigned), void *ctx)
 {
     const unsigned char *p = (const unsigned char *)(utf8 ? utf8 : "");
     size_t n = 0;
@@ -51,7 +51,7 @@ static size_t mpsd__utf16(const char *utf8, void (*unit)(void *, unsigned), void
 
 /* Decodes one code point of UTF-16BE from [*p, end), which holds at least two bytes; an unpaired
    surrogate yields U+FFFD. */
-static uint32_t mpsd__utf16be(const uint8_t **p, const uint8_t *end)
+MPSD__SHARED static uint32_t mpsd__utf16be(const uint8_t **p, const uint8_t *end)
 {
     const uint32_t hi = mpsd__get16(*p);
     *p += 2;
@@ -68,7 +68,7 @@ static uint32_t mpsd__utf16be(const uint8_t **p, const uint8_t *end)
 
 /* Encodes one code point (at most 0x10FFFF, no surrogates) as UTF-8 into out, or only counts when
    out is NULL; returns the bytes it takes. */
-static size_t mpsd__put_utf8(uint8_t *out, uint32_t cp)
+MPSD__SHARED static size_t mpsd__put_utf8(uint8_t *out, uint32_t cp)
 {
     uint8_t b[4];
     size_t  n, i;
@@ -84,7 +84,7 @@ static size_t mpsd__put_utf8(uint8_t *out, uint32_t cp)
 
 /* UTF-16BE [p, p + size) as UTF-8 into out, or only its length when out is NULL: up to a U+0000,
    an odd last byte dropped. */
-static size_t mpsd__utf16be_utf8(const uint8_t *p, size_t size, uint8_t *out)
+MPSD__SHARED static size_t mpsd__utf16be_utf8(const uint8_t *p, size_t size, uint8_t *out)
 {
     const uint8_t *end;
     size_t         n = 0;
@@ -100,7 +100,7 @@ static size_t mpsd__utf16be_utf8(const uint8_t *p, size_t size, uint8_t *out)
 
 /* Does a UTF-8 name say what a file's name bytes say, as the reader reads them: UTF-16BE units up
    to a U+0000, or Latin-1 bytes (latin1)?  Code point by code point, U+FFFD for what is broken. */
-static int mpsd__same_name(const char *utf8, const uint8_t *bytes, size_t size, int latin1)
+MPSD__SHARED static int mpsd__same_name(const char *utf8, const uint8_t *bytes, size_t size, int latin1)
 {
     const unsigned char *p   = (const unsigned char *)(utf8 ? utf8 : "");
     const uint8_t       *q   = bytes;

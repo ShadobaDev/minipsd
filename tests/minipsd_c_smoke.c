@@ -106,12 +106,24 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
             made.name.data = NULL; made.name.size = 0;
             if (minipsd_reader_find_resource(rd, MINIPSD_RES_RESOLUTION_INFO, &res) != MINIPSD_OK
                 || minipsd_resource_resolution_info(&res, &resolution) != MINIPSD_OK
-                || resolution.vertical_resolution != 300.0
+                || !mpsd__floats_equal(resolution.vertical_resolution, 300.0)
                 || minipsd_reader_find_resource(rd, MINIPSD_RES_VERSION_INFO, &res) != MINIPSD_ERR_NOT_FOUND
                 || minipsd_resource_version_info(&made, &version) != MINIPSD_OK || !version.has_real_merged_data
                 || minipsd_utf16be_to_utf8(&version.writer_name, name, sizeof name, NULL) != MINIPSD_OK
                 || memcmp(name, "A", 2) != 0)
                 return -116;
+            {   /* the setters, the mirror: the same bytes back; 1005 is the document's dpi */
+                uint8_t remade[sizeof vi], unit[2], ti[MINIPSD_TRANSPARENCY_INDEX_SIZE];
+                size_t  made_size = 0;
+                if (minipsd_resource_make_version_info(&version, remade, sizeof remade, &made_size) != MINIPSD_OK
+                    || made_size != sizeof vi || memcmp(remade, vi, sizeof vi) != 0
+                    || minipsd_utf8_to_utf16be("A", unit, sizeof unit, &made_size) != MINIPSD_OK || made_size != 2 || unit[1] != 'A'
+                    || minipsd_resource_make_transparency_index(7, ti, sizeof ti, NULL) != MINIPSD_OK || ti[1] != 7
+                    || minipsd_resource_make_resolution_info(&resolution, NULL, 0, NULL) != MINIPSD_ERR_USE_DOC_FIELD
+                    || minipsd_resource_make_pixel_aspect_ratio(1.0, NULL, 0, NULL) != MINIPSD_ERR_USE_DOC_FIELD
+                    || !mpsd__floats_equal(info.pixel_aspect_ratio, 1.0))
+                    return -122;
+            }
         }
         {   /* the other typed views, each over a resource built by hand: one item, then the end */
             static const uint8_t guides[] = { 0, 0, 0, 1,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 1,  0, 0, 0, 64,  1 };
@@ -142,6 +154,20 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
                 || strcmp(minipsd_resource_id_name(MINIPSD_RES_TRANSPARENCY_INDEX), "Transparency index") != 0
                 || minipsd_resource_id_name(1004) != NULL)
                 return -120;
+            {   /* the setters: the same bytes from the values */
+                static const char *const one_name[] = { "a" };
+                const minipsd_guide one_guide = { 64, 1 };
+                const uint32_t      one_id    = 9;
+                uint8_t             list[MINIPSD_GRID_AND_GUIDES_SIZE(1)];
+                size_t              list_size = 0;
+                if (minipsd_resource_make_grid_and_guides(&grid, &one_guide, 1, list, sizeof list, &list_size) != MINIPSD_OK
+                    || list_size != sizeof guides || memcmp(list, guides, sizeof guides) != 0
+                    || minipsd_resource_make_alpha_names(MINIPSD_RES_ALPHA_NAMES, one_name, 1, list, sizeof list, &list_size) != MINIPSD_OK
+                    || list_size != sizeof names || memcmp(list, names, sizeof names) != 0
+                    || minipsd_resource_make_alpha_identifiers(&one_id, 1, list, sizeof list, &list_size) != MINIPSD_OK
+                    || list_size != sizeof ids || memcmp(list, ids, sizeof ids) != 0)
+                    return -123;
+            }
         }
         if (minipsd_reader_next_layer(rd, &lv) != MINIPSD_MORE
             || minipsd_layer_name(&lv, name, sizeof name, &rneed) != MINIPSD_OK
@@ -158,6 +184,21 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
             if (minipsd_layer_block_settings(&lv, &settings) != MINIPSD_OK || settings.present != 0
                 || settings.fill_opacity != 255)
                 return -121;
+            {   /* the colour label set on the layer's blocks, read back from the bytes alone */
+                uint8_t       run[256 + MINIPSD_BLOCK_SETTINGS_MAX];
+                size_t        run_size = 0;
+                minipsd_bytes edited;
+                settings.present     = MINIPSD_PRESENT_SHEET_COLOR;
+                settings.sheet_color = 3;
+                if (lv.additional_info.size > 256
+                    || minipsd_layer_make_block_settings(&lv.additional_info, lv.format, &settings, run, sizeof run, &run_size) != MINIPSD_OK)
+                    return -124;
+                edited.data = run;
+                edited.size = run_size;
+                if (minipsd_blocks_settings(&edited, lv.format, &settings) != MINIPSD_OK
+                    || settings.present != MINIPSD_PRESENT_SHEET_COLOR || settings.sheet_color != 3)
+                    return -125;
+            }
         }
         if (blocks != 1 || minipsd_reader_next_layer(rd, &lv) != MINIPSD_MORE
             || minipsd_layer_blending_range(&lv, 0, &br) != MINIPSD_OK || br.destination.white[0] != 210

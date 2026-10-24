@@ -26,27 +26,27 @@
 #define MPSD__LEN 4u
 
 /* A length that a PSB widens: four bytes, or (psb) eight. */
-static unsigned mpsd__len_size(unsigned psb) { return MPSD__LEN << psb; }
+MPSD__SHARED static unsigned mpsd__len_size(unsigned psb) { return MPSD__LEN << psb; }
 
-static uint64_t mpsd__getlen(const uint8_t *p, unsigned psb) { return psb ? mpsd__get64(p) : mpsd__get32(p); }
+MPSD__SHARED static uint64_t mpsd__getlen(const uint8_t *p, unsigned psb) { return psb ? mpsd__get64(p) : mpsd__get32(p); }
 
-static void mpsd__putlen(mpsd__sink *s, uint64_t v, unsigned psb)
+MPSD__SHARED static void mpsd__putlen(mpsd__sink *s, uint64_t v, unsigned psb)
 {
     if (psb) mpsd__u32(s, (uint32_t)(v >> 32));
     mpsd__u32(s, (uint32_t)v);
 }
 
 /* An RLE row's byte count: two bytes, or four in a PSB. */
-static unsigned mpsd__count_size(unsigned psb) { return 2u << psb; }
+MPSD__SHARED static unsigned mpsd__count_size(unsigned psb) { return 2u << psb; }
 
 /* Row y's byte count in an RLE channel's table. */
-static uint32_t mpsd__count(const uint8_t *table, uint32_t y, unsigned psb)
+MPSD__SHARED static uint32_t mpsd__count(const uint8_t *table, uint32_t y, unsigned psb)
 {
     const uint8_t *p = table + (size_t)y * mpsd__count_size(psb);
     return psb ? mpsd__get32(p) : mpsd__get16(p);
 }
 
-static void mpsd__putcount(mpsd__sink *s, uint32_t v, unsigned psb)
+MPSD__SHARED static void mpsd__putcount(mpsd__sink *s, uint32_t v, unsigned psb)
 {
     if (psb) mpsd__u32(s, v);
     else     mpsd__u16(s, v);
@@ -72,7 +72,7 @@ static void mpsd__putcount(mpsd__sink *s, uint32_t v, unsigned psb)
 #define MPSD__MAX_CHANNELS 56   /* in the file, the composite's */
 
 /* The largest width or height a format allows. */
-static uint32_t mpsd__max_side(unsigned psb) { return psb ? MINIPSD_MAX_SIDE_PSB : MINIPSD_MAX_SIDE; }
+MPSD__SHARED static uint32_t mpsd__max_side(unsigned psb) { return psb ? MINIPSD_MAX_SIDE_PSB : MINIPSD_MAX_SIDE; }
 
 /* --- image resources ---
 
@@ -96,14 +96,19 @@ static uint32_t mpsd__max_side(unsigned psb) { return psb ? MINIPSD_MAX_SIDE_PSB
 
 /* Grid and guides: version, two grid values and the guide count (4 each), then each guide: its
    location (4) and direction (1). */
-#define MPSD__GUIDES_HEAD 16
-#define MPSD__GUIDE_SIZE  5
+/* The pixel aspect ratio (1064): a version, then the ratio as a double.  Version 2 is what 290 of
+   psd-tools' 305 files with one hold (the others 1). */
+#define MPSD__PIXEL_ASPECT_SIZE    12
+#define MPSD__PIXEL_ASPECT_RATIO   4    /* where the double starts */
+#define MPSD__PIXEL_ASPECT_VERSION 2u
+
+#define MPSD__GUIDES_HEAD MINIPSD_GRID_AND_GUIDES_SIZE(0)
+#define MPSD__GUIDE_SIZE  (MINIPSD_GRID_AND_GUIDES_SIZE(1) - MPSD__GUIDES_HEAD)
 
 #define MPSD__PALETTE_SIZE 768   /* an indexed file's colour mode data: 256 red, then green, then blue */
-#define MPSD__TRANSPARENCY_INDEX_SIZE 2   /* one palette entry, two bytes */
 #define MPSD__FILL_OPAQUE             255 /* a layer's fill without an 'iOpa' block */
 
-static uint64_t mpsd__resource_size(size_t name, size_t data)
+MPSD__SHARED static uint64_t mpsd__resource_size(size_t name, size_t data)
 {
     return MPSD__RES_NAME + (uint64_t)mpsd__pad(1 + name, 2) + MPSD__LEN + (uint64_t)mpsd__pad(data, 2);
 }
@@ -135,15 +140,15 @@ static uint64_t mpsd__resource_size(size_t name, size_t data)
 #define MPSD__RANGE_SIZE  8       /* a blending range: source and destination */
 
 /* The height of a rectangle laid out as above. */
-static int64_t mpsd__rect_height(const uint8_t *rect)
+MPSD__SHARED static int64_t mpsd__rect_height(const uint8_t *rect)
 {
     return (int64_t)(int32_t)mpsd__get32(rect + 8) - (int32_t)mpsd__get32(rect);
 }
 
-static unsigned mpsd__entry_size(unsigned psb) { return 2 + mpsd__len_size(psb); }
+MPSD__SHARED static unsigned mpsd__entry_size(unsigned psb) { return 2 + mpsd__len_size(psb); }
 
 /* A record without its extra data. */
-static uint64_t mpsd__record_size(uint32_t channels, unsigned psb)
+MPSD__SHARED static uint64_t mpsd__record_size(uint32_t channels, unsigned psb)
 {
     return MPSD__RECORD_HEAD + (uint64_t)channels * mpsd__entry_size(psb) + MPSD__RECORD_TAIL;
 }
@@ -203,7 +208,7 @@ static uint64_t mpsd__record_size(uint32_t channels, unsigned psb)
 /* The keys whose block length is eight bytes in a PSB, four in a PSD: the key decides, not the
    signature.  Adobe's specification names 13; psd-tools found 8 more in files Photoshop wrote
    ('lnkE' and 'pths' are in its test files), and this is its list. */
-static int mpsd__long_key(const uint8_t *key)
+MPSD__SHARED static int mpsd__long_key(const uint8_t *key)
 {
     static const char keys[] = "LMskLr16Lr32LayrMt16Mt32MtrnAlphFMsklnk2lnk3lnkEFEidFXidFELSPxSDpthsextdextncinfartd";
     size_t i;
@@ -213,14 +218,14 @@ static int mpsd__long_key(const uint8_t *key)
 }
 
 /* The bytes before the data of the block at p, laid out as a PSB's when psb. */
-static size_t mpsd__block_head(const uint8_t *p, unsigned psb)
+MPSD__SHARED static size_t mpsd__block_head(const uint8_t *p, unsigned psb)
 {
     return MPSD__BLOCK_LEN + mpsd__len_size(psb && mpsd__long_key(p + MPSD__BLOCK_KEY));
 }
 
 /* The block at pos of region, laid out as a PSB's when psb; *next is where the one after it
    starts.  The length already includes any padding. */
-static int mpsd__block(minipsd_bytes region, size_t pos, unsigned psb, minipsd_block *block, size_t *next)
+MPSD__SHARED static int mpsd__block(minipsd_bytes region, size_t pos, unsigned psb, minipsd_block *block, size_t *next)
 {
     const uint8_t *p    = region.data + pos;
     const size_t   left = region.size - pos;
@@ -247,7 +252,7 @@ static int mpsd__block(minipsd_bytes region, size_t pos, unsigned psb, minipsd_b
    PSB twins: masks' and transparency's parameters, paths, linked files (whose inner lengths are
    eight bytes in both) and descriptors.  Not yet: the layer structures ('Lr16', 'Lr32', 'Layr',
    whose data is a layer info of the format), and the long keys no file has shown. */
-static int mpsd__convertible(const uint8_t *key)
+MPSD__SHARED static int mpsd__convertible(const uint8_t *key)
 {
     static const char keys[] = "FMskLMskMt32pthslnk2lnkEcinfartdextdextn";
     size_t i;
@@ -260,11 +265,53 @@ static int mpsd__convertible(const uint8_t *key)
 /* The block at p, whose header takes head bytes and whose length is size, written as the out
    format lays it out: signature and key, the length in out's width, then the span bytes after the
    header (the data, and any padding that follows it). */
-static void mpsd__put_block(mpsd__sink *s, const uint8_t *p, size_t head, uint64_t size, size_t span, unsigned out)
+MPSD__SHARED static void mpsd__put_block(mpsd__sink *s, const uint8_t *p, size_t head, uint64_t size, size_t span, unsigned out)
 {
     mpsd__put(s, p, MPSD__BLOCK_LEN);
     mpsd__putlen(s, size, out && mpsd__long_key(p + MPSD__BLOCK_KEY));
     mpsd__put(s, p + head, span);
+}
+
+/* --- a layer's fixed-layout blocks: the typed views read them, the setters make them --- */
+
+/* Each block's key, the bytes its value takes, the bytes its data takes (the value first, then
+   zeros: what Photoshop's files in psd-tools' set hold), and its bit in minipsd_block_settings. */
+MPSD__SHARED static const struct { char key[5]; unsigned char size, span, bit; } mpsd__settings[] = {
+    { "lyid", 4, 4, MINIPSD_PRESENT_LAYER_ID },         { "lclr", 2, 8, MINIPSD_PRESENT_SHEET_COLOR },
+    { "iOpa", 1, 4, MINIPSD_PRESENT_FILL_OPACITY },     { "lspf", 4, 4, MINIPSD_PRESENT_PROTECTION_FLAGS },
+    { "knko", 1, 4, MINIPSD_PRESENT_KNOCKOUT },         { "clbl", 1, 4, MINIPSD_PRESENT_BLEND_CLIPPED_ELEMENTS },
+    { "infx", 1, 4, MINIPSD_PRESENT_BLEND_INTERIOR_ELEMENTS }
+};
+#define MPSD__SETTINGS (sizeof mpsd__settings / sizeof mpsd__settings[0])
+
+/* The value of setting k in s. */
+MPSD__SHARED static uint32_t mpsd__setting_get(const minipsd_block_settings *s, size_t k)
+{
+    switch (mpsd__settings[k].bit) {
+    case MINIPSD_PRESENT_LAYER_ID:               return s->layer_id;
+    case MINIPSD_PRESENT_SHEET_COLOR:            return s->sheet_color;
+    case MINIPSD_PRESENT_FILL_OPACITY:           return s->fill_opacity;
+    case MINIPSD_PRESENT_PROTECTION_FLAGS:       return s->protection_flags;
+    case MINIPSD_PRESENT_KNOCKOUT:               return s->knockout;
+    case MINIPSD_PRESENT_BLEND_CLIPPED_ELEMENTS: return s->blend_clipped_elements;
+    default:                                     return s->blend_interior_elements;
+    }
+}
+
+/* Setting k of s set to the value at d, of the setting's size, big-endian. */
+MPSD__SHARED static void mpsd__setting_set(minipsd_block_settings *s, size_t k, const uint8_t *d)
+{
+    const uint32_t v = mpsd__settings[k].size == 4 ? mpsd__get32(d) : mpsd__settings[k].size == 2 ? mpsd__get16(d) : d[0];
+    switch (mpsd__settings[k].bit) {
+    case MINIPSD_PRESENT_LAYER_ID:               s->layer_id = v; break;
+    case MINIPSD_PRESENT_SHEET_COLOR:            s->sheet_color = (uint16_t)v; break;
+    case MINIPSD_PRESENT_FILL_OPACITY:           s->fill_opacity = (uint8_t)v; break;
+    case MINIPSD_PRESENT_PROTECTION_FLAGS:       s->protection_flags = v; break;
+    case MINIPSD_PRESENT_KNOCKOUT:               s->knockout = (uint8_t)v; break;
+    case MINIPSD_PRESENT_BLEND_CLIPPED_ELEMENTS: s->blend_clipped_elements = (uint8_t)v; break;
+    default:                                     s->blend_interior_elements = (uint8_t)v; break;
+    }
+    s->present = (uint8_t)(s->present | mpsd__settings[k].bit);
 }
 
 #endif /* MPSD__FORMAT_DONE */

@@ -13,7 +13,7 @@ complete programs here are in [examples/](../examples/), which CI builds and run
 | [Round trip](#round-trip) | a file read into a document, changed, written back; what is kept, what is lost |
 | [Memory and ownership](#memory-and-ownership) | what you allocate, how long it must live |
 | [Return codes](#return-codes) | `MINIPSD_OK`, `MINIPSD_MORE`, errors |
-| [Configuration](#configuration) | `MINIPSD_STATIC`, the allocator, a build without allocation |
+| [Configuration](#configuration) | `MINIPSD_STATIC`, the allocator, a build without allocation, the reader or the writer |
 
 ---
 
@@ -300,6 +300,30 @@ doc.composite = flattened;   /* width * height * 4, straight alpha; NULL: compos
 Without one, the writer composes the visible layers with "over" at their opacity: enough for a
 preview, with no guarantee for anything else.
 
+Guides, the alpha channels' names, version info, and a layer's id, colour label, fill and locks go
+in as resources and blocks. A typed setter makes their bytes from the same structs the typed
+views read ([Metadata](#metadata)), into your buffer; the size constants make one call enough:
+
+```c
+static const minipsd_guide    guides[] = { { 100 * 32, 0 }, { 50 * 32, 1 } };   /* x = 100, y = 50: pixels times 32 */
+const minipsd_grid_and_guides grid = { .version = 1, .horizontal_grid = 576, .vertical_grid = 576 };
+uint8_t                       guide_bytes[MINIPSD_GRID_AND_GUIDES_SIZE(2)];
+size_t                        n;
+minipsd_resource_make_grid_and_guides(&grid, guides, 2, guide_bytes, sizeof guide_bytes, &n);
+const minipsd_resource resources[] = { { .id = MINIPSD_RES_GRID_AND_GUIDES, .data = { guide_bytes, n } } };
+doc.resources      = resources;
+doc.resource_count = 1;
+
+const minipsd_block_settings blue = { .present = MINIPSD_PRESENT_SHEET_COLOR, .sheet_color = 5 };
+uint8_t                      label[MINIPSD_BLOCK_SETTINGS_MAX];
+minipsd_layer_make_block_settings(NULL, doc.format, &blue, label, sizeof label, &n);   /* a new layer: no blocks yet */
+logo.additional_info = (minipsd_bytes){ label, n };
+```
+
+The resolution is `dpi`: `minipsd_resource_make_resolution_info` makes nothing and says so
+(`MINIPSD_ERR_USE_DOC_FIELD`). Version info's names are UTF-16BE, as the view gives them;
+`minipsd_utf8_to_utf16be` makes them from text.
+
 The document, its pixels and the workspace must stay valid, and unchanged, until the last byte
 is out: the writer sized everything from them at the start.
 
@@ -564,7 +588,17 @@ visible.
 
 ### Metadata
 
-`info` has what most programs need: `dpi` and the ICC profile. For more, find a resource by its
+`info` has what most programs need: `dpi`, the ICC profile, and `pixel_aspect_ratio`, a pixel's
+width over its height (1.0 when the file says nothing). A program that handles only square pixels
+can refuse the others; compare within a tolerance, never with `!=`:
+
+```c
+if (fabs(info.pixel_aspect_ratio - 1.0) > 1e-6)
+    return refuse("non-square pixels");
+```
+
+A document writes one when its `pixel_aspect_ratio` is above 0; `minipsd_read` sets it from the
+file. For more, find a resource by its
 id and let a typed view parse it; none of them needs the reader again, so a document's
 `resources` work too:
 
@@ -644,6 +678,30 @@ palette, a duotone's inks); a file it could not take back, such as 32-bit CMYK, 
 The document lives in one block: from `MINIPSD_MALLOC`, freed by `minipsd_doc_free`, or in
 memory of yours with `minipsd_read_size` and `minipsd_read_into`. Nothing in it points into the
 file, so the file's bytes can go as soon as the call returns.
+
+To change a setting the file already has, set it in the layer's blocks. The setter replaces the
+block where it is, since readers take the first block of a key, and copies every other one (text,
+effects) as it was. The document's layers are `const`, so edit a copy of the array:
+
+```c
+minipsd_layer               *layers = malloc(doc->layer_count * sizeof *layers);
+const minipsd_block_settings red    = { .present = MINIPSD_PRESENT_SHEET_COLOR, .sheet_color = 1 };
+const size_t                 room   = doc->layers[0].additional_info.size + MINIPSD_BLOCK_SETTINGS_MAX;
+uint8_t                     *blocks = malloc(room);
+size_t                       n;
+memcpy(layers, doc->layers, doc->layer_count * sizeof *layers);
+minipsd_layer_make_block_settings(&layers[0].additional_info, doc->format, &red, blocks, room, &n);
+layers[0].additional_info = (minipsd_bytes){ blocks, n };   /* the bottom layer's label: red */
+doc->layers = layers;
+rc = minipsd_write(doc, NULL, to_file, f);
+free(blocks);
+free(layers);
+minipsd_doc_free(doc);
+```
+
+A resource the file has is replaced the same way: copy `doc->resources`, put the made one in place
+of the entry of that id, and point `doc->resources` at the copy. `minipsd_blocks_settings` reads a
+document layer's settings from its blocks, as `minipsd_layer_block_settings` reads a file's.
 
 **What comes back.** Every layer with its rectangle, name, opacity, visibility, blend mode,
 clipping and flags, its pixels, its mask, its "Blend If" ranges and its place in the groups; the blocks a layer carries
@@ -778,6 +836,8 @@ Define before the `#include` in the implementation file:
 
 | Macro | Effect |
 |---|---|
-| `MINIPSD_STATIC` | every function `static`, private to that file: several copies never clash |
+| `MINIPSD_STATIC` | every function `static`, private to that file: several copies never clash, and those you do not call do not warn |
 | `MINIPSD_MALLOC` / `MINIPSD_FREE` | replace `malloc` / `free`; define both |
 | `MINIPSD_NO_MALLOC` | no allocation at all, and no `<stdlib.h>`: `minipsd_write` goes, the pull writer and the reader stay |
+| `MINIPSD_NO_READER` | no reader, typed views or `minipsd_read`: less code for a program that only writes |
+| `MINIPSD_NO_WRITER` | no writer, typed setters or `minipsd_read`: less code for a program that only reads |

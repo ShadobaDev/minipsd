@@ -602,7 +602,8 @@ TEST(MinipsdReaderTest, AFileWithoutResourcesHasNoDpiAndNoProfile)
     s.colorModeData = Bytes(10, 0xCC);   // skipped
     Open o(build(s).bytes);
     ASSERT_EQ(o.rc, MINIPSD_OK);
-    EXPECT_EQ(o.info.dpi, 0.0);
+    EXPECT_DOUBLE_EQ(o.info.dpi, 0.0);
+    EXPECT_DOUBLE_EQ(o.info.pixel_aspect_ratio, 1.0) << "no 1064: square";
     EXPECT_EQ(o.info.icc.size, 0u);
     minipsd_resource res;
     std::size_t pos = 0;
@@ -619,6 +620,7 @@ TEST(MinipsdReaderTest, MalformedResourcesAreRefused)
     EXPECT_EQ(rc(bad), MINIPSD_ERR_FORMAT) << "signature";
     EXPECT_EQ(rc(Bytes(11, 0)), MINIPSD_ERR_FORMAT) << "less than the smallest block";
     EXPECT_EQ(rc(resource(1005, Bytes(8, 0))), MINIPSD_ERR_FORMAT) << "a resolution of 8 bytes";
+    EXPECT_EQ(rc(resource(1064, Bytes(8, 0))), MINIPSD_ERR_FORMAT) << "a pixel aspect ratio of 8 bytes";
 
     Bytes name = resource(1036, Bytes(2, 0));   // a name length that runs past the section
     name[6] = 255;
@@ -681,6 +683,23 @@ TEST(MinipsdReaderTest, ResolutionAndVersionInfoAreParsedFieldByField)
     EXPECT_EQ(minipsd_utf16be_to_utf8(&vi.writer_name, text, sizeof text, nullptr), MINIPSD_OK);
     EXPECT_STREQ(text, "Ps") << "the NUL counted in the name ends it";
 
+    // The setters, the mirror: version info made from the view's struct is the bytes it came from,
+    // measured first; 1005 is the document's dpi, never made.
+    std::size_t needed = 0;
+    EXPECT_EQ(minipsd_resource_make_version_info(&vi, nullptr, 0, &needed), MINIPSD_MORE);
+    ASSERT_EQ(needed, vo.b.size());
+    Bytes made(needed, 0xEE);
+    EXPECT_EQ(minipsd_resource_make_version_info(&vi, made.data(), needed - 1, nullptr), MINIPSD_MORE);
+    EXPECT_EQ(made, Bytes(needed, 0xEE)) << "too small: nothing written";
+    EXPECT_EQ(minipsd_resource_make_version_info(&vi, made.data(), made.size(), nullptr), MINIPSD_OK);
+    EXPECT_EQ(made, vo.b);
+    minipsd_version_info odd = vi;
+    odd.reader_name.size = 1;
+    EXPECT_EQ(minipsd_resource_make_version_info(&odd, made.data(), made.size(), nullptr), MINIPSD_ERR_ARG) << "half a unit";
+    EXPECT_EQ(minipsd_resource_make_version_info(nullptr, made.data(), made.size(), nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_resource_make_version_info(&vi, nullptr, 1, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_resource_make_resolution_info(&ri, made.data(), made.size(), &needed), MINIPSD_ERR_USE_DOC_FIELD);
+
     for (std::size_t cut = 0; cut < vo.b.size(); ++cut) {   // every prefix ends inside a field
         const Bytes part(vo.b.begin(), vo.b.begin() + static_cast<std::ptrdiff_t>(cut));
         minipsd_version_info untouched{};
@@ -732,6 +751,20 @@ TEST(MinipsdReaderTest, GuidesAlphaChannelsAndTheTransparencyIndexAreParsed)
     pos = 0;
     EXPECT_EQ(minipsd_resource_grid_and_guides(&cutGuides, &grid), MINIPSD_ERR_FORMAT) << "two guides counted, one and a bit stored";
     EXPECT_EQ(minipsd_resource_next_guide(&cutGuides, &pos, &guide), MINIPSD_ERR_FORMAT);
+    // The setter: the same bytes from the header and the guides, its size known before; the count
+    // given wins over the header's.
+    const minipsd_guide two[2] = {{10 * 32, 0}, {-32, 1}};
+    std::uint8_t madeGuides[MINIPSD_GRID_AND_GUIDES_SIZE(2)];
+    std::size_t  size = 0;
+    minipsd_grid_and_guides stale = grid;
+    stale.guide_count = 9;
+    EXPECT_EQ(minipsd_resource_make_grid_and_guides(&stale, two, 2, madeGuides, sizeof madeGuides, &size), MINIPSD_OK);
+    EXPECT_EQ(Bytes(madeGuides, madeGuides + size), guides);
+    EXPECT_EQ(minipsd_resource_make_grid_and_guides(&grid, two, 2, madeGuides, sizeof madeGuides - 1, nullptr), MINIPSD_MORE);
+    EXPECT_EQ(minipsd_resource_make_grid_and_guides(&grid, nullptr, 0, madeGuides, sizeof madeGuides, &size), MINIPSD_OK);
+    EXPECT_EQ(size, MINIPSD_GRID_AND_GUIDES_SIZE(0)) << "no guides: the header";
+    EXPECT_EQ(minipsd_resource_make_grid_and_guides(&grid, nullptr, 1, madeGuides, sizeof madeGuides, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_resource_make_grid_and_guides(nullptr, two, 2, madeGuides, sizeof madeGuides, nullptr), MINIPSD_ERR_ARG);
 
     // Alpha channel names, Pascal (1006) and Unicode (1045); a name past the data is refused.
     const auto names = [](const minipsd_resource &res) {
@@ -753,6 +786,24 @@ TEST(MinipsdReaderTest, GuidesAlphaChannelsAndTheTransparencyIndexAreParsed)
     EXPECT_EQ(minipsd_resource_next_alpha_name(&longPascal, &pos, &name), MINIPSD_ERR_FORMAT);
     const minipsd_resource longUnicode = of(MINIPSD_RES_UNICODE_ALPHA_NAMES, Out().u32(2).u16('A').b);
     EXPECT_EQ(minipsd_resource_next_alpha_name(&longUnicode, &pos, &name), MINIPSD_ERR_FORMAT);
+    // The setter, from UTF-8: Unicode as given, a pair for the turtle; Pascal ASCII, '?' for each
+    // other character, at most 255 bytes; a NULL name is "".
+    const std::string longName(300, 'x');
+    const char *const alphaNames[] = {"A\xF0\x9F\x90\xA2", nullptr, longName.c_str()};
+    const auto make = [&](std::uint16_t nameId) {
+        std::size_t need = 0;
+        EXPECT_EQ(minipsd_resource_make_alpha_names(nameId, alphaNames, 3, nullptr, 0, &need), MINIPSD_MORE);
+        Bytes out(need);
+        EXPECT_EQ(minipsd_resource_make_alpha_names(nameId, alphaNames, 3, out.data(), out.size(), nullptr), MINIPSD_OK);
+        return names(of(nameId, out));
+    };
+    Bytes longUnits;
+    for (int i = 0; i < 300; ++i) longUnits.insert(longUnits.end(), {0, 'x'});
+    EXPECT_EQ(make(MINIPSD_RES_UNICODE_ALPHA_NAMES), (std::vector<Bytes>{{0, 'A', 0xD8, 0x3D, 0xDC, 0x22}, {}, longUnits}));
+    EXPECT_EQ(make(MINIPSD_RES_ALPHA_NAMES), (std::vector<Bytes>{{'A', '?'}, {}, Bytes(255, 'x')}));
+    EXPECT_EQ(minipsd_resource_make_alpha_names(MINIPSD_RES_ALPHA_IDENTIFIERS, alphaNames, 3, nullptr, 0, nullptr),
+              MINIPSD_ERR_ARG) << "another id";
+    EXPECT_EQ(minipsd_resource_make_alpha_names(MINIPSD_RES_ALPHA_NAMES, nullptr, 1, nullptr, 0, nullptr), MINIPSD_ERR_ARG);
 
     // Alpha identifiers, four bytes each.
     const minipsd_resource ids = of(MINIPSD_RES_ALPHA_IDENTIFIERS, Out().u32(5).u32(0xABCDEF01u).b);
@@ -766,6 +817,12 @@ TEST(MinipsdReaderTest, GuidesAlphaChannelsAndTheTransparencyIndexAreParsed)
     pos = 0;
     const minipsd_resource oddIds = of(MINIPSD_RES_ALPHA_IDENTIFIERS, Bytes(6, 0));
     EXPECT_EQ(minipsd_resource_next_alpha_identifier(&oddIds, &pos, &id), MINIPSD_ERR_FORMAT);
+    const std::uint32_t twoIds[2] = {5, 0xABCDEF01u};   // the setter: the same bytes
+    std::uint8_t madeIds[MINIPSD_ALPHA_IDENTIFIERS_SIZE(2)];
+    EXPECT_EQ(minipsd_resource_make_alpha_identifiers(twoIds, 2, madeIds, sizeof madeIds, &size), MINIPSD_OK);
+    EXPECT_EQ(Bytes(madeIds, madeIds + size), Bytes(ids.data.data, ids.data.data + ids.data.size));
+    EXPECT_EQ(minipsd_resource_make_alpha_identifiers(twoIds, 2, madeIds, sizeof madeIds - 1, nullptr), MINIPSD_MORE);
+    EXPECT_EQ(minipsd_resource_make_alpha_identifiers(nullptr, 2, madeIds, sizeof madeIds, nullptr), MINIPSD_ERR_ARG);
 
     // The transparency index.
     std::uint16_t index = 0;
@@ -774,6 +831,12 @@ TEST(MinipsdReaderTest, GuidesAlphaChannelsAndTheTransparencyIndexAreParsed)
     EXPECT_EQ(index, 200);
     const minipsd_resource shortTi = of(MINIPSD_RES_TRANSPARENCY_INDEX, Bytes{0});
     EXPECT_EQ(minipsd_resource_transparency_index(&shortTi, &index), MINIPSD_ERR_FORMAT);
+    std::uint8_t madeTi[MINIPSD_TRANSPARENCY_INDEX_SIZE];   // the setter: one call, the size known
+    std::size_t  tiSize = 0;
+    EXPECT_EQ(minipsd_resource_make_transparency_index(200, madeTi, sizeof madeTi, &tiSize), MINIPSD_OK);
+    EXPECT_EQ(Bytes(madeTi, madeTi + tiSize), (Bytes{0, 200}));
+    EXPECT_EQ(minipsd_resource_make_transparency_index(200, madeTi, 1, nullptr), MINIPSD_MORE);
+    EXPECT_EQ(minipsd_resource_make_transparency_index(200, nullptr, 1, nullptr), MINIPSD_ERR_ARG);
 
     // Another id, or a NULL, is the caller's mistake.
     pos = 0;
@@ -1165,6 +1228,77 @@ TEST(MinipsdReaderTest, FixedLayoutBlocksGiveTheLayersSettings)
     const minipsd_layer_view none{};
     EXPECT_EQ(minipsd_layer_block_settings(nullptr, &s), MINIPSD_ERR_ARG);
     EXPECT_EQ(minipsd_layer_block_settings(&none, nullptr), MINIPSD_ERR_ARG);
+
+    // The setter edits a run: the first block of each key asked for replaced where it is, every
+    // other block as it is, the missing ones added at the end; the view over the bytes alone reads
+    // the result.  A second 'iOpa' stays: readers never see it.
+    const Bytes kept = Out()
+        .raw(luniBlock(u"L"))
+        .raw(block("lclr", Out().u16(4).zeros(6).b))
+        .raw(block("iOpa", Bytes{128, 0, 0, 0}))
+        .raw(block("iOpa", Bytes{7, 0, 0, 0}))
+        .b;
+    minipsd_block_settings set{};
+    set.present     = MINIPSD_PRESENT_SHEET_COLOR | MINIPSD_PRESENT_FILL_OPACITY | MINIPSD_PRESENT_LAYER_ID;
+    set.sheet_color = 6;
+    set.fill_opacity = 50;
+    set.layer_id    = 9;
+    set.knockout    = 2;   // not present: not read
+    const Bytes expected = Out()
+        .raw(luniBlock(u"L"))
+        .raw(block("lclr", Out().u16(6).zeros(6).b))
+        .raw(block("iOpa", Bytes{50, 0, 0, 0}))
+        .raw(block("iOpa", Bytes{7, 0, 0, 0}))
+        .raw(block("lyid", Out().u32(9).b))
+        .b;
+    const minipsd_bytes keptRun{kept.data(), kept.size()};
+    std::size_t need = 0;
+    EXPECT_EQ(minipsd_layer_make_block_settings(&keptRun, MINIPSD_PSD, &set, nullptr, 0, &need), MINIPSD_MORE);
+    ASSERT_EQ(need, expected.size());
+    Bytes edited(kept.size() + MINIPSD_BLOCK_SETTINGS_MAX);   // the bound: one call
+    ASSERT_EQ(minipsd_layer_make_block_settings(&keptRun, 0, &set, edited.data(), edited.size(), &need), MINIPSD_OK);
+    edited.resize(need);
+    EXPECT_EQ(edited, expected);
+    const minipsd_bytes editedRun{edited.data(), edited.size()};
+    minipsd_block_settings back{};
+    ASSERT_EQ(minipsd_blocks_settings(&editedRun, MINIPSD_PSD, &back), MINIPSD_OK);
+    EXPECT_EQ(std::tie(back.present, back.sheet_color, back.fill_opacity, back.layer_id),
+              std::make_tuple(std::uint8_t(set.present), std::uint16_t(6), std::uint8_t(50), 9u));
+    set.present = 0;
+    ASSERT_EQ(minipsd_layer_make_block_settings(&keptRun, MINIPSD_PSD, &set, edited.data(), kept.size(), &need), MINIPSD_OK);
+    EXPECT_EQ(Bytes(edited.begin(), edited.begin() + std::ptrdiff_t(need)), kept) << "nothing asked: the run as it is";
+
+    // A new layer: every block, the bound exactly, read back as set; in a PSB, a long key's
+    // eight-byte length kept as it is.
+    minipsd_block_settings every = s;
+    every.present = 0x7F;
+    Bytes fresh(MINIPSD_BLOCK_SETTINGS_MAX);
+    ASSERT_EQ(minipsd_layer_make_block_settings(nullptr, MINIPSD_PSD, &every, fresh.data(), fresh.size(), &need), MINIPSD_OK);
+    EXPECT_EQ(need, std::size_t{MINIPSD_BLOCK_SETTINGS_MAX});
+    const minipsd_bytes freshRun{fresh.data(), need};
+    ASSERT_EQ(minipsd_blocks_settings(&freshRun, MINIPSD_PSD, &back), MINIPSD_OK);
+    EXPECT_EQ(std::tie(back.present, back.layer_id, back.sheet_color, back.fill_opacity, back.protection_flags, back.knockout,
+                       back.blend_clipped_elements, back.blend_interior_elements),
+              std::tie(every.present, every.layer_id, every.sheet_color, every.fill_opacity, every.protection_flags,
+                       every.knockout, every.blend_clipped_elements, every.blend_interior_elements));
+    const Bytes psb = Out().raw(block("LMsk", Bytes(4, 1), "8BIM", true)).raw(block("lclr", Out().u16(4).zeros(6).b)).b;
+    const minipsd_bytes psbRun{psb.data(), psb.size()};
+    set.present = MINIPSD_PRESENT_SHEET_COLOR;
+    Bytes psbOut(psb.size());
+    ASSERT_EQ(minipsd_layer_make_block_settings(&psbRun, MINIPSD_PSB, &set, psbOut.data(), psbOut.size(), &need), MINIPSD_OK);
+    EXPECT_EQ(psbOut, Out().raw(block("LMsk", Bytes(4, 1), "8BIM", true)).raw(block("lclr", Out().u16(6).zeros(6).b)).b);
+
+    // Refused: a malformed run, before anything is written; a NULL, a size without data, another format.
+    const minipsd_bytes cutRun{cut.data(), cut.size()}, noData{nullptr, 4};
+    EXPECT_EQ(minipsd_layer_make_block_settings(&cutRun, MINIPSD_PSD, &set, edited.data(), edited.size(), nullptr), MINIPSD_ERR_FORMAT);
+    EXPECT_EQ(minipsd_blocks_settings(&cutRun, MINIPSD_PSD, &back), MINIPSD_ERR_FORMAT);
+    EXPECT_EQ(minipsd_layer_make_block_settings(&keptRun, MINIPSD_PSD, nullptr, edited.data(), edited.size(), nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_layer_make_block_settings(&noData, MINIPSD_PSD, &set, edited.data(), edited.size(), nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_layer_make_block_settings(&keptRun, 3, &set, edited.data(), edited.size(), nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_layer_make_block_settings(&keptRun, MINIPSD_PSD, &set, nullptr, 1, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_blocks_settings(nullptr, MINIPSD_PSD, &back), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_blocks_settings(&keptRun, 3, &back), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_blocks_settings(&noData, MINIPSD_PSD, &back), MINIPSD_ERR_ARG);
 }
 
 TEST(MinipsdReaderTest, MalformedRecordsAreRefused)
@@ -1655,10 +1789,10 @@ TEST(MinipsdReaderTest, EveryModeAndDepthDecodesItsOwnChannels)
         ASSERT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, &opts), MINIPSD_OK);
         const std::vector<float> got = floatsOf(out);
         for (std::size_t i = 0; i < red.size(); ++i) {
-            EXPECT_EQ(got[i * 4 + 0], red[i]) << i;
-            EXPECT_EQ(got[i * 4 + 1], green[i]) << i;
-            EXPECT_EQ(got[i * 4 + 2], red[i]) << i;
-            EXPECT_EQ(got[i * 4 + 3], 1.0f) << "no transparency: opaque";
+            EXPECT_FLOAT_EQ(got[i * 4 + 0], red[i]) << i;
+            EXPECT_FLOAT_EQ(got[i * 4 + 1], green[i]) << i;
+            EXPECT_FLOAT_EQ(got[i * 4 + 2], red[i]) << i;
+            EXPECT_FLOAT_EQ(got[i * 4 + 3], 1.0f) << "no transparency: opaque";
         }
     }
     // A 32-bit RGB composite: the matte undone, c = 1 - (1 - s) / a.
@@ -1678,7 +1812,9 @@ TEST(MinipsdReaderTest, EveryModeAndDepthDecodesItsOwnChannels)
         minipsd_target_interleaved(&t, out.data(), 16, 4, 32);
         const minipsd_decode_opts opts{0, 0, 0, 32};
         ASSERT_EQ(minipsd_decode_composite(o.r, &t, &opts), MINIPSD_OK);
-        EXPECT_EQ(floatsOf(out), (std::vector<float>{0.5f, 1.0f, 0.0f, 0.5f}));
+        const std::vector<float> got = floatsOf(out), want = {0.5f, 1.0f, 0.0f, 0.5f};
+        ASSERT_EQ(got.size(), want.size());
+        for (std::size_t i = 0; i < want.size(); ++i) EXPECT_FLOAT_EQ(got[i], want[i]) << i;
     }
     // 1 bit: rows packed, eight pixels a byte, padded; a byte of 0 or 1 each (1 black), raw and RLE.
     {
@@ -2231,7 +2367,7 @@ TEST(MinipsdReadTest, AFileBecomesADocumentThatStandsAlone)
 
     EXPECT_EQ(r->width, 7u);
     EXPECT_EQ(r->height, 4u);
-    EXPECT_EQ(r->dpi, 72.5);
+    EXPECT_DOUBLE_EQ(r->dpi, 72.5);
     EXPECT_EQ(Bytes(r->icc, r->icc + r->icc_size), icc);
     EXPECT_EQ(r->color_mode, MINIPSD_MODE_RGB) << "the file's mode, named";
     EXPECT_EQ(r->color_mode_data.size, 0u);
@@ -2497,7 +2633,7 @@ TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
     const Doc d = readDoc(build(s).bytes, &lost);
     ASSERT_TRUE(d);
     EXPECT_EQ(lost, 0u);
-    EXPECT_EQ(d->dpi, 72.0) << "no resolution stored";
+    EXPECT_DOUBLE_EQ(d->dpi, 72.0) << "no resolution stored";
     ASSERT_EQ(d->layer_count, 1u);
     EXPECT_STREQ(d->layers[0].name, "Background");
     EXPECT_EQ(Bytes(d->layers[0].pixels, d->layers[0].pixels + 16), (Bytes{0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255,
@@ -2564,8 +2700,8 @@ TEST(MinipsdReadTest, EveryModeComesBackAsWritten)
     EXPECT_EQ(std::memcmp(f->layers[0].pixels, layer.data(), layer.size() * sizeof(float)), 0);
     float composite[8];
     std::memcpy(composite, f->composite, sizeof composite);
-    EXPECT_EQ(composite[0], 0.25f) << "opaque: as given";
-    EXPECT_EQ(composite[4], 0.5f) << "half transparent black over white";
+    EXPECT_FLOAT_EQ(composite[0], 0.25f) << "opaque: as given";
+    EXPECT_FLOAT_EQ(composite[4], 0.5f) << "half transparent black over white";
     const Bytes again = write(*f);   // the layers now in the kept 'Lr32'
     const Doc g = readDoc(again, nullptr);
     ASSERT_TRUE(g);

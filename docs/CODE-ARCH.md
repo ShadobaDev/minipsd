@@ -94,6 +94,7 @@ include/
     base.h                     return-code texts
     writer.h                   the encoder (pull), plus the 0.1-compatible minipsd_write (push)
     views.h                    typed views: a kept resource or a layer's blocks parsed into plain values
+    builders.h                 typed setters: the mirror, plain values made into a resource's or blocks' bytes
     reader.h                   the decoder: views into the caller's bytes
     read.h                     minipsd_read: a whole file into one standalone document, on the reader
     detail/
@@ -103,6 +104,7 @@ include/
       utf.h                    UTF-8 <-> UTF-16 for layer names and other text
       packbits.h               PackBits encode, decode, size bound; strided source and target
       composite.h              blending one row "over", white matte and un-matte
+      floats.h                 floating-point values compared within a tolerance, finite checks; no libm
       format.h                 the file's layout: each structure's fields and sizes, and what PSD and PSB
                                differ in (length and row-count widths, long keys, blocks)
 examples/                      the I/O implementations; built and run in CI, never installed
@@ -141,10 +143,15 @@ Rules for the split:
   - `MINIPSD_IMPLEMENTATION` is defined once, as today.
   - Each implementation file is guarded by its own `MPSD__<MODULE>_DONE`, so it is built once
     however often `minipsd.h` is included.
-  - `MINIPSD_STATIC` keeps working unchanged.
+  - `MINIPSD_STATIC` keeps working; its functions are marked possibly unused, since a file calls
+    only some.
 - **No unused internals.** The full implementation, compiled with extern linkage, leaves no
-  `static` function unused: that is a warning, and warnings are errors.
-- **Optional subsystems hide behind macros in `minipsd.h`**, the way `MINIPSD_NO_MALLOC` does.
+  `static` function unused: that is a warning, and warnings are errors. Without the reader or
+  the writer (`MINIPSD_NO_READER`, `_NO_WRITER`) the helpers in `detail/` are marked possibly
+  unused (`MPSD__SHARED`), so this check still holds for the full build. `minipsd.h` includes
+  `detail/` before either part, so the single file keeps them whichever part is left out.
+- **Optional subsystems hide behind macros in `minipsd.h`**, the way `MINIPSD_NO_MALLOC`,
+  `MINIPSD_NO_READER` and `MINIPSD_NO_WRITER` do.
 - **Promotion is additive.** `packbits` and `composite` stay internal until a consumer needs
   them. Making one public means adding a declaration to `minipsd.h`, a PATCH change, never a
   rename of anything existing.
