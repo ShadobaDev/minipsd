@@ -300,6 +300,30 @@ doc.composite = flattened;   /* width * height * 4, straight alpha; NULL: compos
 Without one, the writer composes the visible layers with "over" at their opacity: enough for a
 preview, with no guarantee for anything else.
 
+Guides, the alpha channels' names, version info, and a layer's id, colour label, fill and locks go
+in as resources and blocks. A typed setter makes their bytes from the same structs the typed
+views read ([Metadata](#metadata)), into your buffer; the size constants make one call enough:
+
+```c
+static const minipsd_guide    guides[] = { { 100 * 32, 0 }, { 50 * 32, 1 } };   /* x = 100, y = 50: pixels times 32 */
+const minipsd_grid_and_guides grid = { .version = 1, .horizontal_grid = 576, .vertical_grid = 576 };
+uint8_t                       guide_bytes[MINIPSD_GRID_AND_GUIDES_SIZE(2)];
+size_t                        n;
+minipsd_resource_make_grid_and_guides(&grid, guides, 2, guide_bytes, sizeof guide_bytes, &n);
+const minipsd_resource resources[] = { { .id = MINIPSD_RES_GRID_AND_GUIDES, .data = { guide_bytes, n } } };
+doc.resources      = resources;
+doc.resource_count = 1;
+
+const minipsd_block_settings blue = { .present = MINIPSD_PRESENT_SHEET_COLOR, .sheet_color = 5 };
+uint8_t                      label[MINIPSD_BLOCK_SETTINGS_MAX];
+minipsd_layer_make_block_settings(NULL, doc.format, &blue, label, sizeof label, &n);   /* a new layer: no blocks yet */
+logo.additional_info = (minipsd_bytes){ label, n };
+```
+
+The resolution is `dpi`: `minipsd_resource_make_resolution_info` makes nothing and says so
+(`MINIPSD_ERR_USE_DOC_FIELD`). Version info's names are UTF-16BE, as the view gives them;
+`minipsd_utf8_to_utf16be` makes them from text.
+
 The document, its pixels and the workspace must stay valid, and unchanged, until the last byte
 is out: the writer sized everything from them at the start.
 
@@ -645,6 +669,30 @@ The document lives in one block: from `MINIPSD_MALLOC`, freed by `minipsd_doc_fr
 memory of yours with `minipsd_read_size` and `minipsd_read_into`. Nothing in it points into the
 file, so the file's bytes can go as soon as the call returns.
 
+To change a setting the file already has, set it in the layer's blocks. The setter replaces the
+block where it is, since readers take the first block of a key, and copies every other one (text,
+effects) as it was. The document's layers are `const`, so edit a copy of the array:
+
+```c
+minipsd_layer               *layers = malloc(doc->layer_count * sizeof *layers);
+const minipsd_block_settings red    = { .present = MINIPSD_PRESENT_SHEET_COLOR, .sheet_color = 1 };
+const size_t                 room   = doc->layers[0].additional_info.size + MINIPSD_BLOCK_SETTINGS_MAX;
+uint8_t                     *blocks = malloc(room);
+size_t                       n;
+memcpy(layers, doc->layers, doc->layer_count * sizeof *layers);
+minipsd_layer_make_block_settings(&layers[0].additional_info, doc->format, &red, blocks, room, &n);
+layers[0].additional_info = (minipsd_bytes){ blocks, n };   /* the bottom layer's label: red */
+doc->layers = layers;
+rc = minipsd_write(doc, NULL, to_file, f);
+free(blocks);
+free(layers);
+minipsd_doc_free(doc);
+```
+
+A resource the file has is replaced the same way: copy `doc->resources`, put the made one in place
+of the entry of that id, and point `doc->resources` at the copy. `minipsd_blocks_settings` reads a
+document layer's settings from its blocks, as `minipsd_layer_block_settings` reads a file's.
+
 **What comes back.** Every layer with its rectangle, name, opacity, visibility, blend mode,
 clipping and flags, its pixels, its mask, its "Blend If" ranges and its place in the groups; the blocks a layer carries
 (text, effects, vector masks, smart objects) and the file's resources and global blocks, byte for byte, so a program
@@ -782,4 +830,4 @@ Define before the `#include` in the implementation file:
 | `MINIPSD_MALLOC` / `MINIPSD_FREE` | replace `malloc` / `free`; define both |
 | `MINIPSD_NO_MALLOC` | no allocation at all, and no `<stdlib.h>`: `minipsd_write` goes, the pull writer and the reader stay |
 | `MINIPSD_NO_READER` | no reader, typed views or `minipsd_read`: less code for a program that only writes |
-| `MINIPSD_NO_WRITER` | no writer or `minipsd_read`: less code for a program that only reads |
+| `MINIPSD_NO_WRITER` | no writer, typed setters or `minipsd_read`: less code for a program that only reads |

@@ -722,6 +722,100 @@ def check_flat_document(psd, name, mode, depth, want):
     return errors
 
 
+# --- the typed setters: resources and a layer's blocks made from values ---------------------------
+
+SETTER_NAMES = ["Alpha 1", "Spot \u2713"]   # 1006 holds the second as "Spot ?"
+SETTER_GUIDES = [(10 * 32, 0), (-32, 1)]   # a column at x = 10, a row above the canvas
+SETTER_IDS = [5, 7]
+SETTER_SETTINGS = {"layer_id": 42, "sheet_color": 3, "fill_opacity": 200, "protection_flags": 0x05, "knockout": 1,
+                   "blend_clipped_elements": 0, "blend_interior_elements": 1}
+
+
+def setters_document(lib, path):
+    """A document whose resources (1057, 1032, 1045, 1006, 1053, 1047) and whose layer's blocks the
+    typed setters made, each measured first, then made into a buffer of that size."""
+    out_args = [ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+    lib.minipsd_utf8_to_utf16be.argtypes = [ctypes.c_char_p] + out_args
+    lib.minipsd_resource_make_version_info.argtypes = [ctypes.POINTER(VersionInfo)] + out_args
+    lib.minipsd_resource_make_grid_and_guides.argtypes = [ctypes.POINTER(GridAndGuides), ctypes.POINTER(Guide),
+                                                          ctypes.c_size_t] + out_args
+    lib.minipsd_resource_make_alpha_names.argtypes = [ctypes.c_uint16, ctypes.POINTER(ctypes.c_char_p),
+                                                      ctypes.c_size_t] + out_args
+    lib.minipsd_resource_make_alpha_identifiers.argtypes = [ctypes.POINTER(ctypes.c_uint32), ctypes.c_size_t] + out_args
+    lib.minipsd_resource_make_transparency_index.argtypes = [ctypes.c_uint16] + out_args
+    lib.minipsd_layer_make_block_settings.argtypes = [ctypes.POINTER(Bytes), ctypes.c_int,
+                                                      ctypes.POINTER(BlockSettings)] + out_args
+    keep = []
+
+    def made(fn, *args):
+        need = ctypes.c_size_t()
+        if fn(*args, None, 0, ctypes.byref(need)) not in (MINIPSD_OK, MINIPSD_MORE):
+            raise RuntimeError(f"{fn.__name__}: refused")
+        buf = ctypes.create_string_buffer(max(need.value, 1))
+        keep.append(buf)
+        rc = fn(*args, ctypes.cast(buf, ctypes.c_void_p), need.value, ctypes.byref(need))
+        if rc != MINIPSD_OK:
+            raise RuntimeError(f"{fn.__name__} returned {rc}")
+        return Bytes(ctypes.cast(buf, ctypes.c_void_p), need.value)
+
+    version = VersionInfo(1, 1, made(lib.minipsd_utf8_to_utf16be, b"minipsd"),
+                          made(lib.minipsd_utf8_to_utf16be, b"Photoshop"), 1)
+    guides = (Guide * len(SETTER_GUIDES))(*[Guide(*g) for g in SETTER_GUIDES])
+    names = (ctypes.c_char_p * len(SETTER_NAMES))(*[n.encode() for n in SETTER_NAMES])
+    ids = (ctypes.c_uint32 * len(SETTER_IDS))(*SETTER_IDS)
+    resources = (Resource * 6)(
+        Resource(RES_VERSION_INFO, made(lib.minipsd_resource_make_version_info, ctypes.byref(version)), Bytes()),
+        Resource(RES_GRID_AND_GUIDES, made(lib.minipsd_resource_make_grid_and_guides,
+                                           ctypes.byref(GridAndGuides(1, 576, 576, 0)), guides, len(guides)), Bytes()),
+        Resource(RES_UNICODE_ALPHA_NAMES, made(lib.minipsd_resource_make_alpha_names, RES_UNICODE_ALPHA_NAMES,
+                                               names, len(names)), Bytes()),
+        Resource(RES_ALPHA_NAMES, made(lib.minipsd_resource_make_alpha_names, RES_ALPHA_NAMES, names, len(names)),
+                 Bytes()),
+        Resource(RES_ALPHA_IDENTIFIERS, made(lib.minipsd_resource_make_alpha_identifiers, ids, len(ids)), Bytes()),
+        Resource(RES_TRANSPARENCY_INDEX, made(lib.minipsd_resource_make_transparency_index, 3), Bytes()))
+    settings = BlockSettings(present=0x7F, **SETTER_SETTINGS)
+    pixels = (ctypes.c_uint8 * 16)(*([255, 0, 0, 255] * 4))
+    layer = (Layer * 1)()
+    layer[0] = Layer(name=b"Layer", pixels=ctypes.cast(pixels, ctypes.c_void_p), opacity=255,
+                     additional_info=made(lib.minipsd_layer_make_block_settings, None, 0, ctypes.byref(settings)))
+    doc = Doc(2, 2, 72.0, layer, 1, None, 0, MINIPSD_RLE)
+    doc.resources, doc.resource_count = ctypes.cast(resources, ctypes.c_void_p), len(resources)
+    out = bytearray()
+
+    def collect(_user, data, size):
+        out.extend(ctypes.string_at(data, size))
+        return 1
+
+    rc = lib.minipsd_write(ctypes.byref(doc), None, WRITE_FN(collect), None)
+    if rc == MINIPSD_OK:
+        path.write_bytes(out)
+    return rc
+
+
+def check_setters_document(psd, name):
+    """psd-tools reads each made resource and block as the values the setters were given."""
+    errors = []
+
+    def expect(what, got, want):
+        if got != want:
+            errors.append(f"{name}: {what} is {got!r}, expected {want!r}")
+
+    res = psd.image_resources
+    v = res.get_data(RES_VERSION_INFO)
+    expect("version info", (v.version, bool(v.has_composite), v.writer.split("\0")[0], v.reader.split("\0")[0],
+                            v.file_version), (1, True, "minipsd", "Photoshop", 1))
+    g = res.get_data(RES_GRID_AND_GUIDES)
+    expect("grid and guides", (g.version, g.horizontal, g.vertical, [tuple(x) for x in g.data]),
+           (1, 576, 576, [(loc & 0xFFFFFFFF, d) for loc, d in SETTER_GUIDES]))
+    expect("Unicode alpha names", [n.split("\0")[0] for n in res.get_data(RES_UNICODE_ALPHA_NAMES)], SETTER_NAMES)
+    expect("Pascal alpha names", list(res.get_data(RES_ALPHA_NAMES)), ["Alpha 1", "Spot ?"])
+    expect("alpha identifiers", list(res.get_data(RES_ALPHA_IDENTIFIERS)), SETTER_IDS)
+    expect("transparency index", as_int(res.get_data(RES_TRANSPARENCY_INDEX)), 3)
+    blocks = psd._record.layer_and_mask_information.layer_info.layer_records[0].tagged_blocks
+    expect("layer blocks", {field: as_int(blocks.get_data(key)) for key, field, _ in SETTINGS}, SETTER_SETTINGS)
+    return errors
+
+
 # --- files from other programs: read, written back, what is kept compared --------------------------
 
 # Files with text, effects, groups and resources of every kind; read whole, written back as they are.
@@ -1227,6 +1321,13 @@ def main():
             check_mode_document(PSDImage.open(path), name, mode, depth, expected) + check_decoded(lib, path))
         errors += found
         print(f"{name}: {'FAILED' if found else 'ok'}")
+
+    path = out / "setters.psd"
+    rc = setters_document(lib, path)
+    found = [f"setters: minipsd_write returned {rc}"] if rc != MINIPSD_OK else (
+        check_setters_document(PSDImage.open(path), "setters") + check_decoded(lib, path))
+    errors += found
+    print(f"setters: {'FAILED' if found else 'ok'}")
 
     for mode, depth, compression in FLAT:
         name = f"flat-{mode}-{depth}{'-raw' if compression else ''}"

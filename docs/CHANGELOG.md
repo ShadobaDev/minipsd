@@ -8,6 +8,16 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
 ### Added
 - `MINIPSD_NO_READER` and `MINIPSD_NO_WRITER`: a build with only the writer or only the reader;
   `minipsd_read` needs both.
+- Typed setters, the mirror of the typed views: a struct in, the bytes of a resource out, into the
+  caller's buffer, measured first: `minipsd_resource_make_version_info`, `_grid_and_guides`,
+  `_alpha_names` (1045 or 1006, from UTF-8), `_alpha_identifiers`, `_transparency_index`, and
+  `minipsd_utf8_to_utf16be`. Resolution info is `dpi`: `minipsd_resource_make_resolution_info`
+  returns the new `MINIPSD_ERR_USE_DOC_FIELD`. `minipsd_layer_make_block_settings` sets a layer's
+  id, colour label, fill, locks and knockout in the blocks it has: each replaced where it is,
+  added only when missing, the others kept. Size constants (`MINIPSD_GRID_AND_GUIDES_SIZE(n)`,
+  `MINIPSD_BLOCK_SETTINGS_MAX`, ...) make one call with a fixed buffer enough.
+- `minipsd_blocks_settings`: a layer's settings from its blocks alone, such as a document's
+  `minipsd_layer.additional_info`.
 
 ### Fixed
 - Under `MINIPSD_STATIC`, the functions a file does not call no longer warn (`-Wunused-function`

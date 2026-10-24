@@ -489,7 +489,7 @@ feature; a supplied composite needs nothing. See
       saver (S7.4) needs it for images that are not RGB.
       *Done when:* documents of each mode and depth that minipsd writes decode the same in
       psd-tools and in minipsd, and `minipsd_read` round-trips psd-tools' files of every mode.
-- [ ] **S6.20** Typed setters: the mirror of S6.17's views, for the writer. A struct in, the
+- [x] **S6.20** Typed setters: the mirror of S6.17's views, for the writer. A struct in, the
       bytes of a resource or a block out, into the caller's buffer (the size asked first, as
       `minipsd_layer_name` does), ready for `minipsd_doc.resources` or a layer's
       `additional_info`: resolution info (1005; today only `dpi` writes it), version info
@@ -499,6 +499,8 @@ feature; a supplied composite needs nothing. See
       `MINIPSD_NO_WRITER` they are left out, as the views are under `MINIPSD_NO_READER`.
       *Done when:* each setter's bytes read back through its view to the same struct, and
       psd-tools reads them as written.
+      Done: 1005 stays `dpi`'s (`MINIPSD_ERR_USE_DOC_FIELD`); the block setter edits the run a
+      layer has (replaced where it is, added only when missing), all seven blocks.
 
 ## 7. Interoperability
 

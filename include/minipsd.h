@@ -41,7 +41,8 @@
  *   the caller's memory, stay;
  * - \c MINIPSD_NO_READER: leave out the reader, the typed views and minipsd_read, for a program
  *   that only writes;
- * - \c MINIPSD_NO_WRITER: leave out the writer and minipsd_read, for a program that only reads.
+ * - \c MINIPSD_NO_WRITER: leave out the writer, the typed setters and minipsd_read, for a program
+ *   that only reads.
  *
  * minipsd does no I/O of its own and includes no <stdio.h>: files, pipes and sockets are the
  * caller's, fed by minipsd_write or minipsd_writer_fill (examples/ in the repository has each).

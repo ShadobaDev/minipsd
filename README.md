@@ -62,7 +62,8 @@ converted: layers anywhere on or off the canvas (by default the
 full canvas), or empty, with UTF-8 names, opacity and visibility; the merged composite image,
 yours or composed as a best effort; the resolution; an optional ICC profile; groups, layer
 masks, blend modes, clipping, and blocks and resources kept from a file (text, effects), as
-they are.
+they are; guides, alpha channel names, version info and a layer's id, colour label, fill and locks
+made from plain values.
 Channels are PackBits RLE or raw, or ZIP through your deflate (zlib's `compress2`: minipsd
 implements none). Each side is limited to 30 000 px, or 300 000 px written as a
 PSB (Photoshop's large document format).
@@ -99,7 +100,7 @@ Define before the implementation include:
 | `MINIPSD_MALLOC` / `MINIPSD_FREE` | replace `malloc` / `free` |
 | `MINIPSD_NO_MALLOC` | leave out every allocation (`minipsd_write`); the pull writer stays |
 | `MINIPSD_NO_READER` | leave out the reader, the typed views and `minipsd_read`: a program that only writes |
-| `MINIPSD_NO_WRITER` | leave out the writer and `minipsd_read`: a program that only reads |
+| `MINIPSD_NO_WRITER` | leave out the writer, the typed setters and `minipsd_read`: a program that only reads |
 
 ## Documentation
 

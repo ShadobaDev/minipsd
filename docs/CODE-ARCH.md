@@ -94,6 +94,7 @@ include/
     base.h                     return-code texts
     writer.h                   the encoder (pull), plus the 0.1-compatible minipsd_write (push)
     views.h                    typed views: a kept resource or a layer's blocks parsed into plain values
+    builders.h                 typed setters: the mirror, plain values made into a resource's or blocks' bytes
     reader.h                   the decoder: views into the caller's bytes
     read.h                     minipsd_read: a whole file into one standalone document, on the reader
     detail/

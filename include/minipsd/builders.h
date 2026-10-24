@@ -48,6 +48,7 @@ static int mpsd__made(mpsd__make_fn make, const void *what, uint8_t *buf, size_t
     make(&count, what);
     if (needed) *needed = (size_t)count.count;
     if (cap < count.count) return MINIPSD_MORE;
+    if (!count.count) return MINIPSD_OK;                  /* nothing to write: buf may be NULL */
     to.at    = buf;
     out.user = &to;
     make(&out, what);
