@@ -349,7 +349,7 @@ static void check_document(const minipsd_doc *doc, const minipsd_write_opts *opt
     if (f) fclose(f);
 
     loader = vips_foreign_find_load(path);
-    check(loader && strcmp(loader, "VipsForeignLoadPsdFile") == 0, "found as psdload", e->name);
+    check(loader && strcmp(loader, "MinipsdVipsPsdloadFile") == 0, "found as psdload", e->name);
     vips_error_clear();
     check_image(vips_image_new_from_file(path, NULL), doc, e, "file", &b);
     check_image(vips_image_new_from_file(path, "access", VIPS_ACCESS_SEQUENTIAL, NULL), doc, e, "file, sequential", &b);
@@ -437,7 +437,7 @@ static void check_saved(VipsImage *image, const char *name, const char *dir, int
         return;
     }
     saver = vips_foreign_find_save(path);
-    check(saver && strcmp(saver, "VipsForeignSavePsdFile") == 0, "found as psdsave", name);
+    check(saver && strcmp(saver, "MinipsdVipsPsdsaveFile") == 0, "found as psdsave", name);
 
     /* The same bytes three ways. */
     file   = read_all(path, &file_size);
@@ -849,7 +849,7 @@ int main(int argc, char **argv)
 
     /* Not a PSD: psdload does not claim it. */
     loader = vips_foreign_find_load_buffer(junk, sizeof junk);
-    check(!loader || strcmp(loader, "VipsForeignLoadPsdBuffer") != 0, "junk not claimed", "junk");
+    check(!loader || strcmp(loader, "MinipsdVipsPsdloadBuffer") != 0, "junk not claimed", "junk");
     vips_error_clear();
 
     if (argc == 3) check_list(argv[2]);

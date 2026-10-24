@@ -9,7 +9,11 @@
 #                        compared with minipsd's own decode (test_vips.c)
 # ---------------------------------------------------------------------------
 
-add_library(minipsd_vips STATIC minipsd_vips.c minipsd_vips.h)
+add_library(minipsd_vips STATIC
+    minipsd_vips.c minipsd_vips.h
+    minipsd_vips_psdload.c minipsd_vips_psdload.h
+    minipsd_vips_psdsave.c minipsd_vips_psdsave.h
+    minipsd_vips_util.c minipsd_vips_util.h)
 add_library(minipsd::vips ALIAS minipsd_vips)
 target_include_directories(minipsd_vips PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(minipsd_vips PUBLIC minipsd_libvips PRIVATE minipsd::minipsd minipsd_libvips_zlib)
