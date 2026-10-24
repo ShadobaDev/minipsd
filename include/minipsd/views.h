@@ -171,7 +171,7 @@ MINIPSDDEF int minipsd_resource_next_alpha_identifier(const minipsd_resource *re
 MINIPSDDEF int minipsd_resource_transparency_index(const minipsd_resource *res, uint16_t *index)
 {
     if (!index || !mpsd__resource_of(res, MINIPSD_RES_TRANSPARENCY_INDEX)) return MINIPSD_ERR_ARG;
-    if (res->data.size < MPSD__TRANSPARENCY_INDEX_SIZE) return MINIPSD_ERR_FORMAT;
+    if (res->data.size < MINIPSD_TRANSPARENCY_INDEX_SIZE) return MINIPSD_ERR_FORMAT;
     *index = (uint16_t)mpsd__get16(res->data.data);
     return MINIPSD_OK;
 }

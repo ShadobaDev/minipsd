@@ -572,6 +572,9 @@ Large cases. Each would start with a *design* step, and only when a real consume
 - Segment output for zero-copy saves (`E3`).
 - In-place patching of fixed-size fields.
 - Making `packbits` or `composite` public.
+- Typed setters that allocate (S6.20's, through `MINIPSD_MALLOC`): each piece would need freeing
+  after the write, apart from `minipsd_doc_free`, and they would not exist under
+  `MINIPSD_NO_MALLOC`. The size constants make one call with the caller's buffer the common case.
 - The C++ facade.
 - A layer's own alpha and spot channels (ids other than R, G, B, transparency and the masks):
   no file we have holds one, and Photoshop does not write them. Until a file shows one, such a

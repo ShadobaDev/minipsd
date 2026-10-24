@@ -681,6 +681,23 @@ TEST(MinipsdReaderTest, ResolutionAndVersionInfoAreParsedFieldByField)
     EXPECT_EQ(minipsd_utf16be_to_utf8(&vi.writer_name, text, sizeof text, nullptr), MINIPSD_OK);
     EXPECT_STREQ(text, "Ps") << "the NUL counted in the name ends it";
 
+    // The setters, the mirror: version info made from the view's struct is the bytes it came from,
+    // measured first; 1005 is the document's dpi, never made.
+    std::size_t needed = 0;
+    EXPECT_EQ(minipsd_resource_make_version_info(&vi, nullptr, 0, &needed), MINIPSD_MORE);
+    ASSERT_EQ(needed, vo.b.size());
+    Bytes made(needed, 0xEE);
+    EXPECT_EQ(minipsd_resource_make_version_info(&vi, made.data(), needed - 1, nullptr), MINIPSD_MORE);
+    EXPECT_EQ(made, Bytes(needed, 0xEE)) << "too small: nothing written";
+    EXPECT_EQ(minipsd_resource_make_version_info(&vi, made.data(), made.size(), nullptr), MINIPSD_OK);
+    EXPECT_EQ(made, vo.b);
+    minipsd_version_info odd = vi;
+    odd.reader_name.size = 1;
+    EXPECT_EQ(minipsd_resource_make_version_info(&odd, made.data(), made.size(), nullptr), MINIPSD_ERR_ARG) << "half a unit";
+    EXPECT_EQ(minipsd_resource_make_version_info(nullptr, made.data(), made.size(), nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_resource_make_version_info(&vi, nullptr, 1, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_resource_make_resolution_info(&ri, made.data(), made.size(), &needed), MINIPSD_ERR_USE_DOC_FIELD);
+
     for (std::size_t cut = 0; cut < vo.b.size(); ++cut) {   // every prefix ends inside a field
         const Bytes part(vo.b.begin(), vo.b.begin() + static_cast<std::ptrdiff_t>(cut));
         minipsd_version_info untouched{};
@@ -774,6 +791,12 @@ TEST(MinipsdReaderTest, GuidesAlphaChannelsAndTheTransparencyIndexAreParsed)
     EXPECT_EQ(index, 200);
     const minipsd_resource shortTi = of(MINIPSD_RES_TRANSPARENCY_INDEX, Bytes{0});
     EXPECT_EQ(minipsd_resource_transparency_index(&shortTi, &index), MINIPSD_ERR_FORMAT);
+    std::uint8_t madeTi[MINIPSD_TRANSPARENCY_INDEX_SIZE];   // the setter: one call, the size known
+    std::size_t  tiSize = 0;
+    EXPECT_EQ(minipsd_resource_make_transparency_index(200, madeTi, sizeof madeTi, &tiSize), MINIPSD_OK);
+    EXPECT_EQ(Bytes(madeTi, madeTi + tiSize), (Bytes{0, 200}));
+    EXPECT_EQ(minipsd_resource_make_transparency_index(200, madeTi, 1, nullptr), MINIPSD_MORE);
+    EXPECT_EQ(minipsd_resource_make_transparency_index(200, nullptr, 1, nullptr), MINIPSD_ERR_ARG);
 
     // Another id, or a NULL, is the caller's mistake.
     pos = 0;

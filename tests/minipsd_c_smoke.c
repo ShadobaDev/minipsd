@@ -112,6 +112,16 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
                 || minipsd_utf16be_to_utf8(&version.writer_name, name, sizeof name, NULL) != MINIPSD_OK
                 || memcmp(name, "A", 2) != 0)
                 return -116;
+            {   /* the setters, the mirror: the same bytes back; 1005 is the document's dpi */
+                uint8_t remade[sizeof vi], unit[2], ti[MINIPSD_TRANSPARENCY_INDEX_SIZE];
+                size_t  made_size = 0;
+                if (minipsd_resource_make_version_info(&version, remade, sizeof remade, &made_size) != MINIPSD_OK
+                    || made_size != sizeof vi || memcmp(remade, vi, sizeof vi) != 0
+                    || minipsd_utf8_to_utf16be("A", unit, sizeof unit, &made_size) != MINIPSD_OK || made_size != 2 || unit[1] != 'A'
+                    || minipsd_resource_make_transparency_index(7, ti, sizeof ti, NULL) != MINIPSD_OK || ti[1] != 7
+                    || minipsd_resource_make_resolution_info(&resolution, NULL, 0, NULL) != MINIPSD_ERR_USE_DOC_FIELD)
+                    return -122;
+            }
         }
         {   /* the other typed views, each over a resource built by hand: one item, then the end */
             static const uint8_t guides[] = { 0, 0, 0, 1,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 1,  0, 0, 0, 64,  1 };

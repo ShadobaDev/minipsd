@@ -100,7 +100,6 @@ MPSD__SHARED static uint32_t mpsd__max_side(unsigned psb) { return psb ? MINIPSD
 #define MPSD__GUIDE_SIZE  5
 
 #define MPSD__PALETTE_SIZE 768   /* an indexed file's colour mode data: 256 red, then green, then blue */
-#define MPSD__TRANSPARENCY_INDEX_SIZE 2   /* one palette entry, two bytes */
 #define MPSD__FILL_OPAQUE             255 /* a layer's fill without an 'iOpa' block */
 
 MPSD__SHARED static uint64_t mpsd__resource_size(size_t name, size_t data)
