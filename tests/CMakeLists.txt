@@ -11,6 +11,7 @@
 #   example.<name>     each program in examples/, its output checked against the golden bytes
 #   fuzz.replay.<file> the reader's fuzz target on each input in fuzz/regressions/ (see fuzz/)
 #   consumer-<mode>    a tiny project using minipsd each supported way (see consumer/)
+#   vips.<name>        the libvips plugin (libvips-plugin/), with MINIPSD_VIPS_PLUGIN
 # ---------------------------------------------------------------------------
 
 # GoogleTest: a system install if there is one, otherwise fetched.
@@ -216,8 +217,21 @@ endforeach()
 add_test(NAME fuzz.replay.example COMMAND minipsd-fuzz-replay "${PROJECT_BINARY_DIR}/examples/out-write_memory/out.psd")
 set_tests_properties(fuzz.replay.example PROPERTIES FIXTURES_REQUIRED minipsd-example-psd)
 
+# libvips, for what uses it (cmake/minipsd_libvips.cmake): both off by default, as libvips is
+# fetched (Windows) or must be installed (pkg-config).
+option(MINIPSD_VIPS_EXAMPLE "Build and run examples/vips_composite.c against libvips (fetched on Windows)" OFF)
+option(MINIPSD_VIPS_PLUGIN  "Build and test the libvips plugin in libvips-plugin/ (libvips fetched on Windows)" OFF)
+if(MINIPSD_VIPS_EXAMPLE OR MINIPSD_VIPS_PLUGIN)
+    include("${PROJECT_SOURCE_DIR}/cmake/minipsd_libvips.cmake")
+endif()
+
 # The examples (examples/), built with the same warnings and run as tests.
 add_subdirectory("${PROJECT_SOURCE_DIR}/examples" "${PROJECT_BINARY_DIR}/examples")
+
+# The libvips plugin: psdload and psdsave registered by the program that links it.
+if(MINIPSD_VIPS_PLUGIN)
+    add_subdirectory("${PROJECT_SOURCE_DIR}/libvips-plugin" "${PROJECT_BINARY_DIR}/libvips-plugin")
+endif()
 
 # clang-tidy (the linux-tidy preset) on our own targets only, not on a fetched GoogleTest.
 # Checks and options come from .clang-tidy at the repository root.
