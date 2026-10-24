@@ -10,7 +10,15 @@
 #                          zlib-compatible; versions.json) with zlib's own headers, fetched and
 #                          pinned, since the zip has none; elsewhere pkg-config's zlib
 #   MINIPSD_LIBVIPS_ENV    the environment its tests run in (Windows: the DLLs on PATH), or ""
+#
+# A program with libvips of its own defines both targets before adding minipsd, visible to it (an
+# INTERFACE library, or IMPORTED GLOBAL); nothing is then fetched or found here.
 # ---------------------------------------------------------------------------
+
+if(TARGET minipsd_libvips AND TARGET minipsd_libvips_zlib)
+    set(MINIPSD_LIBVIPS_ENV "")
+    return()
+endif()
 
 if(WIN32)
     set(MINIPSD_VIPS_VERSION 8.18.7)

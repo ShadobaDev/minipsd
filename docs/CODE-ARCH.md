@@ -115,6 +115,11 @@ examples/                      the I/O implementations; built and run in CI, nev
   write_nonblocking.c          O_NONBLOCK pipe + poll (POSIX)
   read_file.c                  whole file into memory, described, every layer and the composite decoded
   resave.c                     minipsd_read with stored, one layer changed, written back: the round trip
+libvips-plugin/                minipsd as libvips' loader and saver (psdload, psdsave), registered by the program
+  minipsd_vips.h, .c           minipsd_vips_init and the six operations; minipsd compiled in, private
+  test_vips.c                  documents and files loaded and saved through libvips, against minipsd's decode
+cmake/
+  minipsd_libvips.cmake        libvips and its zlib for the example and the plugin: fetched on Windows, else pkg-config
 tests/
   test_<module>.cpp            one file per module; detail modules are tested directly
   fuzz/                        the reader's libFuzzer target, run locally (linux-fuzz preset);
@@ -730,7 +735,7 @@ commit message. [ROADMAP.md](ROADMAP.md) turns these into numbered steps.
 | **4. Reader** | `reader.h` for the own subset, then real-application files; fuzzing | 0.2.1 |
 | **5. Round trip** | layer rectangles in the writer, a supplied composite, full import, kept unknown content, pass-through | 0.2.x |
 | **6. Features** | one row of the table above per stage, writer and reader together | 0.2.x |
-| **7. Interoperability** | libvips: an example and a MANUAL chapter | 0.2.x |
+| **7. Interoperability** | libvips: an example, a MANUAL chapter, and the plugin (`psdload`, `psdsave`) | 0.3.x |
 
 Every stage follows these rules:
 

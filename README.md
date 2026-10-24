@@ -85,6 +85,9 @@ no deflate), and are copied as they are when such a file is read and written bac
 files are bounded by caller limits. How it does on 315 files from
 other programs: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
+In a program built on libvips, [libvips-plugin/](libvips-plugin/) makes minipsd its PSD and PSB
+loader and saver; see the manual's [With libvips](docs/MANUAL.md#with-libvips).
+
 ## Adding it to a project
 
 Copy the `include/` directory, or use CMake (FetchContent, git submodule, `find_package`),

@@ -220,7 +220,6 @@ set_tests_properties(fuzz.replay.example PROPERTIES FIXTURES_REQUIRED minipsd-ex
 # libvips, for what uses it (cmake/minipsd_libvips.cmake): both off by default, as libvips is
 # fetched (Windows) or must be installed (pkg-config).
 option(MINIPSD_VIPS_EXAMPLE "Build and run examples/vips_composite.c against libvips (fetched on Windows)" OFF)
-option(MINIPSD_VIPS_PLUGIN  "Build and test the libvips plugin in libvips-plugin/ (libvips fetched on Windows)" OFF)
 if(MINIPSD_VIPS_EXAMPLE OR MINIPSD_VIPS_PLUGIN)
     include("${PROJECT_SOURCE_DIR}/cmake/minipsd_libvips.cmake")
 endif()

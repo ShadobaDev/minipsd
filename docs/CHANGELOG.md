@@ -3,6 +3,24 @@
 Changes between releases, for users of minipsd. Versioning follows the pre-1.0 rules in
 [TODO.md](TODO.md): breaking changes bump the MINOR, additions and fixes the PATCH.
 
+## [Unreleased]
+
+### Added
+- The libvips plugin (`libvips-plugin/`, `MINIPSD_VIPS_PLUGIN`, the static library
+  `minipsd::vips`): minipsd as libvips' loader and saver of PSD and PSB, registered with
+  `minipsd_vips_init()` after `VIPS_INIT`. `psdload` gives the composite or, with `layer`, one
+  layer placed by its offset, decoded in bands of rows from libvips' threads; grey, RGB, CMYK,
+  bitmap, indexed (through its palette), Lab and multichannel at every depth, with the
+  resolution, ICC profile, EXIF, XMP, IPTC and `psd-*` fields. `psdsave` writes an image as one
+  layer with its composite, with `psb`, `zip` and `layer_name`.
+
+### Fixed
+- A composite's transparency is now named where the layer count cannot say it (a 32-bit
+  document, whose layers go in `Lr32` with a positive count, and a document with no layers): 1006,
+  1045 and 1053 "Transparency", as Photoshop writes them, unless the document keeps names of its
+  own. GIMP showed it as an extra channel. A document with no layers also gets an empty `Mtrn`
+  (`Mt16`, `Mt32`): its transparency was lost before.
+
 ## [0.3.1] — 2026-10-24
 
 ### Added

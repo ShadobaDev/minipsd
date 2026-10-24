@@ -28,8 +28,10 @@ project(minipsd
 # Tests and install rules are for working on minipsd itself, not for consumers.
 option(MINIPSD_BUILD_TESTS "Build the minipsd tests"          ${PROJECT_IS_TOP_LEVEL})
 option(MINIPSD_INSTALL     "Generate the minipsd install rules" ${PROJECT_IS_TOP_LEVEL})
+# The libvips plugin (libvips-plugin/): psdload and psdsave for a program that links libvips.
+option(MINIPSD_VIPS_PLUGIN "Build the libvips plugin, minipsd::vips (libvips fetched on Windows)" OFF)
 
-if(PROJECT_IS_TOP_LEVEL OR MINIPSD_BUILD_TESTS)
+if(PROJECT_IS_TOP_LEVEL OR MINIPSD_BUILD_TESTS OR MINIPSD_VIPS_PLUGIN)
     enable_language(C)   # also gives GNUInstallDirs a known architecture
 endif()
 include(GNUInstallDirs)
@@ -170,5 +172,8 @@ endif()
 if(MINIPSD_BUILD_TESTS)
     enable_language(CXX)
     enable_testing()
-    add_subdirectory(tests)
+    add_subdirectory(tests)   # the plugin too, with the tests' warnings and its own test
+elseif(MINIPSD_VIPS_PLUGIN)
+    include(cmake/minipsd_libvips.cmake)
+    add_subdirectory(libvips-plugin)
 endif()

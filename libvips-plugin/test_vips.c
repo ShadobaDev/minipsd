@@ -33,6 +33,7 @@
 #define PIXELS         (WIDTH * HEIGHT)
 #define RGBA           4
 #define MAX_PLANES     5      /* CMYK and transparency */
+#define CMYK_COLORS    4      /* CMYK's colour channels */
 #define DPI            300.0
 #define ASPECT         0.9
 #define MM_PER_INCH    25.4
@@ -47,6 +48,9 @@
 #define HALF_OPAQUE    128
 #define ZIP_LEVEL      6
 #define COMPOSITE      (-1)   /* decode_image's layer: the composite */
+#define TALL_W         1024   /* the tall image: PSD's highest, 60 MB of grey and transparency; */
+#define TALL_H         MINIPSD_MAX_SIDE   /* libvips caches rows, so its memory follows the width */
+#define BOUND          8      /* read in bands, libvips holds less than an eighth of it */
 #define STORED_RLE     1      /* a channel's stored compression markers */
 #define STORED_ZIP     2
 
@@ -103,9 +107,30 @@ static int inflate_zlib(void *user, const uint8_t *src, size_t src_size, uint8_t
     return uncompress(dst, &n, src, (uLong)src_size) != Z_OK || n != dst_size;
 }
 
+/* CMYK's ink the other way round, in place: PSD's inverted (full: no ink) to libvips' (0: no ink),
+   and back.  8- or 16-bit samples, the four colour channels of each pixel. */
+static void invert_cmyk(uint8_t *pixels, size_t count, unsigned bands, size_t sample)
+{
+    size_t   i;
+    unsigned c;
+    for (i = 0; i < count; ++i)
+        for (c = 0; c < CMYK_COLORS; ++c) {
+            uint8_t *v = pixels + (i * bands + c) * sample;
+            if (sample == sizeof(uint16_t)) {
+                uint16_t w;
+                memcpy(&w, v, sizeof w);
+                w = (uint16_t)(USHRT_MAX - w);
+                memcpy(v, &w, sizeof w);
+            } else {
+                *v = (uint8_t)(UCHAR_MAX - *v);
+            }
+        }
+}
+
 /* The composite (layer -1) or a layer as minipsd decodes it, laid out as the loader gives it:
    interleaved, the colour channels and transparency (a layer's always) up to MINIPSD_PLANES,
-   bitmap's black 0 and white 255, indexed through its palette.  NULL with the error in *rc when
+   bitmap's black 0 and white 255, indexed through its palette, CMYK's ink 0 for none.  NULL with
+   the error in *rc when
    minipsd refuses it, or MINIPSD_ERR_SIZE for an empty layer, which the loader refuses too. */
 static uint8_t *decode_image(const void *file, size_t size, int layer, size_t *bytes, int *rc)
 {
@@ -178,6 +203,8 @@ static uint8_t *decode_image(const void *file, size_t size, int layer, size_t *b
     }
     if (info.color_mode == MINIPSD_MODE_BITMAP)
         for (i = 0; i < *bytes; ++i) pixels[i] = pixels[i] ? 0 : UCHAR_MAX;
+    if (info.color_mode == MINIPSD_MODE_CMYK)
+        invert_cmyk(pixels, (size_t)width * height, bands, info.depth == 16 ? sizeof(uint16_t) : 1);
     if (info.color_mode == MINIPSD_MODE_INDEXED)
         for (p = pixels, i = 0; i < (size_t)width * height; ++i, p += bands) {
             const unsigned k = p[0];
@@ -285,6 +312,8 @@ static void check_layers(const char *path, const minipsd_doc *doc, size_t sample
         want_bytes = (size_t)w * (size_t)h * sample
                    * (doc->color_mode == MINIPSD_MODE_CMYK ? MAX_PLANES : doc->color_mode == MINIPSD_MODE_GREY ? 2u : RGBA);
         got = vips_image_write_to_memory(image, &bytes);
+        if (got && doc->color_mode == MINIPSD_MODE_CMYK && bytes == want_bytes)   /* back to PSD's ink */
+            invert_cmyk((uint8_t *)got, (size_t)w * (size_t)h, CMYK_COLORS + 1, sample);
         check(got && bytes == want_bytes && memcmp(got, l->pixels, bytes) == 0, "pixels as given", name);
         vips_error_clear();
         g_free(got);
@@ -487,6 +516,70 @@ static size_t layer_count(const void *file, size_t size)
     return minipsd_reader_init(&r, file, size, workspace, sizeof workspace, NULL, &info) == MINIPSD_OK ? info.layer_count : 0;
 }
 
+/* A tall image read sequentially is decoded in bands: libvips' tracked memory, its regions and
+   caches, stays far below the image's size (the file is mapped, which libvips does not count).
+   Run first, before anything else raises the high-water mark. */
+static void check_bounded(const char *dir)
+{
+    char         path[PATH_MAX_SIZE];
+    const size_t bytes = (size_t)TALL_W * TALL_H * 2;   /* grey and transparency */
+    uint8_t     *composite = (uint8_t *)malloc(bytes);
+    out_buffer   b = { NULL, 0, 0 };
+    minipsd_doc  doc;
+    VipsImage   *image;
+    FILE        *f;
+    double       mean = 0.0;
+    size_t       i;
+    if (!composite) {
+        check(0, "memory for the tall image", "bounded");
+        return;
+    }
+    for (i = 0; i < bytes; ++i) composite[i] = (uint8_t)(i % 2 ? UCHAR_MAX : i / 2 % TALL_W);
+    memset(&doc, 0, sizeof doc);
+    doc.width = TALL_W, doc.height = TALL_H, doc.dpi = DPI;
+    doc.color_mode = MINIPSD_MODE_GREY;
+    doc.composite  = composite;
+    check(minipsd_write(&doc, NULL, to_buffer, &b) == MINIPSD_OK, "tall image written", "bounded");
+    free(composite);
+    snprintf(path, sizeof path, "%s/tall.psd", dir);
+    f = fopen(path, "wb");
+    check(f && b.data && fwrite(b.data, 1, b.size, f) == b.size, "file written", path);
+    if (f) fclose(f);
+    free(b.data);
+
+    image = vips_image_new_from_file(path, "access", VIPS_ACCESS_SEQUENTIAL, NULL);
+    check(image && vips_avg(image, &mean, NULL) == 0, "read through", path);
+    printf("tall image: %zu bytes decoded, libvips held at most %zu\n", bytes, vips_tracked_get_mem_highwater());
+    check(vips_tracked_get_mem_highwater() < bytes / BOUND, "memory bounded by bands, not by the image", path);
+    vips_error_clear();
+    if (image) g_object_unref(image);
+}
+
+/* The composite's first pixel's sample in channel k, as the file stores it (minipsd alone, 8-bit);
+   -1 when it does not decode. */
+static int stored_sample(const char *path, unsigned k)
+{
+    uint8_t             workspace[WORKSPACE_SIZE], *data, *pixels = NULL;
+    minipsd_reader     *r;
+    minipsd_info        info;
+    minipsd_target      target;
+    minipsd_decode_opts opts;
+    size_t              size = 0;
+    int                 sample = -1;
+    if (!(data = read_all(path, &size))) return -1;
+    if (minipsd_reader_init(&r, data, size, workspace, sizeof workspace, NULL, &info) == MINIPSD_OK && info.depth == 8
+        && (pixels = (uint8_t *)malloc((size_t)info.width * info.height * MINIPSD_PLANES))) {
+        minipsd_target_interleaved(&target, pixels, (size_t)info.width * MINIPSD_PLANES, MINIPSD_PLANES, 8);
+        memset(&opts, 0, sizeof opts);
+        opts.depth   = 8;
+        opts.y_count = 1;
+        if (minipsd_decode_composite(r, &target, &opts) == MINIPSD_OK) sample = pixels[k];
+    }
+    free(pixels);
+    free(data);
+    return sample;
+}
+
 /* The stored compression marker of the file's first layer's first channel; -1 without one. */
 static int first_layer_compression(const char *path)
 {
@@ -546,6 +639,7 @@ int main(int argc, char **argv)
     static uint16_t      grey16[PIXELS * 2], rgba16[PIXELS * RGBA];
     static uint8_t       rgb8[PIXELS * 3];
     static float         rgbf[PIXELS * 3];
+    static uint8_t       cyan[PIXELS * CMYK_COLORS];   /* libvips' ink: full cyan, nothing else */
     static const char    junk[] = "8BPX, not a PSD";
     char                 path[PATH_MAX_SIZE];
     uint8_t              transparency[MINIPSD_TRANSPARENCY_INDEX_SIZE];
@@ -564,6 +658,7 @@ int main(int argc, char **argv)
     vips_concurrency_set(THREADS);
     minipsd_vips_init();
     minipsd_vips_init();   /* twice is harmless */
+    check_bounded(argv[1]);
 
     for (i = 0; i < sizeof rgba; ++i) rgba[i] = (uint8_t)(i * 7);
     for (i = 0; i < sizeof cmyka; ++i) cmyka[i] = (uint8_t)(i * 5);
@@ -576,6 +671,7 @@ int main(int argc, char **argv)
     for (i = 0; i < sizeof zip_b; ++i) zip_b[i] = (uint8_t)(i / 97);
     for (i = 0; i < sizeof rgb8; ++i) rgb8[i] = (uint8_t)(i * 17 + i / 255);
     for (i = 0; i < PIXELS * 3; ++i) rgbf[i] = (float)(i % 1001) / 1000.0f;
+    for (i = 0; i < PIXELS; ++i) cyan[i * CMYK_COLORS] = UCHAR_MAX;
 
     {   /* 8-bit RGB with a layer, a profile and non-square pixels; as PSD and as PSB */
         static const expected psd = { "rgb8", 4, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB, 8 };
@@ -697,6 +793,12 @@ int main(int argc, char **argv)
         check_saved(make_image(indices, 1, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_B_W), "save-grey8.psd", argv[1], 1, NULL, 0);
         check_saved(make_image(grey16, 2, VIPS_FORMAT_USHORT, VIPS_INTERPRETATION_GREY16), "save-greya16.psd", argv[1], 0, NULL, 0);
         check_saved(make_image(cmyka, 4, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_CMYK), "save-cmyk8.psd", argv[1], 1, NULL, 0);
+        check_saved(make_image(cyan, CMYK_COLORS, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_CMYK), "save-cyan.psd", argv[1], 1, NULL, 0);
+        snprintf(path, sizeof path, "%s/save-cyan.psd", argv[1]);
+        check(stored_sample(path, 0) == 0 && stored_sample(path, 1) == UCHAR_MAX, "full cyan stored as 0, no magenta as 255", path);
+        snprintf(path, sizeof path, "%s/save-cmyk8.psd", argv[1]);
+        check(stored_sample(path, 0) == UCHAR_MAX - cmyka[0] && stored_sample(path, 3) == UCHAR_MAX - cmyka[3],
+              "CMYK stored as PSD's inverted ink", path);
         check_saved(make_image(rgbf, 3, VIPS_FORMAT_FLOAT, VIPS_INTERPRETATION_scRGB), "save-float.psd", argv[1], 1, NULL, 0);
         check_saved(make_image(rgb8, 3, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-zip.psd", argv[1], 1, "zip", TRUE);
         snprintf(path, sizeof path, "%s/save-zip.psd", argv[1]);

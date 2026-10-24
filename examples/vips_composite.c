@@ -127,7 +127,7 @@ static uint8_t *render(const minipsd_doc *d, size_t *unmapped)
             || l->right <= l->left || l->bottom <= l->top)
             continue;
         if (!(in[n] = layer_image(l))) goto done;
-        modes[n - 1] = blend_mode(l->blend_mode, &mapped);
+        modes[n - 1] = (int)blend_mode(l->blend_mode, &mapped);
         *unmapped   += !mapped;
         x[n - 1]     = (int)l->left;   /* where the layer goes; it may reach past the canvas */
         y[n - 1]     = (int)l->top;
@@ -199,12 +199,12 @@ static void make_layers(minipsd_layer layers[4])
     int x, y;
     for (y = 0; y < H; ++y)
         for (x = 0; x < W; ++x) {   /* a gradient: red across, green down, opaque */
-            uint8_t *p = background + ((size_t)y * W + x) * RGBA;
+            uint8_t *p = background + ((size_t)y * W + (size_t)x) * RGBA;
             p[0] = (uint8_t)(x * FULL / (W - 1)); p[1] = (uint8_t)(y * FULL / (H - 1)); p[2] = 160; p[3] = FULL;
         }
     for (y = 0; y < 128; ++y)
         for (x = 0; x < 128; ++x) {   /* an orange disc, transparent around it */
-            uint8_t *p = disc + ((size_t)y * 128 + x) * RGBA;
+            uint8_t *p = disc + ((size_t)y * 128 + (size_t)x) * RGBA;
             const int dx = x - 64, dy = y - 64;
             p[0] = 255; p[1] = 150; p[2] = 40; p[3] = dx * dx + dy * dy < 60 * 60 ? FULL : 0;
         }

@@ -521,9 +521,10 @@ feature; a supplied composite needs nothing. See
 libvips is where minipsd is meant to be used: as a loader and saver of PSD and PSB, and in
 programs that render a composite with libvips and write the layers with minipsd. Steps 7.2 on are
 the loader and saver, built first as a plugin in this repository (`libvips-plugin/`): libvips
-foreign classes registered by the program that links them, then, if libvips' prebuilt builds
-load modules, a loadable module. Platemaker uses it, which is the proof; a pull request to libvips
-comes at the end of stage 7, or of 8, with the same files.
+foreign classes registered by the program that links them. libvips' prebuilt Windows builds load
+no modules (8.18.7: `enable modules: false`), so a loadable module waits for a Linux user who wants
+one. Platemaker uses it, which is the proof; whether a pull request to libvips follows is decided
+once Platemaker does.
 
 - [x] **S7.1** `examples/vips_composite.c`: a document's composite rendered with libvips
       (`vips_composite`, blend keys mapped as in the spec's
@@ -537,7 +538,7 @@ comes at the end of stage 7, or of 8, with the same files.
       is read back and its composite must be the render, which is the test. CI's `msvc` job
       runs it; locally it also runs on `tests/fixtures/Test-g-example.psd`. Tracking libvips'
       master is left for later.
-- [ ] **S7.2** *design.* minipsd as a libvips loader and saver:
+- [x] **S7.2** *design.* minipsd as a libvips loader and saver:
       - **Loading.** What the image is: the composite by default, one layer by an option, its
         offset in the metadata. Metadata: ICC profile, resolution, interpretation, sample
         format.
@@ -546,13 +547,29 @@ comes at the end of stage 7, or of 8, with the same files.
       - **What minipsd still needs.** The row provider (S7.5);
         the metadata ImageMagick gives (S6.17, P1).
       - **Building.** The build dependency: pkg-config, a meson wrap.
-- [ ] **S7.3** Loader: a PSD or PSB as a libvips image, the composite or a layer, decoded in
+      As done: registered by the program (`minipsd_vips_init`), no module; the composite by
+      default, `layer=N` with its offset; the samples as libvips holds them (CMYK's ink the other
+      way round, bitmap `B_W`, indexed through its palette: libvips has no indexed image), the
+      rest as stored, what libvips cannot hold `MULTIBAND`, nothing converted; minipsd compiled
+      in privately; zlib libvips' own; libvips from `cmake/minipsd_libvips.cmake` or the program.
+      Pages as layers, and a meson wrap, wait for a pull request to libvips.
+- [x] **S7.3** Loader: a PSD or PSB as a libvips image, the composite or a layer, decoded in
       strips; ZIP through zlib.
       *Done when:* psd-tools' files that minipsd decodes load with the samples psd-tools gives;
       a large PSB loads with memory bounded by strips, not by the image.
-- [ ] **S7.4** Saver: an image as a one-layer PSD or PSB with its composite, the image whole in
+      As done: `vips.plugin` compares every composite and layer of psd-tools' set (and
+      `tests/fixtures`) with minipsd's decode, which `psd-tools-roundtrip` holds to psd-tools'
+      (318 of 319 composites, 1330 of 2280 layers; the rest refused by both: a truncated file and
+      950 empty layers); a 1024 x 30000 PSD read with `access=sequential` leaves libvips holding
+      under 2 MB of its 60 MB (all of it when the loader is not sequential). A PSD, not a PSB: the same bands.
+- [x] **S7.4** Saver: an image as a one-layer PSD or PSB with its composite, the image whole in
       memory; RLE, or ZIP through zlib.
       *Done when:* psd-tools and GIMP open what it writes, and the loader reads it back the same.
+      As done: `psdsave`, `_buffer`, `_target`; options `psb`, `zip`, `layer_name`. psd-tools
+      opens every file the test writes, its composite the layer (but where alpha is partial, by
+      the matte's rounding), full cyan as (255, 0, 0, 0); GIMP opens them, by hand. GIMP showed a
+      32-bit file's transparency as an extra channel: the writer now names it as Photoshop does
+      where the layer count cannot (see the changelog).
 - [ ] **S7.5** Row provider (`W6`): a layer's or the composite's rows asked from a callback instead
       of an `pixels` pointer, twice with RLE or ZIP (sizing, then writing), so it must be
       deterministic, as libvips pipelines are. The saver then streams.

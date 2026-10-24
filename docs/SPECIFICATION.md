@@ -695,6 +695,67 @@ does, and its memory images are minipsd's buffers, with no conversion:
   of libvips, the composite rendered by `vips_composite`, the file written with it and read back;
   CI's `msvc` job runs it on libvips' prebuilt Windows build, pinned to the newest release.
 
+### The plugin
+
+`libvips-plugin/` (`MINIPSD_VIPS_PLUGIN`, the static library `minipsd::vips`) is minipsd as
+libvips' loader and saver, laid out as libvips' own (a base class over a `VipsSource` or a
+`VipsTarget`, file and buffer variants that make one), so the same file can move into libvips.
+
+- **Registration.** `minipsd_vips_init()`, after `VIPS_INIT`, registers the six operations'
+  types; libvips then finds them among its loaders and savers by `is_a` and suffix. libvips'
+  prebuilt Windows builds (8.18.7: `enable modules: false`) load no modules, so a loadable module
+  would not work there; the program registers instead. The loader's priority is libvips'
+  default, 0, above `magickload`'s -100.
+- **Loading** (`psdload`, `psdload_buffer`, `psdload_source`). The file is mapped
+  (`vips_source_map`) and read in place. The image is the composite, or with `layer` (bottom
+  first; -1, the default, the composite) that layer: its rectangle, placed by `xoffset` and
+  `yoffset`, always with transparency (opaque when the layer has none). An empty layer (a group's
+  marker, an adjustment) is refused. Bands are the mode's colour channels and transparency, up to
+  `MINIPSD_PLANES` (a multichannel file's sixth channel on is not decoded):
+
+  | Mode | libvips | Samples |
+  |---|---|---|
+  | grey, duotone | `B_W`, `GREY16` at 16 bits | as stored |
+  | RGB | `sRGB`, `RGB16`, `scRGB` at 32 bits | as stored |
+  | CMYK | `CMYK` | ink inverted from PSD's (full: no ink) to libvips' (0: no ink), as its `jpegload` makes Adobe's inverted CMYK and ImageMagick makes PSD's; transparency as stored |
+  | bitmap | `B_W`, 8-bit | black 0, white 255 |
+  | indexed | `sRGB`, 8-bit | through the palette, a fourth band when 1047 names a transparent index |
+  | Lab, multichannel | `MULTIBAND` | as stored |
+
+  Decoding is `SEQUENTIAL`: `vips_image_generate`, then `vips_sequential`, as `spngload` does.
+  Each band of rows is one `minipsd_decode_composite` (or `_layer`) straight into the region,
+  from libvips' threads at once on the one reader (see Threads); with `access=sequential` the
+  image streams, otherwise libvips keeps it for random access. A ZIP layer inflates through the
+  zlib libvips links, each thread keeping the layer's channels inflated between its bands
+  (`scratch_kept`), so every thread holds the layer's channels once.
+- **Metadata**, set on the image:
+
+  | Field | From |
+  |---|---|
+  | `xres`, `yres`, `resolution-unit` | 1005 (horizontal and vertical, in or cm); else `dpi` |
+  | `icc-profile-data`, `exif-data`, `xmp-data`, `iptc-data` | 1039, 1058, 1060, 1028 |
+  | `bits-per-sample` | the file's depth (1 for bitmap) |
+  | `psd-color-mode-data` | the palette or the duotone data |
+  | `psd-pixel-aspect-ratio` | 1064, 1.0 without it |
+  | `psd-has-real-merged-data` | 1057; 1 without it |
+  | `psd-layer-count` | the file's layers |
+  | `psd-layer-name`, `-blend-mode`, `-opacity`, `-hidden` | the layer, with `layer` |
+
+- **Saving** (`psdsave`, `psdsave_buffer`, `psdsave_target`). One layer that is also the
+  composite: grey, RGB or CMYK (by `interpretation` and bands, each with or without alpha), 8 or
+  16 bits, grey and RGB as floats; other band counts are refused. Without alpha the layer is
+  made opaque. CMYK goes back to PSD's inverted ink. Kept: the resolution, the ICC profile, EXIF,
+  XMP, IPTC and `psd-pixel-aspect-ratio`. Options: `psb` (PSB also for a file named `.psb`, read
+  from the target, since libvips writes files through `psdsave_target`, and for a side past
+  30000), `zip` (the layer's channels; the composite stays RLE), `layer_name` ("Layer 1"). The
+  image is held whole while it is written; streaming waits for the row provider (S7.5).
+- **Builds.** The plugin compiles minipsd in privately (`MINIPSD_STATIC`). On Windows it uses the
+  zip's `libz1` (zlib-ng, built zlib-compatible) with zlib 1.3.1's headers, fetched and pinned,
+  since the zip has none; elsewhere pkg-config's `vips` and `zlib`. libvips 8.17 replaced
+  `VipsSaveable` with `VipsForeignSaveable`; both are handled. CI's `msvc` job runs its test,
+  which compares every pixel with minipsd's own decode, on psd-tools' set too, and checks that a
+  30000-row image read sequentially leaves libvips holding a few rows' worth.
+
 ## Consumer requirements
 
 Platemaker is the first consumer. Breaking any of these breaks it:

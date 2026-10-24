@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------------
 # The libvips plugin: minipsd as libvips' psdload (MINIPSD_VIPS_PLUGIN).  A static library the
 # program links, then registers with minipsd_vips_init() after VIPS_INIT(); minipsd is compiled
-# into it, private (MINIPSD_STATIC).  libvips comes from cmake/minipsd_libvips.cmake.
+# into it, private (MINIPSD_STATIC).  libvips comes from cmake/minipsd_libvips.cmake, or from the
+# program, which defines minipsd_libvips and minipsd_libvips_zlib before adding minipsd.
 #
 #   minipsd::vips        the plugin
 #   vips.plugin          documents minipsd writes and the PSDs at hand, loaded through libvips and
@@ -14,6 +15,10 @@ target_include_directories(minipsd_vips PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(minipsd_vips PUBLIC minipsd_libvips PRIVATE minipsd::minipsd minipsd_libvips_zlib)
 target_compile_options(minipsd_vips PRIVATE ${MINIPSD_WARNINGS})
 set_target_properties(minipsd_vips PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+
+if(NOT MINIPSD_BUILD_TESTS)
+    return()
+endif()
 
 add_executable(minipsd-vips-test test_vips.c)
 target_link_libraries(minipsd-vips-test PRIVATE minipsd::vips minipsd::minipsd minipsd_libvips_zlib)

@@ -12,7 +12,9 @@
  * layer's always, opaque when it has none).  What libvips has no interpretation for (Lab,
  * multichannel) is MULTIBAND; the colour mode data is kept as "psd-color-mode-data".  Indexed is
  * the exception: libvips has no indexed image, so it comes through its palette as sRGB, as
- * libvips' own loaders give PNG, GIF and TIFF palettes (a lookup, no colour converted).  ZIP layers
+ * libvips' own loaders give PNG, GIF and TIFF palettes (a lookup, no colour converted).  CMYK
+ * comes the other way round from PSD's inverted ink, and bitmap as B_W (black 0), as libvips
+ * holds them.  ZIP layers
  * are inflated by the zlib libvips links.
  *
  * The saver writes an image as a one-layer PSD (or PSB) with that layer as its composite: grey, RGB
@@ -48,6 +50,7 @@
 #define PSD_RGB              3
 #define PSD_COMPOSITE        (-1) /* the `layer` option's default: the composite */
 #define MM_PER_INCH          25.4
+#define PSD_CMYK             4    /* CMYK's colour channels */
 
 /* libvips' VIPS_ARG_* macros pass vips_argument_get_id()'s int as a guint property id, and
    G_STRUCT_OFFSET's glong as a guint offset, which -Wsign-conversion and -Wconversion report in
@@ -333,6 +336,28 @@ static int psd_stop(void *seq, void *a, void *b)
 
 /* Indexed, in place: each pixel's index (in its first band) becomes the palette's RGB, and alpha
    0 at the transparent index. */
+/* CMYK the other way round, in place: PSD stores ink inverted (full: no ink), libvips holds it
+   as TIFF does (0: no ink), as its own jpegload makes Adobe's inverted CMYK and ImageMagick
+   makes PSD's.  The colour channels only, not transparency; both ways, loading and saving. */
+static void psd_invert_cmyk(void *pixels, size_t count, unsigned bands, int depth)
+{
+    size_t   i;
+    unsigned c;
+    for (i = 0; i < count; ++i)
+        for (c = 0; c < PSD_CMYK; ++c) {
+            if (depth == 32) {
+                float *v = (float *)pixels + i * bands + c;
+                *v       = 1.0f - *v;
+            } else if (depth == 16) {
+                uint16_t *v = (uint16_t *)pixels + i * bands + c;
+                *v          = (uint16_t)(USHRT_MAX - *v);
+            } else {
+                uint8_t *v = (uint8_t *)pixels + i * bands + c;
+                *v         = (uint8_t)(UCHAR_MAX - *v);
+            }
+        }
+}
+
 static void psd_expand_palette(const VipsForeignLoadPsd *psd, VipsPel *row, int width)
 {
     const uint8_t *palette = psd->info.color_mode_data.data;
@@ -389,6 +414,8 @@ static int psd_generate(VipsRegion *region, void *seq, void *a, void *b, gboolea
         row = top + (size_t)y * skip;
         if (psd->indexed) {
             psd_expand_palette(psd, row, rect->width);
+        } else if (psd->info.color_mode == MINIPSD_MODE_CMYK) {
+            psd_invert_cmyk(row, (size_t)rect->width, psd->bands, psd->info.depth);
         } else if (psd->info.color_mode == MINIPSD_MODE_BITMAP) {
             /* Bitmap decodes to 1 for black, 0 for white; libvips' B_W is 0 black, 255 white. */
             for (x = 0; x < rect->width; ++x) row[x] = row[x] ? 0 : UCHAR_MAX;
@@ -694,6 +721,7 @@ static int vips_foreign_save_psd_build(VipsObject *object)
         in = t[0];
     }
     if (!(pixels = vips_image_write_to_memory(in, &bytes))) return -1;
+    if (doc.color_mode == MINIPSD_MODE_CMYK) psd_invert_cmyk(pixels, (size_t)in->Xsize * (size_t)in->Ysize, (unsigned)in->Bands, doc.depth);
 
     memset(&layer, 0, sizeof layer);
     layer.name    = psd->layer_name ? psd->layer_name : PSD_LAYER_NAME;

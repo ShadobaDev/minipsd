@@ -790,6 +790,41 @@ materialised before writing. Reading, bands of rows (`minipsd_decode_opts`) fit 
 Build the example with `-DMINIPSD_VIPS_EXAMPLE=ON`: on Windows CMake fetches libvips' prebuilt
 build, elsewhere pkg-config finds yours. minipsd itself never depends on libvips.
 
+### PSD in libvips: the plugin
+
+[libvips-plugin/](../libvips-plugin/) makes minipsd libvips' loader and saver of PSD and PSB, so
+`vips_image_new_from_file` and `vips_image_write_to_file` take `.psd` and `.psb` in your program.
+libvips' prebuilt Windows builds load no modules, so your program registers them, once, after
+`VIPS_INIT`:
+
+```c
+#include "minipsd_vips.h"
+
+if (VIPS_INIT(argv[0])) vips_error_exit(NULL);
+minipsd_vips_init();
+VipsImage *page  = vips_image_new_from_file("page.psd", NULL);               /* the composite */
+VipsImage *third = vips_image_new_from_file("page.psd", "layer", 2, NULL);   /* the third layer up */
+vips_image_write_to_file(page, "copy.psd", "layer_name", "Page", NULL);
+```
+
+- **Loading** (`psdload`, `psdload_buffer`, `psdload_source`): the composite, or with `layer` one
+  layer, bottom first, placed by `xoffset` and `yoffset`. Grey, RGB and CMYK come as libvips
+  names them (CMYK with 0 for no ink, the other way round from PSD), bitmap as `B_W` (black 0),
+  indexed through its palette as sRGB, Lab and multichannel as `MULTIBAND`, each at the file's
+  depth. With it: the resolution, the ICC profile, EXIF, XMP, IPTC, `bits-per-sample`, and
+  `psd-*` fields such as `psd-layer-count` and a layer's name, blend mode and opacity (the list:
+  the spec's [Working with libvips](SPECIFICATION.md#working-with-libvips)). Bands of rows are
+  decoded from libvips' threads at once; with `access=sequential` memory stays at a few bands.
+- **Saving** (`psdsave`, `psdsave_buffer`, `psdsave_target`): one layer that is also the
+  composite; grey, RGB or CMYK at 8 or 16 bits, grey and RGB as floats; alpha kept, or the layer
+  made opaque. Options: `psb` (also a file named `.psb`), `zip`, `layer_name`. The image is
+  held whole while it is written.
+- **Building:** `-DMINIPSD_VIPS_PLUGIN=ON` gives the static library `minipsd::vips`; link it.
+  minipsd is compiled into it privately (`MINIPSD_STATIC`), so your own use of minipsd keeps its
+  own. libvips comes as for the example, or from your project: define `minipsd_libvips` and
+  `minipsd_libvips_zlib` (libvips, and the zlib it links, which inflates ZIP layers) before
+  adding minipsd.
+
 ## Memory and ownership
 
 minipsd allocates only inside `minipsd_write`, which frees it before returning, and
