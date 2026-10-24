@@ -109,11 +109,11 @@
  */
 #define MINIPSD_VERSION_MAJOR 0
 #define MINIPSD_VERSION_MINOR 3
-#define MINIPSD_VERSION_PATCH 0
+#define MINIPSD_VERSION_PATCH 1
 
 #define MPSD__STR(x)  #x
 #define MPSD__XSTR(x) MPSD__STR(x)
-/** \brief The version as a string literal, e.g. "0.3.0". */
+/** \brief The version as a string literal, e.g. "0.3.1". */
 #define MINIPSD_VERSION_STRING \
     MPSD__XSTR(MINIPSD_VERSION_MAJOR) "." MPSD__XSTR(MINIPSD_VERSION_MINOR) "." MPSD__XSTR(MINIPSD_VERSION_PATCH)
 
@@ -291,7 +291,9 @@ enum {
                                                  minipsd_resource_next_alpha_identifier.          */
     MINIPSD_RES_VERSION_INFO        = 1057, /*!< Version info: minipsd_resource_version_info.     */
     MINIPSD_RES_EXIF_DATA_1         = 1058, /*!< EXIF data: bytes.                                */
-    MINIPSD_RES_XMP_METADATA        = 1060  /*!< XMP metadata, UTF-8 XML: bytes.                  */
+    MINIPSD_RES_XMP_METADATA        = 1060, /*!< XMP metadata, UTF-8 XML: bytes.                  */
+    MINIPSD_RES_PIXEL_ASPECT_RATIO  = 1064  /*!< The pixel aspect ratio: minipsd_info and
+                                                 minipsd_doc.pixel_aspect_ratio.                  */
 };
 
 /** \brief One tagged block of a layer's additional information ('luni', 'lsct', 'tySh', ...). */
@@ -505,6 +507,16 @@ typedef struct minipsd_doc {
                                               and curves (minipsd_info.color_mode_data), at
                                               32 bits whatever the file held (an 'hdrt'
                                               block: HDR toning); size 0 otherwise.           */
+    double               pixel_aspect_ratio; /*!< A pixel's width over its height (resource
+                                              1064).  0: the writer writes none of its own (a
+                                              kept 1064 is written as it is).  Above 0: a kept
+                                              1064 that says the same stays as it is, where it
+                                              is; otherwise the writer writes its own, first
+                                              among the kept, as dpi rules 1005.  The
+                                              resolution stays square.
+                                              Photoshop's files in psd-tools' set all hold 1.0:
+                                              another value is not verified against a reader.
+                                              minipsd_read sets the file's, 0 without one.    */
 } minipsd_doc;
 
 /**
@@ -848,6 +860,9 @@ typedef struct minipsd_info {
                                             (256 reds, 256 greens, 256 blues), a duotone file's
                                             inks and curves; size 0 for none.  minipsd converts no
                                             colour: this, or the ICC profile, says what samples mean. */
+    double        pixel_aspect_ratio;  /*!< A pixel's width over its height (resource 1064), as stored;
+                                            1.0 without it.  Compare it within a tolerance: a value
+                                            off 1.0 is a non-square pixel, to show stretched.       */
 } minipsd_info;
 
 /**
@@ -1413,6 +1428,14 @@ MINIPSDDEF int minipsd_resource_make_resolution_info(const minipsd_resolution_in
                                                      size_t *needed);
 
 /**
+ * \brief Resource 1064, the pixel aspect ratio: not made.  The writer writes it from
+ *        minipsd_doc.pixel_aspect_ratio, so it has one place to be set.
+ *
+ * \return MINIPSD_ERR_USE_DOC_FIELD, always; nothing is written, and no argument is read.
+ */
+MINIPSDDEF int minipsd_resource_make_pixel_aspect_ratio(double ratio, uint8_t *buf, size_t cap, size_t *needed);
+
+/**
  * \brief Resource 1057, version info, as minipsd_resource_version_info reads it.
  *
  * \param info   The values; the names are UTF-16BE, as the view gives them (minipsd_utf8_to_utf16be
@@ -1667,6 +1690,7 @@ MINIPSDDEF void minipsd_doc_free(minipsd_doc *doc);
 #include "minipsd/detail/utf.h"
 #include "minipsd/detail/packbits.h"
 #include "minipsd/detail/composite.h"
+#include "minipsd/detail/floats.h"
 #ifndef MINIPSD_NO_WRITER
 #include "minipsd/writer.h"
 #include "minipsd/builders.h"

@@ -285,7 +285,7 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     d.dpi = 72;
     const Bytes other = write(d);
     ASSERT_EQ(minipsd_reader_init(&r, other.data(), other.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
-    EXPECT_EQ(info.dpi, 72.0);
+    EXPECT_DOUBLE_EQ(info.dpi, 72.0);
     ASSERT_EQ(minipsd_reader_find_resource(r, MINIPSD_RES_RESOLUTION_INFO, &res), MINIPSD_OK);
     EXPECT_EQ(res.data.data[7], 1) << "shown in inches";
 
@@ -313,6 +313,46 @@ TEST(MinipsdWriterTest, KeptContentIsWrittenBackAsGiven)
     ids.clear();
     for (at = 0; minipsd_reader_next_resource(r, &at, &res) == MINIPSD_MORE;) ids.push_back(res.id);
     EXPECT_EQ(ids, (std::vector<int>{1005, 1036}));
+
+    // The pixel aspect ratio: 0, none of the writer's own and a kept 1064 as it is; set, a kept one
+    // that says the same stays where it is, one that says another gives way to the writer's own,
+    // first among the kept; minipsd_read gives the file's back, 0 without one.
+    const Bytes square = {0, 0, 0, 1, 0x3F, 0xF0, 0, 0, 0, 0, 0, 0};   // version 1, 1.0
+    const minipsd_resource withAspect[2] = {{1036, view(thumb), view(nm)}, {1064, view(square), {}}};
+    d.resources = withAspect; d.resource_count = 2;
+    const auto aspectOf = [&](double ratio, std::vector<int> *order, Bytes *stored) {
+        d.pixel_aspect_ratio = ratio;
+        const Bytes f = write(d);
+        EXPECT_EQ(minipsd_reader_init(&r, f.data(), f.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
+        order->clear();
+        for (at = 0; minipsd_reader_next_resource(r, &at, &res) == MINIPSD_MORE;) {
+            order->push_back(res.id);
+            if (res.id == 1064) *stored = Bytes(res.data.data, res.data.data + res.data.size);
+        }
+        minipsd_doc *back = nullptr;
+        EXPECT_EQ(minipsd_read(f.data(), f.size(), nullptr, nullptr, &back, nullptr), MINIPSD_OK);
+        const double kept = back ? back->pixel_aspect_ratio : -1.0;
+        minipsd_doc_free(back);
+        return kept;
+    };
+    Bytes stored;
+    EXPECT_DOUBLE_EQ(aspectOf(0.0, &ids, &stored), 1.0) << "read back: the kept 1064 says 1.0";
+    EXPECT_EQ(ids, (std::vector<int>{1005, 1036, 1064}));
+    EXPECT_EQ(stored, square);
+    EXPECT_DOUBLE_EQ(info.pixel_aspect_ratio, 1.0);
+    EXPECT_DOUBLE_EQ(aspectOf(1.0, &ids, &stored), 1.0);
+    EXPECT_EQ(ids, (std::vector<int>{1005, 1036, 1064})) << "the same: kept, in its place";
+    EXPECT_EQ(stored, square) << "its version too";
+    EXPECT_DOUBLE_EQ(aspectOf(0.9, &ids, &stored), 0.9);
+    EXPECT_EQ(ids, (std::vector<int>{1005, 1064, 1036})) << "another: the writer's own, first";
+    EXPECT_EQ(stored, (Bytes{0, 0, 0, 2, 0x3F, 0xEC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCD})) << "version 2, 0.9";
+    EXPECT_DOUBLE_EQ(info.pixel_aspect_ratio, 0.9);
+    d.resource_count = 1;   // the thumbnail alone
+    EXPECT_DOUBLE_EQ(aspectOf(0.0, &ids, &stored), 0.0) << "no 1064: 0 in the document";
+    EXPECT_DOUBLE_EQ(info.pixel_aspect_ratio, 1.0) << "and square to the reader";
+    EXPECT_EQ(ids, (std::vector<int>{1005, 1036}));
+    std::uint8_t none[1];
+    EXPECT_EQ(minipsd_resource_make_pixel_aspect_ratio(0.9, none, sizeof none, nullptr), MINIPSD_ERR_USE_DOC_FIELD);
 }
 
 TEST(MinipsdWriterTest, GroupsAndMasksAreWritten)

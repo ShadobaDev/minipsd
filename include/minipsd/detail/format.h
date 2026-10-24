@@ -96,6 +96,12 @@ MPSD__SHARED static uint32_t mpsd__max_side(unsigned psb) { return psb ? MINIPSD
 
 /* Grid and guides: version, two grid values and the guide count (4 each), then each guide: its
    location (4) and direction (1). */
+/* The pixel aspect ratio (1064): a version, then the ratio as a double.  Version 2 is what 290 of
+   psd-tools' 305 files with one hold (the others 1). */
+#define MPSD__PIXEL_ASPECT_SIZE    12
+#define MPSD__PIXEL_ASPECT_RATIO   4    /* where the double starts */
+#define MPSD__PIXEL_ASPECT_VERSION 2u
+
 #define MPSD__GUIDES_HEAD MINIPSD_GRID_AND_GUIDES_SIZE(0)
 #define MPSD__GUIDE_SIZE  (MINIPSD_GRID_AND_GUIDES_SIZE(1) - MPSD__GUIDES_HEAD)
 

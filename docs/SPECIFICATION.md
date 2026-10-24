@@ -429,6 +429,12 @@ several threads from one reader into one image.
     dpi is written instead, with its own units and vertical resolution;
   - 1039 ICC profile, only when `icc` is set;
   - a later kept 1005 or 1039 goes: `dpi` and `icc` win;
+  - 1064 pixel aspect ratio, from `pixel_aspect_ratio`: at 0 none of the writer's own, a kept 1064
+    written as it is; above 0, a kept 1064 that says the same (within a tolerance) stays as it is,
+    where it is, otherwise the writer's own (version 2, a double) comes after 1039 and every kept
+    1064 goes. The resolution stays square: the ratio is never folded into 1005. Photoshop's files
+    in psd-tools' set all hold 1.0 (290 version 2, 15 version 1), so another ratio is written as
+    the format lays it out but not verified against a reader;
   - a resource of odd length is padded to even.
 - **Typed setters:** the mirror of the typed views (in [What is read](#what-is-read)): a struct in,
   the bytes the view reads out, into the caller's buffer, counted first (`needed`, and
@@ -511,7 +517,8 @@ them; nothing is copied or allocated. Results on real files from other programs:
     a document whose `format` is the file's, written back as a PSB;
   - four wrong bytes at the start are `MINIPSD_ERR_FORMAT`.
 - **Header and resources:** size, channels, depth, colour mode; dpi from resource 1005
-  (horizontal, 0 without it); the ICC profile from 1039. Every resource, these two included, is
+  (horizontal, 0 without it); the ICC profile from 1039; the pixel aspect ratio from 1064 (1.0
+  without it; one shorter than its 12 bytes is `MINIPSD_ERR_FORMAT`). Every resource, these two included, is
   also returned as a raw view, with its name, in file order, or found by id (the first of it).
 - **Typed views:** what a kept resource stores, parsed into plain values by a function that
   takes the resource and needs no reader: nothing allocated, a string left as a view of its
@@ -546,6 +553,7 @@ them; nothing is copied or allocated. Results on real files from other programs:
   | 1057 version info | `MINIPSD_RES_VERSION_INFO` | `minipsd_resource_version_info` |
   | 1058 EXIF | `MINIPSD_RES_EXIF_DATA_1` | bytes |
   | 1060 XMP | `MINIPSD_RES_XMP_METADATA` | bytes (UTF-8 XML) |
+  | 1064 pixel aspect ratio | `MINIPSD_RES_PIXEL_ASPECT_RATIO` | `minipsd_info.pixel_aspect_ratio`; written from `minipsd_doc.pixel_aspect_ratio` |
   | any other id | | bytes, from `minipsd_reader_next_resource` or `minipsd_reader_find_resource` |
 - **Layer records**, bottom first:
   - the rectangle; one stored inverted (Photoshop's fill layers) comes back empty;

@@ -79,6 +79,15 @@ MINIPSDDEF int minipsd_resource_make_resolution_info(const minipsd_resolution_in
     return MINIPSD_ERR_USE_DOC_FIELD;
 }
 
+MINIPSDDEF int minipsd_resource_make_pixel_aspect_ratio(double ratio, uint8_t *buf, size_t cap, size_t *needed)
+{
+    (void)ratio;
+    (void)buf;
+    (void)cap;
+    (void)needed;
+    return MINIPSD_ERR_USE_DOC_FIELD;
+}
+
 /* A name of version info: its count of UTF-16 units, then the units, as the view reads it. */
 static int mpsd__name_ok(const minipsd_bytes *name) { return name->size % 2 == 0 && (name->data || !name->size); }
 

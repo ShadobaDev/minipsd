@@ -3,7 +3,7 @@
 Changes between releases, for users of minipsd. Versioning follows the pre-1.0 rules in
 [TODO.md](TODO.md): breaking changes bump the MINOR, additions and fixes the PATCH.
 
-## [Unreleased]
+## [0.3.1] — 2026-10-24
 
 ### Added
 - `MINIPSD_NO_READER` and `MINIPSD_NO_WRITER`: a build with only the writer or only the reader;
@@ -18,6 +18,9 @@ Changes between releases, for users of minipsd. Versioning follows the pre-1.0 r
   `MINIPSD_BLOCK_SETTINGS_MAX`, ...) make one call with a fixed buffer enough.
 - `minipsd_blocks_settings`: a layer's settings from its blocks alone, such as a document's
   `minipsd_layer.additional_info`.
+- The pixel aspect ratio (resource 1064): `minipsd_info.pixel_aspect_ratio` (1.0 without one), to
+  find or refuse non-square pixels; `minipsd_doc.pixel_aspect_ratio` writes one (0: none of the
+  writer's own), and `minipsd_read` keeps the file's. `MINIPSD_RES_PIXEL_ASPECT_RATIO`.
 
 ### Fixed
 - Under `MINIPSD_STATIC`, the functions a file does not call no longer warn (`-Wunused-function`

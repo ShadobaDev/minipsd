@@ -124,7 +124,8 @@ class Doc(ctypes.Structure):
                 ("resources", ctypes.c_void_p), ("resource_count", ctypes.c_size_t), ("layer_tail", Bytes),
                 ("depth", ctypes.c_uint16), ("format", ctypes.c_uint16),
                 ("composite_stored", Bytes), ("composite_channels", ctypes.c_uint16),
-                ("composite_alpha", ctypes.c_uint8), ("color_mode", ctypes.c_uint16), ("color_mode_data", Bytes)]
+                ("composite_alpha", ctypes.c_uint8), ("color_mode", ctypes.c_uint16), ("color_mode_data", Bytes),
+                ("pixel_aspect_ratio", ctypes.c_double)]
 
 
 DEFLATE_FN = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
@@ -727,6 +728,8 @@ def check_flat_document(psd, name, mode, depth, want):
 SETTER_NAMES = ["Alpha 1", "Spot \u2713"]   # 1006 holds the second as "Spot ?"
 SETTER_GUIDES = [(10 * 32, 0), (-32, 1)]   # a column at x = 10, a row above the canvas
 SETTER_IDS = [5, 7]
+SETTER_ASPECT = 0.9   # minipsd_doc.pixel_aspect_ratio: the writer's own 1064
+FLOAT_EPSILON = 1e-9  # floats are compared within it, never with ==
 SETTER_SETTINGS = {"layer_id": 42, "sheet_color": 3, "fill_opacity": 200, "protection_flags": 0x05, "knockout": 1,
                    "blend_clipped_elements": 0, "blend_interior_elements": 1}
 
@@ -780,6 +783,7 @@ def setters_document(lib, path):
                      additional_info=made(lib.minipsd_layer_make_block_settings, None, 0, ctypes.byref(settings)))
     doc = Doc(2, 2, 72.0, layer, 1, None, 0, MINIPSD_RLE)
     doc.resources, doc.resource_count = ctypes.cast(resources, ctypes.c_void_p), len(resources)
+    doc.pixel_aspect_ratio = SETTER_ASPECT
     out = bytearray()
 
     def collect(_user, data, size):
@@ -811,6 +815,8 @@ def check_setters_document(psd, name):
     expect("Pascal alpha names", list(res.get_data(RES_ALPHA_NAMES)), ["Alpha 1", "Spot ?"])
     expect("alpha identifiers", list(res.get_data(RES_ALPHA_IDENTIFIERS)), SETTER_IDS)
     expect("transparency index", as_int(res.get_data(RES_TRANSPARENCY_INDEX)), 3)
+    aspect = res.get_data(1064)   # psd-tools gives the ratio itself
+    expect("pixel aspect ratio within epsilon", abs(aspect - SETTER_ASPECT) < FLOAT_EPSILON, True)
     blocks = psd._record.layer_and_mask_information.layer_info.layer_records[0].tagged_blocks
     expect("layer blocks", {field: as_int(blocks.get_data(key)) for key, field, _ in SETTINGS}, SETTER_SETTINGS)
     return errors

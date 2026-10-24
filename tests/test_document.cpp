@@ -109,6 +109,13 @@ TEST(MinipsdDocumentTest, RejectsBadDocuments)
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "mode data for RGB";
     d.color_mode_data = {nullptr, 3};
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "mode data size without data";
+    // A pixel aspect ratio: 0 (none of the writer's own) or a finite value above it.
+    for (double ratio : {-1.0, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
+        d = docOf(2, 2, &layer, 1); d.pixel_aspect_ratio = ratio;
+        EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "pixel aspect ratio " << ratio;
+    }
+    d.pixel_aspect_ratio = 0.9;
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK) << "a non-square pixel";
     for (const auto &[w, h] : {std::pair<std::uint32_t, std::uint32_t>{0, 2}, {2, 0},
                                {MINIPSD_MAX_SIDE + 1, 2}, {2, MINIPSD_MAX_SIDE + 1}}) {
         d = docOf(w, h, &layer, 1);

@@ -124,6 +124,7 @@ static void mpsd__info_clear(minipsd_info *i)
     i->width = i->height = 0;
     i->channels = i->depth = i->color_mode = 0;
     i->dpi = 0;
+    i->pixel_aspect_ratio = 1.0;                             /* none stored: square */
     i->icc.data = NULL;
     i->icc.size = 0;
     i->layer_count = 0;
@@ -196,7 +197,7 @@ static int mpsd__scan(minipsd_reader *r, minipsd_info *info)
     uint64_t       at, lm_start, length;
     uint32_t       side;
     unsigned       psb;
-    int            rc, has_dpi = 0, has_icc = 0;
+    int            rc, has_dpi = 0, has_icc = 0, has_aspect = 0;
 
     mpsd__info_clear(&in);
     /* The header: a stream that is not a PSD is refused as soon as four bytes show it. */
@@ -241,6 +242,10 @@ static int mpsd__scan(minipsd_reader *r, minipsd_info *info)
             if (res.data.size < MPSD__RESOLUTION_SIZE) return MINIPSD_ERR_FORMAT;
             in.dpi  = (double)mpsd__get32(res.data.data) / MPSD__FIXED_ONE;
             has_dpi = 1;
+        } else if (res.id == MINIPSD_RES_PIXEL_ASPECT_RATIO && !has_aspect) {
+            if (res.data.size < MPSD__PIXEL_ASPECT_SIZE) return MINIPSD_ERR_FORMAT;
+            in.pixel_aspect_ratio = mpsd__get_f64(res.data.data + MPSD__PIXEL_ASPECT_RATIO);
+            has_aspect = 1;
         } else if (res.id == MINIPSD_RES_ICC_PROFILE && !has_icc) {
             in.icc  = res.data;
             has_icc = 1;

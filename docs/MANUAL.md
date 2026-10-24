@@ -588,7 +588,17 @@ visible.
 
 ### Metadata
 
-`info` has what most programs need: `dpi` and the ICC profile. For more, find a resource by its
+`info` has what most programs need: `dpi`, the ICC profile, and `pixel_aspect_ratio`, a pixel's
+width over its height (1.0 when the file says nothing). A program that handles only square pixels
+can refuse the others; compare within a tolerance, never with `!=`:
+
+```c
+if (fabs(info.pixel_aspect_ratio - 1.0) > 1e-6)
+    return refuse("non-square pixels");
+```
+
+A document writes one when its `pixel_aspect_ratio` is above 0; `minipsd_read` sets it from the
+file. For more, find a resource by its
 id and let a typed view parse it; none of them needs the reader again, so a document's
 `resources` work too:
 

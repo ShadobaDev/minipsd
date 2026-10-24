@@ -17,6 +17,7 @@
 
 #include "detail/bytes.h"
 #include "detail/format.h"
+#include "detail/floats.h"
 
 #include <string.h>
 
@@ -320,6 +321,12 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     d->composite_stored = composite;
     d->composite_channels = keep_composite ? (uint16_t)info.channels : 0;
     d->composite_alpha    = (uint8_t)(keep_composite && !flat_mode && info.composite_has_alpha && info.channels > r->colors);
+    {   /* the file's pixel aspect ratio, kept when it is one the writer takes; else 0: none of its own */
+        minipsd_resource aspect;
+        const double     ratio = info.pixel_aspect_ratio;
+        d->pixel_aspect_ratio = minipsd_reader_find_resource(r, MINIPSD_RES_PIXEL_ASPECT_RATIO, &aspect) == MINIPSD_OK
+                                && mpsd__floats_positive(ratio) ? ratio : 0.0;
+    }
     d->layer_tail       = tail;
     d->depth            = info.depth;
     d->format           = info.format;

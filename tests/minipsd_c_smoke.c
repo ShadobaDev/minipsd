@@ -106,7 +106,7 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
             made.name.data = NULL; made.name.size = 0;
             if (minipsd_reader_find_resource(rd, MINIPSD_RES_RESOLUTION_INFO, &res) != MINIPSD_OK
                 || minipsd_resource_resolution_info(&res, &resolution) != MINIPSD_OK
-                || resolution.vertical_resolution != 300.0
+                || !mpsd__floats_equal(resolution.vertical_resolution, 300.0)
                 || minipsd_reader_find_resource(rd, MINIPSD_RES_VERSION_INFO, &res) != MINIPSD_ERR_NOT_FOUND
                 || minipsd_resource_version_info(&made, &version) != MINIPSD_OK || !version.has_real_merged_data
                 || minipsd_utf16be_to_utf8(&version.writer_name, name, sizeof name, NULL) != MINIPSD_OK
@@ -119,7 +119,9 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
                     || made_size != sizeof vi || memcmp(remade, vi, sizeof vi) != 0
                     || minipsd_utf8_to_utf16be("A", unit, sizeof unit, &made_size) != MINIPSD_OK || made_size != 2 || unit[1] != 'A'
                     || minipsd_resource_make_transparency_index(7, ti, sizeof ti, NULL) != MINIPSD_OK || ti[1] != 7
-                    || minipsd_resource_make_resolution_info(&resolution, NULL, 0, NULL) != MINIPSD_ERR_USE_DOC_FIELD)
+                    || minipsd_resource_make_resolution_info(&resolution, NULL, 0, NULL) != MINIPSD_ERR_USE_DOC_FIELD
+                    || minipsd_resource_make_pixel_aspect_ratio(1.0, NULL, 0, NULL) != MINIPSD_ERR_USE_DOC_FIELD
+                    || !mpsd__floats_equal(info.pixel_aspect_ratio, 1.0))
                     return -122;
             }
         }

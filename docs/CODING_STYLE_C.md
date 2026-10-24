@@ -34,6 +34,11 @@ together, under a table of the structure's fields and sizes, in the module the r
 share. An offset read once, right where the table shows it, may stay a number. Plain arithmetic
 and alignment (`pad(n, 4)`, `* 2` for UTF-16 units) are not facts to name.
 
+Floating-point values are never compared with `==` or `!=`: within a tolerance, a named epsilon,
+through `detail/floats.h` (`mpsd__floats_equal`), which also says whether a value is finite
+(`mpsd__floats_positive`, `mpsd__floats_not_negative`), all without libm. The tests do the same
+(`EXPECT_FLOAT_EQ`, `EXPECT_DOUBLE_EQ`). Byte identity of copied data is not a float comparison.
+
 ## Naming
 
 | Kind | Form |

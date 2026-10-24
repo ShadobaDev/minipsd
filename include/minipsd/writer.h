@@ -27,6 +27,7 @@
 #include "detail/utf.h"
 #include "detail/packbits.h"
 #include "detail/composite.h"
+#include "detail/floats.h"
 
 /* The document's format: what its kept bytes are laid out as, 1 for a PSB (detail/format.h). */
 static unsigned mpsd__doc_psb(const minipsd_doc *d) { return d->format == MINIPSD_PSB; }
@@ -452,8 +453,16 @@ static void mpsd__layer_record(mpsd__sink *s, const minipsd_doc *d, const minips
 
 static uint64_t mpsd__max_layers_section(unsigned psb) { return psb ? MPSD__FAR - 1 : MPSD__MAX_SECTION; }
 
-/* A kept resource is written unless the document's own field says the same: dpi, icc. */
-static int mpsd__kept_resource(const minipsd_resource *r) { return r->id != MINIPSD_RES_RESOLUTION_INFO && r->id != MINIPSD_RES_ICC_PROFILE; }
+static const minipsd_resource *mpsd__find_resource(const minipsd_doc *d, unsigned id);
+static int mpsd__aspect_kept(const minipsd_doc *d);
+
+/* A kept resource is written unless the document's own field says it: dpi, icc, and a pixel
+   aspect ratio the document sets that no kept 1064 says. */
+static int mpsd__kept_resource(const minipsd_doc *d, const minipsd_resource *r)
+{
+    return r->id != MINIPSD_RES_RESOLUTION_INFO && r->id != MINIPSD_RES_ICC_PROFILE
+        && !(r->id == MINIPSD_RES_PIXEL_ASPECT_RATIO && d->pixel_aspect_ratio > 0.0 && !mpsd__aspect_kept(d));
+}
 
 /* The dpi as stored: 16.16 fixed point. */
 static uint32_t mpsd__dpi_fixed(const minipsd_doc *d) { return (uint32_t)(d->dpi * MPSD__FIXED_ONE + 0.5); }
@@ -506,8 +515,35 @@ static void mpsd__resolution(mpsd__sink *s, const minipsd_doc *d, minipsd_bytes 
     mpsd__put_resource(s, MINIPSD_RES_RESOLUTION_INFO, name, kept ? kept : own, MPSD__RESOLUTION_SIZE);
 }
 
-/* The image resources: the writer's own first (the resolution, the ICC profile if any), then the
-   kept ones.  A kept resolution or profile goes: the document's field says it. */
+/* Does the first kept 1064 say the ratio the document sets?  Then it stays as it is, where it is,
+   as a file read and written back has it. */
+static int mpsd__aspect_kept(const minipsd_doc *d)
+{
+    const minipsd_resource *kept = mpsd__find_resource(d, MINIPSD_RES_PIXEL_ASPECT_RATIO);
+    return kept && kept->data.size == MPSD__PIXEL_ASPECT_SIZE && kept->data.data
+        && mpsd__floats_equal(mpsd__get_f64(kept->data.data + MPSD__PIXEL_ASPECT_RATIO), d->pixel_aspect_ratio);
+}
+
+/* The writer's own pixel aspect ratio, version MPSD__PIXEL_ASPECT_VERSION, named as a kept 1064
+   it replaces. */
+static void mpsd__pixel_aspect(mpsd__sink *s, const minipsd_doc *d)
+{
+    const minipsd_resource *kept = mpsd__find_resource(d, MINIPSD_RES_PIXEL_ASPECT_RATIO);
+    const minipsd_bytes     none = { NULL, 0 };
+    uint8_t                 own[MPSD__PIXEL_ASPECT_SIZE];
+    uint64_t                bits;
+    size_t                  i;
+    memcpy(&bits, &d->pixel_aspect_ratio, sizeof bits);
+    for (i = 0; i < MPSD__PIXEL_ASPECT_RATIO; ++i)            /* the version, then the double, big-endian */
+        own[i] = (uint8_t)(MPSD__PIXEL_ASPECT_VERSION >> (8 * (MPSD__PIXEL_ASPECT_RATIO - 1 - i)));
+    for (i = MPSD__PIXEL_ASPECT_RATIO; i < MPSD__PIXEL_ASPECT_SIZE; ++i)
+        own[i] = (uint8_t)(bits >> (8 * (MPSD__PIXEL_ASPECT_SIZE - 1 - i)));
+    mpsd__put_resource(s, MINIPSD_RES_PIXEL_ASPECT_RATIO, kept ? kept->name : none, own, sizeof own);
+}
+
+/* The image resources: the writer's own first (the resolution, the ICC profile if any, the pixel
+   aspect ratio if set), then the kept ones.  A kept one of these goes: the document's field says
+   it. */
 static void mpsd__resources(mpsd__sink *s, const minipsd_doc *d)
 {
     const minipsd_resource *res = mpsd__find_resource(d, MINIPSD_RES_RESOLUTION_INFO);
@@ -516,8 +552,9 @@ static void mpsd__resources(mpsd__sink *s, const minipsd_doc *d)
     size_t                  i;
     mpsd__resolution(s, d, res ? res->name : none);
     if (d->icc) mpsd__put_resource(s, MINIPSD_RES_ICC_PROFILE, icc ? icc->name : none, d->icc, d->icc_size);
+    if (d->pixel_aspect_ratio > 0.0 && !mpsd__aspect_kept(d)) mpsd__pixel_aspect(s, d);
     for (i = 0; i < d->resource_count; ++i)
-        if (mpsd__kept_resource(&d->resources[i]))
+        if (mpsd__kept_resource(d, &d->resources[i]))
             mpsd__put_resource(s, d->resources[i].id, d->resources[i].name, d->resources[i].data.data, d->resources[i].data.size);
 }
 
@@ -793,7 +830,8 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *d, const minipsd_write_opts 
     if ((d->layer_count && !d->layers) || (!d->layer_count && !d->composite && !d->composite_stored.size) || d->layer_count > MPSD__MAX_LAYERS || !(res >= 1.0 && res < 4294967296.0)
         || (d->depth != 0 && d->depth != MPSD__CH_1BIT && d->depth != MPSD__CH_8BIT && d->depth != MPSD__CH_16BIT && d->depth != MPSD__CH_32BIT) || d->format > MINIPSD_PSB
         || d->compression < MINIPSD_RLE || d->compression > MINIPSD_ZIP_PREDICTED || (mpsd__zip(d) && !(opts && opts->deflate))
-        || (d->color_mode_data.size && !d->color_mode_data.data))
+        || (d->color_mode_data.size && !d->color_mode_data.data)
+        || !mpsd__floats_not_negative(d->pixel_aspect_ratio))
         return MINIPSD_ERR_ARG;
     rc = mpsd__doc_mode_ok(d);
     if (rc != MINIPSD_OK) return rc;

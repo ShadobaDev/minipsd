@@ -602,7 +602,8 @@ TEST(MinipsdReaderTest, AFileWithoutResourcesHasNoDpiAndNoProfile)
     s.colorModeData = Bytes(10, 0xCC);   // skipped
     Open o(build(s).bytes);
     ASSERT_EQ(o.rc, MINIPSD_OK);
-    EXPECT_EQ(o.info.dpi, 0.0);
+    EXPECT_DOUBLE_EQ(o.info.dpi, 0.0);
+    EXPECT_DOUBLE_EQ(o.info.pixel_aspect_ratio, 1.0) << "no 1064: square";
     EXPECT_EQ(o.info.icc.size, 0u);
     minipsd_resource res;
     std::size_t pos = 0;
@@ -619,6 +620,7 @@ TEST(MinipsdReaderTest, MalformedResourcesAreRefused)
     EXPECT_EQ(rc(bad), MINIPSD_ERR_FORMAT) << "signature";
     EXPECT_EQ(rc(Bytes(11, 0)), MINIPSD_ERR_FORMAT) << "less than the smallest block";
     EXPECT_EQ(rc(resource(1005, Bytes(8, 0))), MINIPSD_ERR_FORMAT) << "a resolution of 8 bytes";
+    EXPECT_EQ(rc(resource(1064, Bytes(8, 0))), MINIPSD_ERR_FORMAT) << "a pixel aspect ratio of 8 bytes";
 
     Bytes name = resource(1036, Bytes(2, 0));   // a name length that runs past the section
     name[6] = 255;
@@ -1787,10 +1789,10 @@ TEST(MinipsdReaderTest, EveryModeAndDepthDecodesItsOwnChannels)
         ASSERT_EQ(minipsd_decode_layer(l.o.r, &l.v, &t, &opts), MINIPSD_OK);
         const std::vector<float> got = floatsOf(out);
         for (std::size_t i = 0; i < red.size(); ++i) {
-            EXPECT_EQ(got[i * 4 + 0], red[i]) << i;
-            EXPECT_EQ(got[i * 4 + 1], green[i]) << i;
-            EXPECT_EQ(got[i * 4 + 2], red[i]) << i;
-            EXPECT_EQ(got[i * 4 + 3], 1.0f) << "no transparency: opaque";
+            EXPECT_FLOAT_EQ(got[i * 4 + 0], red[i]) << i;
+            EXPECT_FLOAT_EQ(got[i * 4 + 1], green[i]) << i;
+            EXPECT_FLOAT_EQ(got[i * 4 + 2], red[i]) << i;
+            EXPECT_FLOAT_EQ(got[i * 4 + 3], 1.0f) << "no transparency: opaque";
         }
     }
     // A 32-bit RGB composite: the matte undone, c = 1 - (1 - s) / a.
@@ -1810,7 +1812,9 @@ TEST(MinipsdReaderTest, EveryModeAndDepthDecodesItsOwnChannels)
         minipsd_target_interleaved(&t, out.data(), 16, 4, 32);
         const minipsd_decode_opts opts{0, 0, 0, 32};
         ASSERT_EQ(minipsd_decode_composite(o.r, &t, &opts), MINIPSD_OK);
-        EXPECT_EQ(floatsOf(out), (std::vector<float>{0.5f, 1.0f, 0.0f, 0.5f}));
+        const std::vector<float> got = floatsOf(out), want = {0.5f, 1.0f, 0.0f, 0.5f};
+        ASSERT_EQ(got.size(), want.size());
+        for (std::size_t i = 0; i < want.size(); ++i) EXPECT_FLOAT_EQ(got[i], want[i]) << i;
     }
     // 1 bit: rows packed, eight pixels a byte, padded; a byte of 0 or 1 each (1 black), raw and RLE.
     {
@@ -2363,7 +2367,7 @@ TEST(MinipsdReadTest, AFileBecomesADocumentThatStandsAlone)
 
     EXPECT_EQ(r->width, 7u);
     EXPECT_EQ(r->height, 4u);
-    EXPECT_EQ(r->dpi, 72.5);
+    EXPECT_DOUBLE_EQ(r->dpi, 72.5);
     EXPECT_EQ(Bytes(r->icc, r->icc + r->icc_size), icc);
     EXPECT_EQ(r->color_mode, MINIPSD_MODE_RGB) << "the file's mode, named";
     EXPECT_EQ(r->color_mode_data.size, 0u);
@@ -2629,7 +2633,7 @@ TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
     const Doc d = readDoc(build(s).bytes, &lost);
     ASSERT_TRUE(d);
     EXPECT_EQ(lost, 0u);
-    EXPECT_EQ(d->dpi, 72.0) << "no resolution stored";
+    EXPECT_DOUBLE_EQ(d->dpi, 72.0) << "no resolution stored";
     ASSERT_EQ(d->layer_count, 1u);
     EXPECT_STREQ(d->layers[0].name, "Background");
     EXPECT_EQ(Bytes(d->layers[0].pixels, d->layers[0].pixels + 16), (Bytes{0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255,
@@ -2696,8 +2700,8 @@ TEST(MinipsdReadTest, EveryModeComesBackAsWritten)
     EXPECT_EQ(std::memcmp(f->layers[0].pixels, layer.data(), layer.size() * sizeof(float)), 0);
     float composite[8];
     std::memcpy(composite, f->composite, sizeof composite);
-    EXPECT_EQ(composite[0], 0.25f) << "opaque: as given";
-    EXPECT_EQ(composite[4], 0.5f) << "half transparent black over white";
+    EXPECT_FLOAT_EQ(composite[0], 0.25f) << "opaque: as given";
+    EXPECT_FLOAT_EQ(composite[4], 0.5f) << "half transparent black over white";
     const Bytes again = write(*f);   // the layers now in the kept 'Lr32'
     const Doc g = readDoc(again, nullptr);
     ASSERT_TRUE(g);
