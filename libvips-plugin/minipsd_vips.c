@@ -4,7 +4,8 @@
  *
  * Laid out as libvips' own loaders are (a base class over a VipsSource; the file and buffer
  * variants make one), so the file can move into libvips/foreign/ as it is.  The file is mapped
- * (vips_source_map) and read in place by minipsd's reader; nothing is copied.
+ * (vips_source_map) and read in place by minipsd's reader; nothing is copied.  Pixels are decoded
+ * in bands of rows as libvips asks for them, from its threads at once.
  *
  * The image is the composite as the file stores it, no colour converted: the mode's colour
  * channels, then its transparency.  What libvips has no interpretation for (indexed, Lab,
@@ -25,6 +26,7 @@
 
 #include <vips/vips.h>
 
+#include <limits.h>
 #include <string.h>
 
 #define PSD_SIGNATURE      "8BPS"
@@ -53,6 +55,8 @@ typedef struct _VipsForeignLoadPsd {
     VipsSource     *source;  /* set by the subclass's build */
     minipsd_reader *reader;
     minipsd_info    info;
+    unsigned        bands;       /* the colour channels and transparency, up to MINIPSD_PLANES */
+    double          xres, yres;  /* pixels per mm */
 } VipsForeignLoadPsd;
 
 typedef VipsForeignLoadClass VipsForeignLoadPsdClass;
@@ -92,7 +96,7 @@ static void vips_foreign_load_psd_dispose(GObject *gobject)
 static VipsForeignFlags vips_foreign_load_psd_get_flags(VipsForeignLoad *load)
 {
     (void)load;
-    return 0;
+    return VIPS_FOREIGN_SEQUENTIAL;   /* bands of rows; libvips keeps the image for random access */
 }
 
 /* The bands' format: a sample of depth bits.  Bitmap's 1-bit samples come as bytes. */
@@ -117,6 +121,14 @@ static VipsInterpretation psd_interpretation(const minipsd_info *info)
     default:
         return VIPS_INTERPRETATION_MULTIBAND;
     }
+}
+
+/* The image's fields: on out, and on the image load() generates. */
+static int psd_fields(VipsForeignLoadPsd *psd, VipsImage *image)
+{
+    vips_image_init_fields(image, (int)psd->info.width, (int)psd->info.height, (int)psd->bands, psd_format(&psd->info),
+                           VIPS_CODING_NONE, psd_interpretation(&psd->info), psd->xres, psd->yres);
+    return vips_image_pipelinev(image, VIPS_DEMAND_STYLE_THINSTRIP, NULL);
 }
 
 /* A resource's bytes as a blob of the image, when the file has it. */
@@ -160,11 +172,11 @@ static int vips_foreign_load_psd_header(VipsForeignLoad *load)
         if (resolution.horizontal_resolution_unit == PSD_UNIT_CM) unit = "cm";
     }
 
-    vips_image_init_fields(load->out, (int)psd->info.width, (int)psd->info.height,
-                           psd->info.color_channels + (psd->info.composite_has_alpha ? 1 : 0),
-                           psd_format(&psd->info), VIPS_CODING_NONE, psd_interpretation(&psd->info),
-                           xres > 0.0 ? xres / MM_PER_INCH : 1.0, yres > 0.0 ? yres / MM_PER_INCH : 1.0);
-    if (vips_image_pipelinev(load->out, VIPS_DEMAND_STYLE_THINSTRIP, NULL)) return -1;
+    /* Channels past MINIPSD_PLANES (a multichannel file's sixth on) are not decoded. */
+    psd->bands = VIPS_MIN(psd->info.color_channels + (psd->info.composite_has_alpha ? 1u : 0u), MINIPSD_PLANES);
+    psd->xres  = xres > 0.0 ? xres / MM_PER_INCH : 1.0;
+    psd->yres  = yres > 0.0 ? yres / MM_PER_INCH : 1.0;
+    if (psd_fields(psd, load->out)) return -1;
     if (xres > 0.0) vips_image_set_string(load->out, VIPS_META_RESOLUTION_UNIT, unit);
 
     if (psd->info.icc.size)
@@ -184,10 +196,51 @@ static int vips_foreign_load_psd_header(VipsForeignLoad *load)
     return 0;
 }
 
+/* One band of rows, decoded straight into the region.  vips_sequential asks for whole rows; calls
+   run at once from libvips' threads on the one reader, which minipsd allows on a whole file. */
+static int psd_generate(VipsRegion *region, void *seq, void *a, void *b, gboolean *stop)
+{
+    VipsForeignLoadPsd *psd  = (VipsForeignLoadPsd *)a;
+    const VipsRect     *rect = &region->valid;
+    minipsd_decode_opts opts;
+    minipsd_target      target;
+    VipsPel            *top  = VIPS_REGION_ADDR_TOPLEFT(region), *row;
+    const size_t        skip = VIPS_REGION_LSKIP(region);
+    int                 rc, x, y;
+    (void)seq, (void)b, (void)stop;
+
+    if (rect->left != 0 || rect->width != region->im->Xsize) {
+        vips_error(VIPS_OBJECT_GET_CLASS(psd)->nickname, "%s", "only whole rows are decoded");
+        return -1;
+    }
+    memset(&opts, 0, sizeof opts);
+    opts.y_first = (uint32_t)rect->top;
+    opts.y_count = (uint32_t)rect->height;
+    opts.depth   = psd->info.depth;
+    minipsd_target_interleaved(&target, top, skip, psd->bands, psd->info.depth);
+    rc = minipsd_decode_composite(psd->reader, &target, &opts);
+    if (rc != MINIPSD_OK) {
+        vips_error(VIPS_OBJECT_GET_CLASS(psd)->nickname, "%s", minipsd_error_string(rc));
+        return -1;
+    }
+
+    /* Bitmap decodes to 1 for black, 0 for white; libvips' B_W is 0 black, 255 white. */
+    if (psd->info.color_mode == MINIPSD_MODE_BITMAP)
+        for (y = 0; y < rect->height; ++y)
+            for (row = top + (size_t)y * skip, x = 0; x < rect->width; ++x)
+                row[x] = row[x] ? 0 : UCHAR_MAX;
+    return 0;
+}
+
 static int vips_foreign_load_psd_load(VipsForeignLoad *load)
 {
-    vips_error(VIPS_OBJECT_GET_CLASS(load)->nickname, "%s", "pixels are not decoded yet");
-    return -1;
+    VipsForeignLoadPsd *psd = (VipsForeignLoadPsd *)load;
+    VipsImage         **t   = (VipsImage **)vips_object_local_array(VIPS_OBJECT(load), 2);
+    t[0] = vips_image_new();
+    if (psd_fields(psd, t[0]) || vips_image_generate(t[0], NULL, psd_generate, NULL, psd, NULL)
+        || vips_sequential(t[0], &t[1], NULL) || vips_image_write(t[1], load->real))
+        return -1;
+    return 0;
 }
 
 static void vips_foreign_load_psd_class_init(VipsForeignLoadPsdClass *class)
