@@ -96,8 +96,8 @@ MPSD__SHARED static uint32_t mpsd__max_side(unsigned psb) { return psb ? MINIPSD
 
 /* Grid and guides: version, two grid values and the guide count (4 each), then each guide: its
    location (4) and direction (1). */
-#define MPSD__GUIDES_HEAD 16
-#define MPSD__GUIDE_SIZE  5
+#define MPSD__GUIDES_HEAD MINIPSD_GRID_AND_GUIDES_SIZE(0)
+#define MPSD__GUIDE_SIZE  (MINIPSD_GRID_AND_GUIDES_SIZE(1) - MPSD__GUIDES_HEAD)
 
 #define MPSD__PALETTE_SIZE 768   /* an indexed file's colour mode data: 256 red, then green, then blue */
 #define MPSD__FILL_OPAQUE             255 /* a layer's fill without an 'iOpa' block */

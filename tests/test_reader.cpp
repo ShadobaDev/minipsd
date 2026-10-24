@@ -749,6 +749,20 @@ TEST(MinipsdReaderTest, GuidesAlphaChannelsAndTheTransparencyIndexAreParsed)
     pos = 0;
     EXPECT_EQ(minipsd_resource_grid_and_guides(&cutGuides, &grid), MINIPSD_ERR_FORMAT) << "two guides counted, one and a bit stored";
     EXPECT_EQ(minipsd_resource_next_guide(&cutGuides, &pos, &guide), MINIPSD_ERR_FORMAT);
+    // The setter: the same bytes from the header and the guides, its size known before; the count
+    // given wins over the header's.
+    const minipsd_guide two[2] = {{10 * 32, 0}, {-32, 1}};
+    std::uint8_t madeGuides[MINIPSD_GRID_AND_GUIDES_SIZE(2)];
+    std::size_t  size = 0;
+    minipsd_grid_and_guides stale = grid;
+    stale.guide_count = 9;
+    EXPECT_EQ(minipsd_resource_make_grid_and_guides(&stale, two, 2, madeGuides, sizeof madeGuides, &size), MINIPSD_OK);
+    EXPECT_EQ(Bytes(madeGuides, madeGuides + size), guides);
+    EXPECT_EQ(minipsd_resource_make_grid_and_guides(&grid, two, 2, madeGuides, sizeof madeGuides - 1, nullptr), MINIPSD_MORE);
+    EXPECT_EQ(minipsd_resource_make_grid_and_guides(&grid, nullptr, 0, madeGuides, sizeof madeGuides, &size), MINIPSD_OK);
+    EXPECT_EQ(size, MINIPSD_GRID_AND_GUIDES_SIZE(0)) << "no guides: the header";
+    EXPECT_EQ(minipsd_resource_make_grid_and_guides(&grid, nullptr, 1, madeGuides, sizeof madeGuides, nullptr), MINIPSD_ERR_ARG);
+    EXPECT_EQ(minipsd_resource_make_grid_and_guides(nullptr, two, 2, madeGuides, sizeof madeGuides, nullptr), MINIPSD_ERR_ARG);
 
     // Alpha channel names, Pascal (1006) and Unicode (1045); a name past the data is refused.
     const auto names = [](const minipsd_resource &res) {
@@ -770,6 +784,24 @@ TEST(MinipsdReaderTest, GuidesAlphaChannelsAndTheTransparencyIndexAreParsed)
     EXPECT_EQ(minipsd_resource_next_alpha_name(&longPascal, &pos, &name), MINIPSD_ERR_FORMAT);
     const minipsd_resource longUnicode = of(MINIPSD_RES_UNICODE_ALPHA_NAMES, Out().u32(2).u16('A').b);
     EXPECT_EQ(minipsd_resource_next_alpha_name(&longUnicode, &pos, &name), MINIPSD_ERR_FORMAT);
+    // The setter, from UTF-8: Unicode as given, a pair for the turtle; Pascal ASCII, '?' for each
+    // other character, at most 255 bytes; a NULL name is "".
+    const std::string longName(300, 'x');
+    const char *const alphaNames[] = {"A\xF0\x9F\x90\xA2", nullptr, longName.c_str()};
+    const auto make = [&](std::uint16_t nameId) {
+        std::size_t need = 0;
+        EXPECT_EQ(minipsd_resource_make_alpha_names(nameId, alphaNames, 3, nullptr, 0, &need), MINIPSD_MORE);
+        Bytes out(need);
+        EXPECT_EQ(minipsd_resource_make_alpha_names(nameId, alphaNames, 3, out.data(), out.size(), nullptr), MINIPSD_OK);
+        return names(of(nameId, out));
+    };
+    Bytes longUnits;
+    for (int i = 0; i < 300; ++i) longUnits.insert(longUnits.end(), {0, 'x'});
+    EXPECT_EQ(make(MINIPSD_RES_UNICODE_ALPHA_NAMES), (std::vector<Bytes>{{0, 'A', 0xD8, 0x3D, 0xDC, 0x22}, {}, longUnits}));
+    EXPECT_EQ(make(MINIPSD_RES_ALPHA_NAMES), (std::vector<Bytes>{{'A', '?'}, {}, Bytes(255, 'x')}));
+    EXPECT_EQ(minipsd_resource_make_alpha_names(MINIPSD_RES_ALPHA_IDENTIFIERS, alphaNames, 3, nullptr, 0, nullptr),
+              MINIPSD_ERR_ARG) << "another id";
+    EXPECT_EQ(minipsd_resource_make_alpha_names(MINIPSD_RES_ALPHA_NAMES, nullptr, 1, nullptr, 0, nullptr), MINIPSD_ERR_ARG);
 
     // Alpha identifiers, four bytes each.
     const minipsd_resource ids = of(MINIPSD_RES_ALPHA_IDENTIFIERS, Out().u32(5).u32(0xABCDEF01u).b);
@@ -783,6 +815,12 @@ TEST(MinipsdReaderTest, GuidesAlphaChannelsAndTheTransparencyIndexAreParsed)
     pos = 0;
     const minipsd_resource oddIds = of(MINIPSD_RES_ALPHA_IDENTIFIERS, Bytes(6, 0));
     EXPECT_EQ(minipsd_resource_next_alpha_identifier(&oddIds, &pos, &id), MINIPSD_ERR_FORMAT);
+    const std::uint32_t twoIds[2] = {5, 0xABCDEF01u};   // the setter: the same bytes
+    std::uint8_t madeIds[MINIPSD_ALPHA_IDENTIFIERS_SIZE(2)];
+    EXPECT_EQ(minipsd_resource_make_alpha_identifiers(twoIds, 2, madeIds, sizeof madeIds, &size), MINIPSD_OK);
+    EXPECT_EQ(Bytes(madeIds, madeIds + size), Bytes(ids.data.data, ids.data.data + ids.data.size));
+    EXPECT_EQ(minipsd_resource_make_alpha_identifiers(twoIds, 2, madeIds, sizeof madeIds - 1, nullptr), MINIPSD_MORE);
+    EXPECT_EQ(minipsd_resource_make_alpha_identifiers(nullptr, 2, madeIds, sizeof madeIds, nullptr), MINIPSD_ERR_ARG);
 
     // The transparency index.
     std::uint16_t index = 0;

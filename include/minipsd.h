@@ -606,6 +606,15 @@ typedef struct minipsd_grid_and_guides {
 /** \brief The bytes resource 1047 takes: one palette entry. */
 #define MINIPSD_TRANSPARENCY_INDEX_SIZE 2
 
+/**
+ * \brief The bytes resource 1032 takes with count guides: the version, two grid values and the
+ *        guide count (four bytes each), then each guide's location (four) and direction (one).
+ */
+#define MINIPSD_GRID_AND_GUIDES_SIZE(count) (16u + (size_t)(count) * 5u)
+
+/** \brief The bytes resource 1053 takes with count identifiers, four each. */
+#define MINIPSD_ALPHA_IDENTIFIERS_SIZE(count) ((size_t)(count) * 4u)
+
 /** \brief One guide of resource 1032. */
 typedef struct minipsd_guide {
     int32_t location;  /*!< Where it lies, in document coordinates (pixels) times 32; may lie past
@@ -1416,6 +1425,59 @@ MINIPSDDEF int minipsd_resource_make_version_info(const minipsd_version_info *in
  *         NULL with cap above 0.
  */
 MINIPSDDEF int minipsd_resource_make_transparency_index(uint16_t index, uint8_t *buf, size_t cap, size_t *needed);
+
+/**
+ * \brief Resource 1032, grid and guides information, as minipsd_resource_grid_and_guides and
+ *        minipsd_resource_next_guide read it.
+ *
+ * \param grid   The header; its guide_count is not read: count says how many guides follow.
+ * \param guides The guides, in the order to store them; may be NULL when count is 0.
+ * \param count  How many guides.
+ * \param buf    Receives MINIPSD_GRID_AND_GUIDES_SIZE(count) bytes; may be NULL when cap is 0.
+ * \param cap    The size of buf in bytes.
+ * \param needed Receives MINIPSD_GRID_AND_GUIDES_SIZE(count); may be NULL.
+ * \return MINIPSD_OK; MINIPSD_MORE when cap is too small (nothing written); MINIPSD_ERR_ARG for a
+ *         NULL grid, guides NULL with count above 0, more guides than a count stores (2^32 - 1),
+ *         or buf NULL with cap above 0.
+ */
+MINIPSDDEF int minipsd_resource_make_grid_and_guides(const minipsd_grid_and_guides *grid, const minipsd_guide *guides,
+                                                     size_t count, uint8_t *buf, size_t cap, size_t *needed);
+
+/**
+ * \brief The alpha channels' names: resource 1045 (Unicode) or 1006 (Pascal strings), as
+ *        minipsd_resource_next_alpha_name reads them.
+ *
+ * Photoshop's files commonly hold both: make 1045 for the names, and 1006 for readers that know
+ * only it.  In 1006 each name is ASCII, one '?' for each other character and at most 255 bytes,
+ * as the writer's legacy layer name.
+ *
+ * \param id     MINIPSD_RES_UNICODE_ALPHA_NAMES or MINIPSD_RES_ALPHA_NAMES.
+ * \param names  UTF-8, one a channel in channel order; a NULL name is "".  May be NULL when count
+ *               is 0.
+ * \param count  How many names.
+ * \param buf    Receives the bytes; may be NULL when cap is 0.
+ * \param cap    The size of buf in bytes.
+ * \param needed Receives the bytes the resource takes; may be NULL.
+ * \return MINIPSD_OK; MINIPSD_MORE when cap is too small (nothing written); MINIPSD_ERR_ARG for
+ *         another id, names NULL with count above 0, or buf NULL with cap above 0.
+ */
+MINIPSDDEF int minipsd_resource_make_alpha_names(uint16_t id, const char *const *names, size_t count, uint8_t *buf,
+                                                 size_t cap, size_t *needed);
+
+/**
+ * \brief Resource 1053, the alpha channels' identifiers, as minipsd_resource_next_alpha_identifier
+ *        reads them.
+ *
+ * \param ids    The identifiers, in channel order; may be NULL when count is 0.
+ * \param count  How many.
+ * \param buf    Receives MINIPSD_ALPHA_IDENTIFIERS_SIZE(count) bytes; may be NULL when cap is 0.
+ * \param cap    The size of buf in bytes.
+ * \param needed Receives MINIPSD_ALPHA_IDENTIFIERS_SIZE(count); may be NULL.
+ * \return MINIPSD_OK; MINIPSD_MORE when cap is too small (nothing written); MINIPSD_ERR_ARG for ids
+ *         NULL with count above 0, or buf NULL with cap above 0.
+ */
+MINIPSDDEF int minipsd_resource_make_alpha_identifiers(const uint32_t *ids, size_t count, uint8_t *buf, size_t cap,
+                                                       size_t *needed);
 #endif /* MINIPSD_NO_WRITER */
 
 #if !defined(MINIPSD_NO_READER) && !defined(MINIPSD_NO_WRITER)

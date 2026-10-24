@@ -232,6 +232,22 @@ static mpsd__source mpsd__composite_source(const minipsd_doc *d)
 
 /* --- names: a legacy ASCII Pascal string and the UTF-16 one --- */
 
+#define MPSD__PASCAL_MAX 255   /* a Pascal string's bytes: its length is one byte */
+
+/* A UTF-8 name as a legacy Pascal string into pascal (MPSD__PASCAL_MAX + 1 bytes): ASCII, one '?'
+   per other character, at most MPSD__PASCAL_MAX; returns its length, also in pascal[0]. */
+static size_t mpsd__legacy_name(const char *utf8, uint8_t *pascal)
+{
+    const unsigned char *p = (const unsigned char *)(utf8 ? utf8 : "");
+    size_t ascii = 0;
+    while (*p && ascii < MPSD__PASCAL_MAX) {
+        const uint32_t cp = mpsd__utf8(&p);
+        pascal[1 + ascii++] = (uint8_t)(cp < 0x80 ? cp : '?');
+    }
+    pascal[0] = (uint8_t)ascii;
+    return ascii;
+}
+
 static void mpsd__unit_out(void *ctx, unsigned u) { mpsd__u16((mpsd__sink *)ctx, u); }
 
 /* The section type an 'lsct' block holds; -1 for any other block, or one too short to say. */
@@ -353,21 +369,16 @@ static void mpsd__blending_ranges(mpsd__sink *s, const minipsd_layer *l)
    out as the from format lays them out, written in the out format). */
 static void mpsd__layer_extra(mpsd__sink *s, const minipsd_layer *l, unsigned from, unsigned out)
 {
-    const char          *name = l->name;
-    const unsigned char *p = (const unsigned char *)(name ? name : "");
-    const int            named = mpsd__kept_names(l, from);
-    size_t ascii = 0;
-    uint8_t pascal[256];
+    const int named = mpsd__kept_names(l, from);
+    size_t    ascii = 0;
+    uint8_t   pascal[MPSD__PASCAL_MAX + 1];
     if (named) {                              /* the kept legacy name, as it is */
         ascii = l->name_pascal.size;
         if (ascii) memcpy(pascal + 1, l->name_pascal.data, ascii);
+        pascal[0] = (uint8_t)ascii;
     } else {
-        while (*p && ascii < 255) {           /* one '?' per non-ASCII character */
-            const uint32_t cp = mpsd__utf8(&p);
-            pascal[1 + ascii++] = (uint8_t)(cp < 0x80 ? cp : '?');
-        }
+        ascii = mpsd__legacy_name(l->name, pascal);
     }
-    pascal[0] = (uint8_t)ascii;
     mpsd__mask_data(s, l->mask);
     mpsd__blending_ranges(s, l);
     mpsd__put(s, pascal, ascii + 1);

@@ -152,6 +152,20 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
                 || strcmp(minipsd_resource_id_name(MINIPSD_RES_TRANSPARENCY_INDEX), "Transparency index") != 0
                 || minipsd_resource_id_name(1004) != NULL)
                 return -120;
+            {   /* the setters: the same bytes from the values */
+                static const char *const one_name[] = { "a" };
+                const minipsd_guide one_guide = { 64, 1 };
+                const uint32_t      one_id    = 9;
+                uint8_t             list[MINIPSD_GRID_AND_GUIDES_SIZE(1)];
+                size_t              list_size = 0;
+                if (minipsd_resource_make_grid_and_guides(&grid, &one_guide, 1, list, sizeof list, &list_size) != MINIPSD_OK
+                    || list_size != sizeof guides || memcmp(list, guides, sizeof guides) != 0
+                    || minipsd_resource_make_alpha_names(MINIPSD_RES_ALPHA_NAMES, one_name, 1, list, sizeof list, &list_size) != MINIPSD_OK
+                    || list_size != sizeof names || memcmp(list, names, sizeof names) != 0
+                    || minipsd_resource_make_alpha_identifiers(&one_id, 1, list, sizeof list, &list_size) != MINIPSD_OK
+                    || list_size != sizeof ids || memcmp(list, ids, sizeof ids) != 0)
+                    return -123;
+            }
         }
         if (minipsd_reader_next_layer(rd, &lv) != MINIPSD_MORE
             || minipsd_layer_name(&lv, name, sizeof name, &rneed) != MINIPSD_OK

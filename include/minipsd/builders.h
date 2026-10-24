@@ -114,4 +114,92 @@ MINIPSDDEF int minipsd_resource_make_transparency_index(uint16_t index, uint8_t 
     return mpsd__made(mpsd__make_transparency_index, &index, buf, cap, needed);
 }
 
+/* --- the lists: guides, alpha channels' names and identifiers --- */
+
+typedef struct mpsd__guides_in {
+    const minipsd_grid_and_guides *grid;
+    const minipsd_guide           *guides;
+    size_t                         count;
+} mpsd__guides_in;
+
+static void mpsd__make_grid_and_guides(mpsd__sink *s, const void *what)
+{
+    const mpsd__guides_in *in = (const mpsd__guides_in *)what;
+    size_t i;
+    mpsd__u32(s, in->grid->version);             /* MPSD__GUIDES_HEAD */
+    mpsd__u32(s, in->grid->horizontal_grid);
+    mpsd__u32(s, in->grid->vertical_grid);
+    mpsd__u32(s, (uint32_t)in->count);
+    for (i = 0; i < in->count; ++i) {            /* MPSD__GUIDE_SIZE each */
+        mpsd__u32(s, (uint32_t)in->guides[i].location);
+        mpsd__u8(s, in->guides[i].direction);
+    }
+}
+
+MINIPSDDEF int minipsd_resource_make_grid_and_guides(const minipsd_grid_and_guides *grid, const minipsd_guide *guides,
+                                                     size_t count, uint8_t *buf, size_t cap, size_t *needed)
+{
+    mpsd__guides_in in;
+    if (!grid || (count && !guides) || (uint64_t)count > UINT32_MAX) return MINIPSD_ERR_ARG;
+    in.grid   = grid;
+    in.guides = guides;
+    in.count  = count;
+    return mpsd__made(mpsd__make_grid_and_guides, &in, buf, cap, needed);
+}
+
+typedef struct mpsd__names_in {
+    unsigned           unicode;               /* 1045: Unicode strings; 1006: Pascal strings */
+    const char *const *names;
+    size_t             count;
+} mpsd__names_in;
+
+static void mpsd__make_alpha_names(mpsd__sink *s, const void *what)
+{
+    const mpsd__names_in *in = (const mpsd__names_in *)what;
+    size_t i;
+    for (i = 0; i < in->count; ++i) {
+        if (in->unicode) {                       /* its count of UTF-16 units, then the units */
+            mpsd__u32(s, (uint32_t)mpsd__utf16(in->names[i], NULL, NULL));
+            (void)mpsd__utf16(in->names[i], mpsd__unit_out, s);
+        } else {                                 /* a Pascal string, not padded */
+            uint8_t pascal[MPSD__PASCAL_MAX + 1];
+            mpsd__put(s, pascal, mpsd__legacy_name(in->names[i], pascal) + 1);   /* writer.h */
+        }
+    }
+}
+
+MINIPSDDEF int minipsd_resource_make_alpha_names(uint16_t id, const char *const *names, size_t count, uint8_t *buf,
+                                                 size_t cap, size_t *needed)
+{
+    mpsd__names_in in;
+    if ((id != MINIPSD_RES_UNICODE_ALPHA_NAMES && id != MINIPSD_RES_ALPHA_NAMES) || (count && !names))
+        return MINIPSD_ERR_ARG;
+    in.unicode = id == MINIPSD_RES_UNICODE_ALPHA_NAMES;
+    in.names   = names;
+    in.count   = count;
+    return mpsd__made(mpsd__make_alpha_names, &in, buf, cap, needed);
+}
+
+typedef struct mpsd__ids_in {
+    const uint32_t *ids;
+    size_t          count;
+} mpsd__ids_in;
+
+static void mpsd__make_alpha_identifiers(mpsd__sink *s, const void *what)
+{
+    const mpsd__ids_in *in = (const mpsd__ids_in *)what;
+    size_t i;
+    for (i = 0; i < in->count; ++i) mpsd__u32(s, in->ids[i]);
+}
+
+MINIPSDDEF int minipsd_resource_make_alpha_identifiers(const uint32_t *ids, size_t count, uint8_t *buf, size_t cap,
+                                                       size_t *needed)
+{
+    mpsd__ids_in in;
+    if (count && !ids) return MINIPSD_ERR_ARG;
+    in.ids   = ids;
+    in.count = count;
+    return mpsd__made(mpsd__make_alpha_identifiers, &in, buf, cap, needed);
+}
+
 #endif /* MPSD__BUILDERS_DONE */
