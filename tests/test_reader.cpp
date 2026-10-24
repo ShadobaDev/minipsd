@@ -2707,6 +2707,55 @@ TEST(MinipsdReadTest, EveryModeComesBackAsWritten)
     ASSERT_TRUE(g);
     EXPECT_EQ(write(*g), again) << "a second pass changes no byte";
 
+    // Where the layer count cannot say the composite has transparency ('Lr32' holds a positive one;
+    // a document with no layers has 0), the writer names the channel as Photoshop does, which GIMP
+    // reads it by: 1006, 1045 and 1053, once, kept as they are on the next pass; a document with no
+    // layers also gets an empty 'Mtrn' ('Mt16', 'Mt32') after its tail, which the reader honours.
+    const Bytes pascal = {12, 'T', 'r', 'a', 'n', 's', 'p', 'a', 'r', 'e', 'n', 'c', 'y'};
+    const auto names = [&](const Bytes &file) {
+        Open o(file);
+        EXPECT_EQ(o.rc, MINIPSD_OK);
+        std::vector<int> ids;
+        minipsd_resource res{};
+        for (std::size_t at = 0; minipsd_reader_next_resource(o.r, &at, &res) == MINIPSD_MORE;)
+            if (res.id == MINIPSD_RES_ALPHA_NAMES || res.id == MINIPSD_RES_UNICODE_ALPHA_NAMES || res.id == MINIPSD_RES_ALPHA_IDENTIFIERS) {
+                ids.push_back(res.id);
+                if (res.id == MINIPSD_RES_ALPHA_NAMES) { EXPECT_EQ(Bytes(res.data.data, res.data.data + res.data.size), pascal); }
+            }
+        EXPECT_NE(o.info.composite_has_alpha, 0);
+        return ids;
+    };
+    const std::vector<int> photoshops = {MINIPSD_RES_ALPHA_NAMES, MINIPSD_RES_UNICODE_ALPHA_NAMES, MINIPSD_RES_ALPHA_IDENTIFIERS};
+    EXPECT_EQ(names(floats), photoshops) << "'Lr32'";
+    EXPECT_EQ(names(again), photoshops) << "kept, not written twice";
+    const std::vector<std::uint8_t> greyAlpha = {10, 255, 20, 128};   // 2 x 1, grey and transparency
+    minipsd_doc flat = docOf(2, 1, nullptr, 0);
+    flat.color_mode = MINIPSD_MODE_GREY;
+    flat.composite  = greyAlpha.data();
+    const Bytes noLayers = write(flat);
+    EXPECT_EQ(names(noLayers), photoshops) << "no layers";
+    const Bytes mtrn = {'8', 'B', 'I', 'M', 'M', 't', 'r', 'n', 0, 0, 0, 0};
+    const auto block = std::search(noLayers.begin(), noLayers.end(), mtrn.begin(), mtrn.end());
+    ASSERT_NE(block, noLayers.end()) << "an empty 'Mtrn'";
+    EXPECT_EQ(std::search(block + 1, noLayers.end(), mtrn.begin(), mtrn.end()), noLayers.end()) << "one";
+    const Doc h = readDoc(noLayers, nullptr);
+    ASSERT_TRUE(h);
+    const Bytes once = write(*h);
+    const Doc k = readDoc(once, nullptr);
+    ASSERT_TRUE(k);
+    EXPECT_EQ(write(*k), once) << "a second pass changes no byte";
+    EXPECT_EQ(names(once), photoshops) << "read and written: kept, not written twice";
+    const Bytes other = {7, 'O', 'u', 'r', ' ', 'o', 'w', 'n'};
+    const minipsd_resource own{MINIPSD_RES_ALPHA_NAMES, {other.data(), other.size()}, {}};
+    flat.resources = &own; flat.resource_count = 1;
+    {
+        Open o(write(flat));
+        minipsd_resource res{};
+        ASSERT_EQ(minipsd_reader_find_resource(o.r, MINIPSD_RES_ALPHA_NAMES, &res), MINIPSD_OK);
+        EXPECT_EQ(Bytes(res.data.data, res.data.data + res.data.size), other) << "the document's own names win";
+        EXPECT_EQ(minipsd_reader_find_resource(o.r, MINIPSD_RES_ALPHA_IDENTIFIERS, &res), MINIPSD_ERR_NOT_FOUND) << "none of the writer's";
+    }
+
     const Bytes bits = {0, 1, 0, 0, 7, 0, 0, 0, 255, 1};   // 10 x 1: 0 white, any other black
     minipsd_doc b = docOf(10, 1, nullptr, 0);
     b.depth = 1;

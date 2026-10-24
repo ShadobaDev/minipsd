@@ -355,7 +355,10 @@ several threads from one reader into one image.
   Photoshop's 16-bit files have them; what the block held goes, the document's layers win.
 - **No layers:** a document with a composite (supplied or stored) and `layer_count` 0 is written
   flat: an empty layer info and the tail, as `minipsd_read` keeps a flat file with
-  `opts->stored`.
+  `opts->stored`; when the composite has transparency (not in a flat mode), an empty `Mtrn`,
+  `Mt16` or `Mt32` by its depth after the tail, unless the tail has one (Adobe's "merged
+  transparency"; no file in psd-tools' set is flat with transparency, since Photoshop keeps it on
+  a layer).
 - **The format is what the document is.** A PSB is written with its wide fields (eight-byte
   section and channel lengths, four-byte RLE row counts), and everything kept from a file is
   written as it is, so it must be in that format's layout: `minipsd_read` sets `format` to the
@@ -418,6 +421,12 @@ several threads from one reader into one image.
     clipping, groups and effects are not drawn;
   - transparency (of a supplied or composed composite, always, but in a flat mode) is the first extra channel,
     signalled by writing the layer count as a **negative** number, as the format specifies;
+    where the count cannot say it (the writer's `Lr32`, whose count is positive, and a document
+    with no layers), by the `Mt32` (`Mtrn`, `Mt16`) block and by naming the channel as
+    Photoshop's `transparentbg.psd` in psd-tools' set does: 1006 "Transparency", 1045 the same
+    with its NUL, 1053 id 0. GIMP takes the channel for transparency only by a negative count or
+    that name, and reads none of the blocks; a document that keeps any of 1006, 1045 or 1053
+    gets none of the writer's;
   - **colour is matted against white:** `c*a + max*(1-a)`, `max` being 255 or 65535 (at 32 bits
     `c*a + (1-a)`). Photoshop stores it this way and readers subtract the white back out. The
     writer mattes, a supplied composite too, unless `composite_matted` says it already is: then it
@@ -435,6 +444,8 @@ several threads from one reader into one image.
     1064 goes. The resolution stays square: the ratio is never folded into 1005. Photoshop's files
     in psd-tools' set all hold 1.0 (290 version 2, 15 version 1), so another ratio is written as
     the format lays it out but not verified against a reader;
+  - 1006, 1045 and 1053 naming the composite's transparency, where the layer count cannot say it
+    (Composite image, above);
   - a resource of odd length is padded to even.
 - **Typed setters:** the mirror of the typed views (in [What is read](#what-is-read)): a struct in,
   the bytes the view reads out, into the caller's buffer, counted first (`needed`, and

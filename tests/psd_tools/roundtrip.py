@@ -636,6 +636,11 @@ def check_mode_document(psd, name, mode, depth, expected):
     if depth == 32:   # in 'Lr32', as Photoshop keeps them, the layer info empty; 'Mt32': the composite's alpha
         expect("layer info", li.layer_count if li else 0, 0)
         expect("blocks", [k for k in (b"Mt32", b"Lr32") if lmi.tagged_blocks.get_data(k) is not None], [b"Mt32", b"Lr32"])
+        # the layer count cannot say it, so the channel is named as Photoshop's transparentbg.psd
+        # names it, which GIMP reads it by
+        names = psd.image_resources
+        expect("alpha names", tuple(list(names.get_data(k) or []) for k in (ResourceId.ALPHA_NAMES_PASCAL,
+               ResourceId.ALPHA_NAMES_UNICODE, ResourceId.ALPHA_IDENTIFIERS)), (["Transparency"], ["Transparency\x00"], [0]))
         li = lmi.tagged_blocks.get_data(b"Lr32")
     expect("layers", len(li.layer_records), 2)
     for record, channels, values, (rw, rh) in zip(li.layer_records, li.channel_image_data, (base, top), ((w, h), (lw, lh))):

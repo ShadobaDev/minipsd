@@ -203,8 +203,9 @@ static unsigned mpsd__composite_channels(const minipsd_doc *d)
     return mpsd__copies_composite(d) ? d->composite_channels : mpsd__doc_pixel(d);
 }
 
-/* Is the composite's fourth channel transparency, the layer count negative?  Always for a
-   supplied or composed one. */
+/* Is the composite's fourth channel transparency?  Always for a supplied or composed one.  The layer
+   count says it, negative, or where it cannot (mpsd__alpha_uncounted) a 'Mtrn' ('Mt16', 'Mt32')
+   block and the channel's names. */
 static int mpsd__composite_alpha(const minipsd_doc *d) { return !mpsd__copies_composite(d) || d->composite_alpha; }
 
 /* No source: the pieces outside a layer channel and the composite. */
@@ -455,6 +456,16 @@ static uint64_t mpsd__max_layers_section(unsigned psb) { return psb ? MPSD__FAR 
 
 static const minipsd_resource *mpsd__find_resource(const minipsd_doc *d, unsigned id);
 static int mpsd__aspect_kept(const minipsd_doc *d);
+static int mpsd__names_transparency(const minipsd_doc *d);
+static size_t mpsd__tail_block(const minipsd_doc *d, const char *a, const char *b, size_t *end);
+
+/* Photoshop's names for the composite's transparency, as its files hold them: the alpha channel
+   names (1006, a Pascal string; 1045, a count of UTF-16 units, then the name with its NUL) and
+   their identifiers (1053). */
+static const uint8_t mpsd__transparency_name[] = { 12, 'T', 'r', 'a', 'n', 's', 'p', 'a', 'r', 'e', 'n', 'c', 'y' };
+static const uint8_t mpsd__transparency_unicode[] = { 0, 0, 0, 13, 0, 'T', 0, 'r', 0, 'a', 0, 'n', 0, 's', 0, 'p',
+                                                      0, 'a', 0, 'r', 0, 'e', 0, 'n', 0, 'c', 0, 'y', 0, 0 };
+static const uint8_t mpsd__transparency_id[] = { 0, 0, 0, 0 };
 
 /* A kept resource is written unless the document's own field says it: dpi, icc, and a pixel
    aspect ratio the document sets that no kept 1064 says. */
@@ -542,7 +553,8 @@ static void mpsd__pixel_aspect(mpsd__sink *s, const minipsd_doc *d)
 }
 
 /* The image resources: the writer's own first (the resolution, the ICC profile if any, the pixel
-   aspect ratio if set), then the kept ones.  A kept one of these goes: the document's field says
+   aspect ratio if set, the transparency's names where the layer count cannot say it), then the
+   kept ones.  A kept one of these goes: the document's field says
    it. */
 static void mpsd__resources(mpsd__sink *s, const minipsd_doc *d)
 {
@@ -553,6 +565,12 @@ static void mpsd__resources(mpsd__sink *s, const minipsd_doc *d)
     mpsd__resolution(s, d, res ? res->name : none);
     if (d->icc) mpsd__put_resource(s, MINIPSD_RES_ICC_PROFILE, icc ? icc->name : none, d->icc, d->icc_size);
     if (d->pixel_aspect_ratio > 0.0 && !mpsd__aspect_kept(d)) mpsd__pixel_aspect(s, d);
+    if (mpsd__names_transparency(d)) {
+        mpsd__put_resource(s, MINIPSD_RES_ALPHA_NAMES, none, mpsd__transparency_name, sizeof mpsd__transparency_name);
+        mpsd__put_resource(s, MINIPSD_RES_UNICODE_ALPHA_NAMES, none, mpsd__transparency_unicode,
+                           sizeof mpsd__transparency_unicode);
+        mpsd__put_resource(s, MINIPSD_RES_ALPHA_IDENTIFIERS, none, mpsd__transparency_id, sizeof mpsd__transparency_id);
+    }
     for (i = 0; i < d->resource_count; ++i)
         if (mpsd__kept_resource(d, &d->resources[i]))
             mpsd__put_resource(s, d->resources[i].id, d->resources[i].name, d->resources[i].data.data, d->resources[i].data.size);
@@ -595,6 +613,13 @@ static int mpsd__stored_ok(minipsd_bytes c, uint32_t width, uint32_t height, uns
    document's layers win. */
 static size_t mpsd__layers_block(const minipsd_doc *d, size_t *end)
 {
+    return mpsd__tail_block(d, "Lr16", "Lr32", end);
+}
+
+/* Where the first block of the kept tail keyed a or b starts, and where it ends (padded); both the
+   tail's size when there is none. */
+static size_t mpsd__tail_block(const minipsd_doc *d, const char *a, const char *b, size_t *end)
+{
     const minipsd_bytes t   = d->layer_tail;
     const unsigned      psb = mpsd__doc_psb(d);
     size_t              at;
@@ -611,7 +636,7 @@ static size_t mpsd__layers_block(const minipsd_doc *d, size_t *end)
         size = mpsd__getlen(p + MPSD__BLOCK_LEN, head > MPSD__BLOCK_HEAD);
         if (size > left - head) return t.size;
         span = mpsd__pad((size_t)size, 4) < left - head ? mpsd__pad((size_t)size, 4) : left - head;
-        if (mpsd__tag(p + MPSD__BLOCK_KEY, "Lr16") || mpsd__tag(p + MPSD__BLOCK_KEY, "Lr32")) { *end = at + head + span; return at; }
+        if (mpsd__tag(p + MPSD__BLOCK_KEY, a) || mpsd__tag(p + MPSD__BLOCK_KEY, b)) { *end = at + head + span; return at; }
         at += head + span;
     }
     return t.size;
@@ -663,6 +688,38 @@ static int mpsd__own_layers_block(const minipsd_doc *d)
     return mpsd__doc_depth(d) == MPSD__CH_32BIT && d->layer_count && mpsd__layers_block(d, &end) == d->layer_tail.size;
 }
 
+/* Is the composite's transparency where the layer count cannot say it?  In the writer's 'Lr32',
+   whose count is positive, and in a document with no layers, whose count is 0; a flat mode has
+   none. */
+static int mpsd__alpha_uncounted(const minipsd_doc *d)
+{
+    return mpsd__composite_alpha(d) && !mpsd__doc_flat(d) && (mpsd__own_layers_block(d) || !d->layer_count);
+}
+
+/* Then the writer names it as Photoshop does, which GIMP reads it by, unless the document keeps
+   alpha channel names or identifiers of its own. */
+static int mpsd__names_transparency(const minipsd_doc *d)
+{
+    return mpsd__alpha_uncounted(d) && !mpsd__find_resource(d, MINIPSD_RES_ALPHA_NAMES)
+        && !mpsd__find_resource(d, MINIPSD_RES_UNICODE_ALPHA_NAMES) && !mpsd__find_resource(d, MINIPSD_RES_ALPHA_IDENTIFIERS);
+}
+
+/* A document with no layers says it with an empty block after the tail, as the 'Lr32' one does
+   with 'Mt32': 'Mtrn', 'Mt16' or 'Mt32' by its depth (Adobe's "merged transparency"), unless the
+   kept tail has one. */
+static const char *mpsd__merged_key(const minipsd_doc *d)
+{
+    const unsigned depth = mpsd__doc_depth(d);
+    return depth == MPSD__CH_32BIT ? "Mt32" : depth == MPSD__CH_16BIT ? "Mt16" : "Mtrn";
+}
+
+static int mpsd__own_merged_block(const minipsd_doc *d)
+{
+    size_t end;
+    return !d->layer_count && mpsd__alpha_uncounted(d) && mpsd__tail_block(d, "Mtrn", "Mt16", &end) == d->layer_tail.size
+        && mpsd__tail_block(d, "Mt32", "Mt32", &end) == d->layer_tail.size;
+}
+
 /* A block of the writer's own, of no data or of size bytes that follow it: '8BIM', or in a PSB
    '8B64' as Photoshop marks the long keys these are, the key, the length. */
 static void mpsd__own_block(mpsd__sink *s, const char *key, uint64_t size, unsigned out)
@@ -691,6 +748,7 @@ static uint64_t mpsd__section_size(const minipsd_doc *d, uint64_t info, unsigned
     if (mpsd__layers_block(d, &end) < d->layer_tail.size || mpsd__own_layers_block(d))
         c.count += MPSD__BLOCK_LEN + mpsd__len_size(out) + (mpsd__pad((size_t)info, 4) - info);   /* '8BIM', 'Lr16', length; padding */
     if (mpsd__own_layers_block(d) && mpsd__composite_alpha(d)) c.count += MPSD__BLOCK_LEN + mpsd__len_size(out);   /* 'Mt32' */
+    if (mpsd__own_merged_block(d)) c.count += MPSD__BLOCK_LEN + mpsd__len_size(out);                              /* 'Mtrn' */
     return mpsd__len_size(out) + info + c.count;
 }
 
@@ -922,6 +980,7 @@ static void mpsd__tail(mpsd__sink *s, const minipsd_doc *d, uint64_t content, ui
         mpsd__zeros(s, mpsd__pad((size_t)info, 4) - (size_t)info);
     } else {
         (void)mpsd__tail_range(s, d, 0, d->layer_tail.size, out);   /* minipsd_doc_check has accepted it */
+        if (mpsd__own_merged_block(d)) mpsd__own_block(s, mpsd__merged_key(d), 0, out);
     }
     if (!mpsd__copies_composite(d)) mpsd__u16(s, mpsd__marker(d));   /* a stored composite brings its own */
 }
