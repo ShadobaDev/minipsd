@@ -1,10 +1,12 @@
 /**
  * \file
- * \brief minipsd as a libvips loader of PSD and PSB: psdload, psdload_buffer, psdload_source.
+ * \brief minipsd as a libvips loader and saver of PSD and PSB: psdload, psdload_buffer,
+ *        psdload_source; psdsave, psdsave_buffer, psdsave_target.
  *
- * libvips' prebuilt Windows builds load no modules, so a program registers the loader itself: call
- * minipsd_vips_init() once, after VIPS_INIT().  vips_image_new_from_file("x.psd") and the other
- * ways libvips finds a loader then find this one.
+ * libvips' prebuilt Windows builds load no modules, so a program registers them itself: call
+ * minipsd_vips_init() once, after VIPS_INIT().  vips_image_new_from_file("x.psd"),
+ * vips_image_write_to_file(image, "x.psd") and the other ways libvips finds a loader or a saver
+ * then find these.
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>

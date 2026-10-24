@@ -37,6 +37,7 @@
 #define ASPECT         0.9
 #define MM_PER_INCH    25.4
 #define EPSILON        1e-9
+#define FLOAT_EPSILON  1e-6   /* a 32-bit composite's un-matting, 1 - (1 - c) / a, is off by rounding */
 #define PATH_MAX_SIZE  1024
 #define NAME_SIZE      (PATH_MAX_SIZE + 64)   /* a path and what it names in it */
 #define WORKSPACE_SIZE 256
@@ -46,6 +47,8 @@
 #define HALF_OPAQUE    128
 #define ZIP_LEVEL      6
 #define COMPOSITE      (-1)   /* decode_image's layer: the composite */
+#define STORED_RLE     1      /* a channel's stored compression markers */
+#define STORED_ZIP     2
 
 /* The ZIP document's two layers: one reaching past the canvas's left edge, one inside. */
 #define ZIP_W          200
@@ -348,6 +351,114 @@ static void check_indexed(const char *path, const uint8_t *indices, const uint8_
     if (image) g_object_unref(image);
 }
 
+static uint8_t *read_all(const char *path, size_t *size);
+
+/* The same samples: bytes, or floats within FLOAT_EPSILON. */
+static int same_samples(const void *got, const void *want, size_t bytes, int floats)
+{
+    const float *g = (const float *)got, *w = (const float *)want;
+    size_t       i;
+    if (!floats) return memcmp(got, want, bytes) == 0;
+    for (i = 0; i < bytes / sizeof(float); ++i)
+        if ((double)fabsf(g[i] - w[i]) > FLOAT_EPSILON) return 0;
+    return 1;
+}
+
+/* An image over memory, with its interpretation and the test's resolution. */
+static VipsImage *make_image(const void *data, int bands, VipsBandFormat format, VipsInterpretation interpretation)
+{
+    const size_t bytes = (size_t)PIXELS * (size_t)bands * vips_format_sizeof(format);
+    VipsImage   *memory = vips_image_new_from_memory(data, bytes, WIDTH, HEIGHT, bands, format), *image = NULL;
+    if (memory) {
+        vips_copy(memory, &image, "interpretation", interpretation, "xres", DPI / MM_PER_INCH, "yres", DPI / MM_PER_INCH,
+                  NULL);
+        g_object_unref(memory);
+    }
+    return image;
+}
+
+/* An image saved through psdsave as a file, into a buffer and into a target, the same bytes each
+   time, then read back through psdload: the layer is the image (made opaque when it had no
+   alpha), and so is the composite when alpha is full (the matte undone exactly).  options are a
+   psdsave option and its value, or NULL. */
+static void check_saved(VipsImage *image, const char *name, const char *dir, int full_alpha, const char *option,
+                        int value)
+{
+    char        path[PATH_MAX_SIZE];
+    VipsImage  *want_image = NULL, *back;
+    VipsTarget *target;
+    VipsBlob   *blob = NULL;
+    void       *buffer = NULL, *want = NULL, *got;
+    uint8_t    *file;
+    size_t      file_size = 0, buffer_size = 0, want_bytes = 0, got_bytes = 0, target_size = 0;
+    const void *target_data = NULL;
+    const char *saver;
+    int         colors, saved, layer;
+    if (!image) {
+        check(0, "image made", name);
+        return;
+    }
+    snprintf(path, sizeof path, "%s/%s", dir, name);
+    saved = option ? vips_image_write_to_file(image, path, option, value, NULL) : vips_image_write_to_file(image, path, NULL);
+    if (saved) {
+        printf("FAIL %s: not saved: %s\n", name, vips_error_buffer());
+        vips_error_clear();
+        ++failures;
+        g_object_unref(image);
+        return;
+    }
+    saver = vips_foreign_find_save(path);
+    check(saver && strcmp(saver, "VipsForeignSavePsdFile") == 0, "found as psdsave", name);
+
+    /* The same bytes three ways. */
+    file   = read_all(path, &file_size);
+    target = vips_target_new_to_memory();
+    if (option) {
+        vips_image_write_to_buffer(image, ".psd", &buffer, &buffer_size, option, value, NULL);
+        if (target) vips_image_write_to_target(image, ".psd", target, option, value, NULL);
+    } else {
+        vips_image_write_to_buffer(image, ".psd", &buffer, &buffer_size, NULL);
+        if (target) vips_image_write_to_target(image, ".psd", target, NULL);
+    }
+    if (target) g_object_get(target, "blob", &blob, NULL);
+    if (blob) target_data = vips_blob_get(blob, &target_size);
+    check(file && buffer && buffer_size == file_size && memcmp(buffer, file, file_size) == 0, "buffer as the file", name);
+    check(file && target_data && target_size == file_size && memcmp(target_data, file, file_size) == 0, "target as the file",
+          name);
+    vips_error_clear();
+
+    /* Read back: the layer, then the composite. */
+    colors = image->Type == VIPS_INTERPRETATION_CMYK ? 4 : image->Bands >= 3 ? 3 : 1;
+    if (image->Bands == colors) {
+        vips_bandjoin_const1(image, &want_image, image->BandFmt == VIPS_FORMAT_FLOAT ? 1.0
+                                                 : image->BandFmt == VIPS_FORMAT_USHORT ? USHRT_MAX : UCHAR_MAX, NULL);
+    } else {
+        want_image = image;
+        g_object_ref(want_image);
+    }
+    if (want_image) want = vips_image_write_to_memory(want_image, &want_bytes);
+    for (layer = 0; layer >= COMPOSITE; --layer) {
+        if (layer == COMPOSITE && !full_alpha) break;
+        back = vips_image_new_from_file(path, "layer", layer, NULL);
+        got  = back ? vips_image_write_to_memory(back, &got_bytes) : NULL;
+        check(want && got && got_bytes == want_bytes
+                  && same_samples(got, want, want_bytes, layer == COMPOSITE && image->BandFmt == VIPS_FORMAT_FLOAT),
+              layer == COMPOSITE ? "composite read back as the image" : "layer read back as the image", name);
+        if (back && layer == 0)
+            check(fabs(vips_image_get_xres(back) - DPI / MM_PER_INCH) < EPSILON, "resolution read back", name);
+        vips_error_clear();
+        g_free(got);
+        if (back) g_object_unref(back);
+    }
+    g_free(want);
+    if (want_image) g_object_unref(want_image);
+    if (blob) vips_area_unref(VIPS_AREA(blob));
+    if (target) g_object_unref(target);
+    g_free(buffer);
+    free(file);
+    g_object_unref(image);
+}
+
 /* The whole file in a new buffer; NULL when it cannot be read. */
 static uint8_t *read_all(const char *path, size_t *size)
 {
@@ -374,6 +485,23 @@ static size_t layer_count(const void *file, size_t size)
     minipsd_reader *r;
     minipsd_info    info;
     return minipsd_reader_init(&r, file, size, workspace, sizeof workspace, NULL, &info) == MINIPSD_OK ? info.layer_count : 0;
+}
+
+/* The stored compression marker of the file's first layer's first channel; -1 without one. */
+static int first_layer_compression(const char *path)
+{
+    uint8_t            workspace[WORKSPACE_SIZE], *data;
+    minipsd_reader    *r;
+    minipsd_info       info;
+    minipsd_layer_view view;
+    size_t             size = 0;
+    int                marker = -1;
+    if (!(data = read_all(path, &size))) return -1;
+    if (minipsd_reader_init(&r, data, size, workspace, sizeof workspace, NULL, &info) == MINIPSD_OK
+        && minipsd_reader_next_layer(r, &view) == MINIPSD_MORE && view.channel[0].data && view.channel[0].size >= 2)
+        marker = view.channel[0].data[0] << 8 | view.channel[0].data[1];
+    free(data);
+    return marker;
 }
 
 /* Each file the list names, its composite and every layer, loaded through libvips and compared
@@ -416,6 +544,8 @@ int main(int argc, char **argv)
     static uint8_t       rgba[PIXELS * RGBA], cmyka[PIXELS * MAX_PLANES], bits[PIXELS], indices[PIXELS];
     static uint8_t       palette[3 * PALETTE], zip_a[ZIP_PIXELS * RGBA], zip_b[ZIP_PIXELS * RGBA];
     static uint16_t      grey16[PIXELS * 2], rgba16[PIXELS * RGBA];
+    static uint8_t       rgb8[PIXELS * 3];
+    static float         rgbf[PIXELS * 3];
     static const char    junk[] = "8BPX, not a PSD";
     char                 path[PATH_MAX_SIZE];
     uint8_t              transparency[MINIPSD_TRANSPARENCY_INDEX_SIZE];
@@ -444,6 +574,8 @@ int main(int argc, char **argv)
     for (i = 0; i < sizeof palette; ++i) palette[i] = (uint8_t)(i * 11 + i / PALETTE * 85 + 3);   /* R, G, B differ */
     for (i = 0; i < sizeof zip_a; ++i) zip_a[i] = (uint8_t)(i * 3);
     for (i = 0; i < sizeof zip_b; ++i) zip_b[i] = (uint8_t)(i / 97);
+    for (i = 0; i < sizeof rgb8; ++i) rgb8[i] = (uint8_t)(i * 17 + i / 255);
+    for (i = 0; i < PIXELS * 3; ++i) rgbf[i] = (float)(i % 1001) / 1000.0f;
 
     {   /* 8-bit RGB with a layer, a profile and non-square pixels; as PSD and as PSB */
         static const expected psd = { "rgb8", 4, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB, 8 };
@@ -548,6 +680,69 @@ int main(int argc, char **argv)
         doc.compression = MINIPSD_ZIP_PREDICTED;
         check_document(&doc, &opts, &predicted, argv[1], path, sizeof path);
         check_layers(path, &doc, 1, predicted.name);
+    }
+
+    {   /* The saver: grey, RGB and CMYK at 8 and 16 bits, RGB as floats; ZIP; PSB by option and by
+           suffix; a layer name and a profile kept; what PSD cannot hold refused. */
+        VipsImage *image, *back;
+        uint8_t   *file;
+        size_t     size = 0;
+        const char *got_name;
+        const void *got_icc, *want_icc = NULL;
+        size_t      want_icc_size = 0;
+        VipsBlob   *profile = NULL;
+        check_saved(make_image(rgb8, 3, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-rgb8.psd", argv[1], 1, NULL, 0);
+        check_saved(make_image(rgba, RGBA, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-rgba8.psd", argv[1], 0, NULL, 0);
+        check_saved(make_image(rgba16, 3, VIPS_FORMAT_USHORT, VIPS_INTERPRETATION_RGB16), "save-rgb16.psd", argv[1], 1, NULL, 0);
+        check_saved(make_image(indices, 1, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_B_W), "save-grey8.psd", argv[1], 1, NULL, 0);
+        check_saved(make_image(grey16, 2, VIPS_FORMAT_USHORT, VIPS_INTERPRETATION_GREY16), "save-greya16.psd", argv[1], 0, NULL, 0);
+        check_saved(make_image(cmyka, 4, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_CMYK), "save-cmyk8.psd", argv[1], 1, NULL, 0);
+        check_saved(make_image(rgbf, 3, VIPS_FORMAT_FLOAT, VIPS_INTERPRETATION_scRGB), "save-float.psd", argv[1], 1, NULL, 0);
+        check_saved(make_image(rgb8, 3, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-zip.psd", argv[1], 1, "zip", TRUE);
+        snprintf(path, sizeof path, "%s/save-zip.psd", argv[1]);
+        check(first_layer_compression(path) == STORED_ZIP, "ZIP by option", path);
+        snprintf(path, sizeof path, "%s/save-rgb8.psd", argv[1]);
+        check(first_layer_compression(path) == STORED_RLE, "RLE by default", path);
+        check_saved(make_image(rgb8, 3, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-psb.psd", argv[1], 1, "psb", TRUE);
+        snprintf(path, sizeof path, "%s/save-psb.psd", argv[1]);
+        file = read_all(path, &size);
+        check(file && size > 5 && file[5] == MINIPSD_PSB, "PSB by option", path);
+        free(file);
+        /* A file named .psb is a PSB; a buffer or a target in memory has no name: psb says it. */
+        snprintf(path, sizeof path, "%s/save-suffix.psb", argv[1]);
+        image = make_image(rgb8, 3, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB);
+        check(image && vips_image_write_to_file(image, path, NULL) == 0, "saved", path);
+        if (image) g_object_unref(image);
+        back = vips_image_new_from_file(path, "layer", 0, NULL);
+        check(back != NULL, "read back", path);
+        if (back) g_object_unref(back);
+        file = read_all(path, &size);
+        check(file && size > 5 && file[5] == MINIPSD_PSB, "PSB by suffix", path);
+        free(file);
+
+        snprintf(path, sizeof path, "%s/save-named.psd", argv[1]);
+        image = make_image(rgb8, 3, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB);
+        /* A real profile: libvips drops one it cannot read when it saves. */
+        if (vips_profile_load("srgb", &profile, NULL) == 0) {
+            want_icc = vips_blob_get(profile, &want_icc_size);
+            if (image) vips_image_set_blob_copy(image, VIPS_META_ICC_NAME, want_icc, want_icc_size);
+        }
+        check(image && vips_call("psdsave", image, path, "layer_name", "Ink", NULL) == 0, "saved by psdsave", path);
+        back = vips_image_new_from_file(path, "layer", 0, NULL);
+        check(back && vips_image_get_string(back, "psd-layer-name", &got_name) == 0 && strcmp(got_name, "Ink") == 0,
+              "layer name kept", path);
+        check(back && want_icc && vips_image_get_blob(back, VIPS_META_ICC_NAME, &got_icc, &size) == 0
+                  && size == want_icc_size && memcmp(got_icc, want_icc, size) == 0,
+              "ICC profile kept", path);
+        if (profile) vips_area_unref(VIPS_AREA(profile));
+        if (back) g_object_unref(back);
+        if (image) g_object_unref(image);
+
+        snprintf(path, sizeof path, "%s/save-refused.psd", argv[1]);
+        image = make_image(rgba16, 6, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_MULTIBAND);
+        check(image && vips_image_write_to_file(image, path, NULL) != 0, "six bands refused", path);
+        vips_error_clear();
+        if (image) g_object_unref(image);
     }
 
     /* Not a PSD: psdload does not claim it. */
