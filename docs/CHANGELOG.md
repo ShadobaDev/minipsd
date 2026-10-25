@@ -3,7 +3,7 @@
 Changes between releases, for users of minipsd. Versioning follows the pre-1.0 rules in
 [TODO.md](TODO.md): breaking changes bump the MINOR, additions and fixes the PATCH.
 
-## [0.4.0] — 2026-10-25
+## [0.4.0] — 2026-10-26
 
 **Breaking:** `minipsd_doc.composite_alpha` now says, for every composite (given, composed from
 the layers, or stored), whether it has transparency; before, a given or composed composite always
@@ -40,13 +40,22 @@ composite's by `composite_alpha`.
   `minipsd_vips_init()` after `VIPS_INIT`. `psdload` gives the composite or, with `layer`, one
   layer placed by its offset, decoded in bands of rows from libvips' threads; grey, RGB, CMYK,
   bitmap, indexed (through its palette), Lab and multichannel at every depth, with the
-  resolution, ICC profile, EXIF, XMP, IPTC and `psd-*` fields. `psdsave` writes an image with
+  resolution, ICC profile, EXIF, XMP, IPTC and `psd-*` fields: a layer's name, opacity,
+  visibility, blend mode and clipping, its mask (an image in `psd-layer-mask`), a group's
+  records (`psd-layer-section`), and a record without pixels as one transparent pixel with
+  `psd-layer-empty`, so every record loads. `psdsave` writes an image with
   alpha as one layer and its composite, one without as a flat file (with `layered`, a layer
   without transparency too), reading the image once, in bands, each channel encoded as its rows
   come: memory about the file's size. Options: `compression` (`rle`, `zip`, `zip-predicted`,
   `none`), `psb`, `layer_name`, `layered`; a PSB by itself when a PSD cannot hold the file.
+- `psdsave_layers` (`_buffer`, `_target`; `minipsd_vips_psdsave_layers` in C): several images as
+  the layers of one document, bottom first, each record's look from the same `psd-layer-*`
+  fields, masks and groups included, so a file's records loaded with `psdload` and saved come
+  back. The composite is given, or composed by `vips_composite` (blend modes, opacity, masks,
+  groups' visibility and opacity); the canvas by `width`, `height`, `left`, `top`.
 - The plugin released as `minipsd-vips-X.Y.Z.zip`: a CMake project that builds as it is, with
-  minipsd's single header private to it and an example that is its test.
+  minipsd's single header private to it, an example that is its test, and its SBOM fragment
+  (`minipsd-vips.spdx.json`, `MINIPSD_SBOM_FILE` on `minipsd::vips`).
 
 ### Fixed
 - A crafted file could make `minipsd_read` and the decode calls write past their buffers: a

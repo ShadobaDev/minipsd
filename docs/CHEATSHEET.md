@@ -136,7 +136,7 @@ sudo tar -xzf dist/minipsd-0.1.0.tar.gz --strip-components=1 -C /usr/local
 | `minipsd-cxx17` (build target) | the header compiles warning-free as C++17 |
 | `minipsd-include-check` (build target) | `minipsd.h` compiles alone, then with its implementation, leaving no internal function unused |
 | `psd-tools-roundtrip` | documents written through minipsd, read back by `psd-tools` |
-| `vips.plugin` | with `MINIPSD_VIPS_PLUGIN`: documents and every file at hand loaded through libvips (composite and layers) against minipsd's decode, saved and read back, a tall image read in bands |
+| `vips.plugin` | with `MINIPSD_VIPS_PLUGIN`: documents and every file at hand loaded through libvips (composite and layers) against minipsd's decode, saved and read back, a tall image read in bands, layered documents saved with `psdsave_layers` (masks, groups, the composite composed) |
 | `install` | `cmake --install` into the build tree (`tests/prefix/`) |
 | `consumer-copy` | a project with `include/` copied in |
 | `consumer-subdirectory` | `add_subdirectory` (git submodule) |

@@ -1,7 +1,9 @@
 # minipsd's libvips plugin
 
 minipsd as libvips' loader and saver of PSD and PSB: `vips_image_new_from_file` and
-`vips_image_write_to_file` take `.psd` and `.psb` in your program. MIT, as minipsd
+`vips_image_write_to_file` take `.psd` and `.psb` in your program. It reads a file's composite or
+any of its layers, with their look, masks and groups, and writes one image, or several as the
+layers of one document (`psdsave_layers`). MIT, as minipsd
 (`LICENSE.MIT`). Project: <https://github.com/ShadobaDev/minipsd>; the full description is its
 manual's "PSD in libvips: the plugin".
 
@@ -79,13 +81,27 @@ vips_image_write_to_file(page, "copy.psd[compression=zip]", NULL);
 ```
 
 - **Loading** (`psdload`, `psdload_buffer`, `psdload_source`): the composite, or with `layer` one
-  layer, bottom first.
+  layer, bottom first, placed by `xoffset` and `yoffset`, its look in `psd-layer-*` fields
+  (name, opacity, hidden, blend mode, clipping), its mask an image in `psd-layer-mask`, a
+  group's records marked by `psd-layer-section`, a record without pixels one transparent pixel
+  with `psd-layer-empty`.
 - **Saving** (`psdsave`, `psdsave_buffer`, `psdsave_target`): an image with alpha as one layer and
   the composite; without, flat (the composite only), or with `layered` one layer as well. Grey,
   RGB or CMYK at 8 or 16 bits, grey and RGB as floats. Options: `compression` (`rle`, the
   default; `zip`; `zip-predicted`; `none`), `psb`, `layer_name`, `layered`. The image is read
   once, in bands: memory about the file's size. A PSB when asked, for a `.psb` file, or when a
   PSD cannot hold the image.
+- **Saving layers** (`psdsave_layers`, `_buffer`, `_target`; in C `minipsd_vips_psdsave_layers`,
+  declared in `minipsd_vips.h`): an array of images, one a layer, bottom first, each read from
+  the same fields psdload sets, so a file's layers loaded and saved come back. The composite is
+  given (`composite`), or composed by `vips_composite`. The canvas: `width`, `height`, `left`,
+  `top`. Text, effects, smart objects and adjustments' settings are not carried.
+
+  ```c
+  VipsImage *layers[2] = { page, blank };   /* blank: any image with psd-layer-empty set */
+  vips_image_set_int(blank, "psd-layer-empty", 1);
+  minipsd_vips_psdsave_layers(layers, 2, "template.psd", "composite", page, NULL);
+  ```
 
 minipsd is compiled into the plugin privately, so a program that also uses minipsd itself, at
 any version, keeps its own.

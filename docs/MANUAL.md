@@ -820,7 +820,9 @@ made it (the program, and the feature you used): that is what sets the order of 
 
 minipsd writes and reads PSD; it renders nothing. When your layers are libvips images, let
 libvips flatten them and hand minipsd the result as the document's composite, the image a
-viewer that ignores layers shows. The two share their memory layout (8-bit RGBA, straight
+viewer that ignores layers shows. The plugin's `psdsave_layers` does all of it for you
+([PSD in libvips: the plugin](#psd-in-libvips-the-plugin)); below is the same with minipsd's own
+API. The two share their memory layout (8-bit RGBA, straight
 alpha, rows top down), so nothing is converted.
 [examples/vips_composite.c](../examples/vips_composite.c) is the whole program; its steps:
 
@@ -854,9 +856,17 @@ build, elsewhere pkg-config finds yours. minipsd itself never depends on libvips
 
 ### PSD in libvips: the plugin
 
-[libvips-plugin/](../libvips-plugin/) makes minipsd libvips' loader and saver of PSD and PSB, so
-`vips_image_new_from_file` and `vips_image_write_to_file` take `.psd` and `.psb` in your program.
-libvips' prebuilt Windows builds load no modules, so your program registers them, once, after
+[libvips-plugin/](../libvips-plugin/) makes minipsd libvips' loader and saver of PSD and PSB. In
+short, it:
+
+- **reads** a file's composite, or any one of its layers, with the layer's name, opacity,
+  visibility, blend mode, clipping, its mask, and the records of its groups;
+- **writes** one image (`psdsave`: one layer and its composite, or a flat file), or several
+  images as the layers of one document (`psdsave_layers`), with masks and groups, the composite
+  given or composed by libvips.
+
+Pixels stay libvips images throughout; minipsd encodes and decodes them. libvips' prebuilt
+Windows builds load no modules, so your program registers the operations, once, after
 `VIPS_INIT`:
 
 ```c
@@ -874,13 +884,15 @@ vips_image_write_to_file(page, "copy.psd", "layer_name", "Page", NULL);
   names them (CMYK with 0 for no ink, the other way round from PSD), bitmap as `B_W` (black 0),
   indexed through its palette as sRGB, Lab and multichannel as `MULTIBAND`, each at the file's
   depth. With it: the resolution, the ICC profile, EXIF, XMP, IPTC, `bits-per-sample`, and
-  `psd-*` fields such as `psd-layer-count` and a layer's name, blend mode and opacity (the list:
-  the spec's [Working with libvips](SPECIFICATION.md#working-with-libvips)). Bands of rows are
+  `psd-*` fields: `psd-layer-count`, and a layer's look in `psd-layer-*` (the list: the spec's
+  [The plugin](SPECIFICATION.md#the-plugin)). A layer without pixels (an empty one, a group's
+  record, an adjustment) comes as one transparent pixel with `psd-layer-empty`; a group's record
+  also has `psd-layer-section`; a layer's mask is an image in `psd-layer-mask`. Bands of rows are
   decoded from libvips' threads at once; with `access=sequential` memory stays at a few bands
   of rows per thread, so it grows with the width and the threads, not the height. A layer
   without transparency comes without an alpha band.
-- **Saving** (`psdsave`, `psdsave_buffer`, `psdsave_target`): an image with alpha as one layer
-  and its composite. One without alpha as a flat file, the composite only and without
+- **Saving one image** (`psdsave`, `psdsave_buffer`, `psdsave_target`): an image with alpha as one
+  layer and its composite. One without alpha as a flat file, the composite only and without
   transparency, as Photoshop saves an image without layers; with `layered`, one layer without
   transparency as well. Grey, RGB or CMYK at 8 or 16 bits, grey and RGB as floats. Options:
   `compression` (`rle`, the default; `zip`; `zip-predicted`; `none`, the composite raw too),
@@ -889,6 +901,40 @@ vips_image_write_to_file(page, "copy.psd", "layer_name", "Page", NULL);
   asked, for a file named `.psb`, or when a PSD cannot hold the image: a side above 30 000, a
   row longer than a PSD's two-byte count, or a file above 2 GB, which Adobe documents as
   Photoshop's limit for a PSD.
+- **Saving layers** (`psdsave_layers`, `_buffer`, `_target`; in C `minipsd_vips_psdsave_layers`
+  and its two variants): a saver takes one image, so this is an operation over an array of
+  them, as `vips_composite` is. Each image is a layer, bottom first; its look comes from the same
+  `psd-layer-*` fields psdload sets, its position from `xoffset` and `yoffset`:
+
+  ```c
+  VipsImage *layers[2] = { page, blank };   /* blank: any image with psd-layer-empty set */
+  vips_image_set_string(page, "psd-layer-name", "Template");
+  vips_image_set_int(blank, "psd-layer-empty", 1);
+  vips_image_set_string(blank, "psd-layer-name", "Layer");
+  minipsd_vips_psdsave_layers(layers, 2, "template.psd", "composite", page, NULL);
+  ```
+
+  - `psd-layer-empty` makes a layer without pixels, as Photoshop writes a new, unpainted one.
+  - A mask is a one-band image of the layers' depth in `psd-layer-mask`, with its own
+    `xoffset` and `yoffset`, `psd-layer-mask-default-color` (its value outside, 0 or 255) and
+    `psd-layer-mask-disabled`.
+  - A group is records in the list, as the file has them: below its layers an image with
+    `psd-layer-section` `"end"`, above them one with `"open"` or `"closed"` that carries the
+    group's name, visibility, opacity and blend mode (`"pass"` passes through).
+  - The composite: `composite`, as given; else `vips_composite` of the visible layers, blend
+    modes by the spec's table, opacity, masks and the groups' visibility and opacity in the
+    alpha, flattened against white when no layer has alpha. Clipping, a group's own blend mode
+    and mask, and modes libvips lacks are not drawn; libvips computes in floats, so where alpha
+    is partial the composite is off by a level or two. A 16-bit CMYK document needs it given.
+  - The canvas: `width` and `height`; else the composite's size; else every layer from (`left`,
+    `top`), which also places the canvas in the layers' coordinates.
+  - Every layer with pixels is of one mode and depth; none is converted. `compression` and
+    `psb` as `psdsave`; each image is read once, in bands.
+
+  A file's records loaded one by one with psdload and saved come back as the layers it had: the
+  look above, the pixels, masks and groups. Nothing else of a record travels: text, effects,
+  smart objects, an adjustment's settings (it comes back an empty layer) and other blocks are
+  left behind. A file minipsd wrote from those fields comes back byte for byte.
 - **Building:** `-DMINIPSD_VIPS_PLUGIN=ON` gives the static library `minipsd::vips`; link it.
   minipsd is compiled into it privately (`MINIPSD_STATIC`), so your own use of minipsd keeps its
   own. libvips comes as for the example, or from your project: define `minipsd_libvips` and
@@ -896,7 +942,7 @@ vips_image_write_to_file(page, "copy.psd", "layer_name", "Page", NULL);
   adding minipsd, or point `FETCHCONTENT_SOURCE_DIR_MINIPSD_LIBVIPS` at the libvips you fetched
   ([INSTALL.md](INSTALL.md#the-libvips-plugin)).
 - **Released** as `minipsd-vips-X.Y.Z.zip` with each GitHub Release: the plugin as a CMake project
-  of its own, minipsd inside it ([INSTALL.md](INSTALL.md#the-libvips-plugin)).
+  of its own, minipsd inside it, with its SBOM fragment ([INSTALL.md](INSTALL.md#the-libvips-plugin)).
 
 ## Memory and ownership
 

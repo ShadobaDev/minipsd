@@ -86,7 +86,8 @@ files are bounded by caller limits. How it does on 315 files from
 other programs: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
 In a program built on libvips, [libvips-plugin/](libvips-plugin/) makes minipsd its PSD and PSB
-loader and saver; see the manual's [With libvips](docs/MANUAL.md#with-libvips).
+loader and saver: a file's composite or any layer in, one image or several as layers out; see
+the manual's [PSD in libvips](docs/MANUAL.md#psd-in-libvips-the-plugin).
 
 ## Adding it to a project
 

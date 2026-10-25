@@ -731,7 +731,7 @@ libvips' loader and saver, laid out as libvips' own (a base class over a `VipsSo
 `minipsd_vips_*`) that never meet libvips'. It stays a project apart from libvips: libvips'
 CONTRIBUTING.md accepts no contribution made with generative AI, and minipsd is made with it.
 
-- **Registration.** `minipsd_vips_init()`, after `VIPS_INIT`, registers the six operations'
+- **Registration.** `minipsd_vips_init()`, after `VIPS_INIT`, registers the nine operations'
   types; libvips then finds them among its loaders and savers by `is_a` and suffix. libvips'
   prebuilt Windows builds (8.18.7: `enable modules: false`) load no modules, so a loadable module
   would not work there; the program registers instead. The loader's priority is libvips'
@@ -739,8 +739,9 @@ CONTRIBUTING.md accepts no contribution made with generative AI, and minipsd is 
 - **Loading** (`psdload`, `psdload_buffer`, `psdload_source`). The file is mapped
   (`vips_source_map`) and read in place. The image is the composite, or with `layer` (bottom
   first; -1, the default, the composite) that layer: its rectangle, placed by `xoffset` and
-  `yoffset`, with transparency when the layer has it (no alpha band when it has none). An empty layer (a group's
-  marker, an adjustment) is refused. Bands are the mode's colour channels and transparency, up to
+  `yoffset`, with transparency when the layer has it (no alpha band when it has none). A record
+  without pixels (an empty layer, a group's record, an adjustment) is one transparent pixel
+  with `psd-layer-empty`, so every record loads and `layer=N` counts them all. Bands are the mode's colour channels and transparency, up to
   `MINIPSD_PLANES` (a multichannel file's sixth channel on is not decoded):
 
   | Mode | libvips | Samples |
@@ -769,7 +770,12 @@ CONTRIBUTING.md accepts no contribution made with generative AI, and minipsd is 
   | `psd-pixel-aspect-ratio` | 1064, 1.0 without it |
   | `psd-has-real-merged-data` | 1057; 1 without it |
   | `psd-layer-count` | the file's layers |
-  | `psd-layer-name`, `-blend-mode`, `-opacity`, `-hidden` | the layer, with `layer` |
+  | `psd-layer-name`, `-opacity`, `-hidden`, `-clipping` | the record, with `layer` |
+  | `psd-layer-blend-mode` | the record's key; a group's top record, its group's mode from its `lsct` block (`pass`: passes through) |
+  | `psd-layer-empty` | 1 for a record without pixels (one transparent pixel stands for it), else 0 |
+  | `psd-layer-section` | a group's records only: `open`, `closed` (the top record), `end` (the divider below its layers) |
+  | `psd-layer-mask` | the record's mask, an image: one band of the file's depth (`B_W`, `GREY16`), its rectangle in `xoffset`, `yoffset`; one pixel with `psd-layer-empty` for a mask without area; decoded whole, a mask being one band |
+  | `psd-layer-mask-default-color`, `-mask-disabled` | the mask's value outside its rectangle (0 or 255); its flag 0x02 |
 
 - **Saving** (`psdsave`, `psdsave_buffer`, `psdsave_target`). Grey, RGB or CMYK (by
   `interpretation` and bands, each with or without alpha), 8 or 16 bits, grey and RGB as floats;
@@ -797,13 +803,48 @@ CONTRIBUTING.md accepts no contribution made with generative AI, and minipsd is 
   through `psdsave_target`), or a side past 30 000; then, the channels encoded, when a PSD
   cannot hold the file: an RLE row past 65 535 bytes, a layer section past 4 GiB, or a file
   past 2 GB, which Adobe documents as Photoshop's limit for a PSD.
+- **Saving layers** (`psdsave_layers`, `psdsave_layers_buffer`, `psdsave_layers_target`; in C
+  `minipsd_vips_psdsave_layers`, `_buffer`, `_target`, through `vips_call_split`). A saver takes
+  one image, so this is a `VipsOperation` over a `VipsArrayImage`, as `vips_composite` is,
+  `NOCACHE` since it writes. Each image is a record, bottom first, read from the fields the
+  loader sets (the table above), so a file's records loaded and saved come back:
+
+  | Field | Written as |
+  |---|---|
+  | `psd-layer-name` | the name; else "Layer N" (N from 1, bottom first), a divider "</Layer group>" |
+  | `-opacity`, `-hidden`, `-clipping` | as given; opacity clamped to 0 to 255 |
+  | `-blend-mode` | a four-character key, any other length refused; `pass` on a group's top record as none, which minipsd writes as Photoshop does (record `norm`, `lsct` `pass`) |
+  | `-empty`, `-section` | no pixels, no rectangle; `section_divider_type` (another text refused) |
+  | `xoffset`, `yoffset` | the rectangle, less (`left`, `top`) |
+  | `-mask` and its two fields | the mask: one band of the layers' depth (else refused), its rectangle from its offsets, `flags` 0x02 when disabled, encoded as the layer is |
+
+  Every record with pixels is of one mode and depth (the first such decides, else the composite,
+  else the first record); none is converted. Each image is read once, in bands, into its
+  channels (one helper encodes a layer, a mask and the composite), and the document goes to
+  `minipsd_write` with them stored; PSB as `psdsave` chooses it, retried over every block.
+  What a record holds beyond these fields (text, effects, smart objects, an adjustment's
+  settings, Blend If, its other flags and blocks) is not carried.
+
+  Options: `composite`, `compression`, `psb`, `width`, `height`, `left`, `top`. The canvas is
+  `width` by `height`; else the composite's size; else the smallest from (`left`, `top`) that
+  holds every record with pixels; (`left`, `top`) is where it lies in the records' coordinates.
+  The composite is the given one (the canvas's size, the records' mode and depth), or composed:
+  `vips_composite` of the visible records onto a transparent canvas, blend modes by the table
+  above (others over), opacity, a mask (not disabled; its default colour outside its rectangle)
+  and its groups' visibility and opacity (walked top down) in the alpha, flattened against
+  white (CMYK: no ink) when no record has alpha. Clipping, a group's own blend mode and mask are
+  not drawn. libvips computes in floats: on the test's RGBA, 4774 of 244 412 bytes are off by
+  1 or 2 levels where alpha is partial, none where it is full. 16-bit CMYK needs the composite
+  given (libvips takes CMYK's alpha as 8-bit).
 - **Builds.** The plugin compiles minipsd in privately (`MINIPSD_STATIC`). On Windows it uses the
   zip's `libz1` (zlib-ng, built zlib-compatible) with zlib 1.3.1's headers, fetched and pinned,
   since the zip has none; elsewhere pkg-config's `vips` and `zlib`. A program's own libvips
   replaces the fetched one by `FETCHCONTENT_SOURCE_DIR_MINIPSD_LIBVIPS`, or by the targets
   `minipsd_libvips` and `minipsd_libvips_zlib`. Released as `minipsd-vips-X.Y.Z.zip`
   (`tools/package_vips.cmake`): the plugin as a CMake project, minipsd's single header private to
-  it, built from the zip and its example run by CI and by the release. libvips 8.17 replaced
+  it, with its SBOM fragment (`minipsd-vips.spdx.json`, every other file with its checksums,
+  `MINIPSD_SBOM_FILE` on `minipsd::vips`; `tools/check_spdx.cmake` checks it), built from the zip
+  and its example run by CI and by the release. libvips 8.17 replaced
   `VipsSaveable` with `VipsForeignSaveable`; both are handled. CI's `msvc` job runs its test,
   which compares every pixel with minipsd's own decode, on psd-tools' set too, and checks that a
   30000-row image read sequentially leaves libvips holding a few rows' worth.

@@ -599,15 +599,25 @@ follows.
       PSD cannot hold the file; the plugin released as a zip. psdsave is now as fast as
       ImageMagick's `magicksave` or faster, its files 4 to 6 times smaller, with the right
       pixels where magicksave's are wrong (alpha) or it fails (20000 x 20000).
-- [ ] **S7.6** A layered document saved through libvips: several images, each a layer with its
+- [x] **S7.6** A layered document saved through libvips: several images, each a layer with its
       name, position, opacity, visibility and blend mode, and the composite, in one call, so
       that a program uses minipsd's writer through libvips as it reads through it (`psdload`
       gives every layer, with `layer`, and its `psd-layer-*` fields). A saver takes one image,
-      so this is an operation over an array of images, as `vips_composite` is. The plan, with
-      its questions: `temp/S7.6-PLAN.md` while it is worked on.
+      so this is an operation over an array of images, as `vips_composite` is.
       *Done when:* Platemaker's template (a "Template" layer and an empty "Layer" above it) is
       written through it, the bytes those of `minipsd_write` from the same layers; a file's
       layers loaded with `psdload` and saved with it come back with their pixels and fields.
+      As done: `psdsave_layers` (`_buffer`, `_target`; `minipsd_vips_psdsave_layers` in C), each
+      record's look from the `psd-layer-*` fields psdload sets, masks (`psd-layer-mask`) and
+      groups (records with `psd-layer-section`) too, Blend If left out; the composite given or
+      composed by `vips_composite` (masks, groups' visibility and opacity in the alpha); the
+      canvas by `width`, `height`, `left`, `top`. psdload now loads every record (one without
+      pixels as one transparent pixel with `psd-layer-empty`): psd-tools' set, 2280 of 2280
+      layers. Platemaker's template is byte for byte `minipsd_write`'s, and a document with a
+      placed, half-opaque, multiplied, clipped layer, a disabled mask and a group comes back the
+      same bytes; Platemaker writes its template through it. The plugin's names became its own
+      (`MinipsdVips*`, `minipsd_vips_*`): libvips' CONTRIBUTING.md accepts no contribution made
+      with generative AI, so it never moves into libvips. The zip carries its SBOM fragment.
 
 ## 8. Test quality
 

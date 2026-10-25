@@ -90,11 +90,13 @@ get_target_property(minipsd_sbom minipsd::minipsd MINIPSD_SBOM_FILE)
 
 ## The libvips plugin
 
-The plugin makes minipsd libvips' loader and saver of PSD and PSB (the manual's
+The plugin makes minipsd libvips' loader and saver of PSD and PSB: it reads a file's composite or
+any layer, and writes one image or several as the layers of one document (the manual's
 [PSD in libvips](MANUAL.md#psd-in-libvips-the-plugin)). It is built from source, as part of your
-program, against your libvips' headers: its classes extend libvips' own, so a compiled one would
-hold for one libvips version only. Link `minipsd::vips`, then call `minipsd_vips_init()` after
-`VIPS_INIT`.
+program, against your libvips' headers: its classes extend libvips' `VipsForeignLoad` and
+`VipsForeignSave`, so a compiled copy holds only while those keep the layout it was built
+against (they are the same in libvips 8.15.1 and 8.18.7; a field added to either breaks it).
+Link `minipsd::vips`, then call `minipsd_vips_init()` after `VIPS_INIT`.
 
 **From the release.** Each GitHub Release has `minipsd-vips-X.Y.Z.zip` (and its `.sha256`): the
 plugin as a CMake project of its own, with minipsd's single header inside it, private to the

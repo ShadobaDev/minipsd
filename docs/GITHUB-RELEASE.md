@@ -13,7 +13,8 @@ Pushing the tag starts the [`Release`](../.github/workflows/release.yml) workflo
    `docs/CHANGELOG.md` has a section for that version;
 3. `minipsd.h` as a single file: `include/` joined by `tools/amalgamate.cmake`;
 4. the libvips plugin as `minipsd-vips-X.Y.Z.zip`, a CMake project that builds as it is
-   (`tools/package_vips.cmake`), then built from the zip alone against Ubuntu's libvips and its
+   (`tools/package_vips.cmake`), with its SBOM fragment, then checked against that fragment
+   (`tools/check_spdx.cmake`) and built from the zip alone against Ubuntu's libvips, its
    example run: a zip that does not build is not published;
 5. a build-provenance attestation for `minipsd.h` and the zip;
 6. a GitHub Release with `minipsd.h`, the zip and a `.sha256` for each, its notes taken from the
