@@ -38,7 +38,7 @@ The order of work from 0.1.0 to the design in [CODE-ARCH.md](CODE-ARCH.md). Case
 | [4. Reader](#4-reader) | buffer to structure, for minipsd's own subset | 0.3.0, at S4.10 |
 | [5. Round trip and conveniences](#5-round-trip-and-conveniences) | layer rectangles, full import, cheap re-save, kept unknown content | batched, when decided |
 | [6. Format features](#6-format-features) | blend modes, groups, masks, 16-bit, PSB | batched, when decided |
-| [7. Interoperability](#7-interoperability) | libvips | 0.3.0 (S7.1), 0.3.2 (S7.2 to S7.4, at S4.12) |
+| [7. Interoperability](#7-interoperability) | libvips | 0.3.0 (S7.1), 0.4.0 (S7.2 to S7.5, at S4.12) |
 | [8. Test quality](#8-test-quality) | branch coverage of compound conditions | with any release |
 | [Not scheduled](#not-scheduled) | large cases, only on real demand | — |
 
@@ -195,10 +195,14 @@ Additive. See [Reader](CODE-ARCH.md#reader).
       workflow checks CI's run on the tagged commit instead of running it again. Before it:
       [COMPATIBILITY.md](COMPATIBILITY.md) regenerated with the version (done), the PR merged
       and CI green on `master`.
-- [ ] **S4.12** Release **0.3.2** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md): an addition and a
-      fix, so a PATCH. The libvips plugin (S7.2 to S7.4); the writer names a composite's
-      transparency where the layer count cannot. Before it: [COMPATIBILITY.md](COMPATIBILITY.md)
-      regenerated with the version (done), the PR merged and CI green on `master`.
+- [ ] **S4.12** Release **0.4.0** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md): breaking, so a
+      MINOR (`composite_alpha` for every composite, the compression constants renumbered,
+      `minipsd_read` giving transparency as the file has it). The libvips plugin (S7.2 to S7.5)
+      and its zip; layers without transparency, a layer's own compression, the row functions;
+      the fixes the pre-release review found (a mask's unbounded rectangle, an RLE count a PSD
+      cannot hold, `minipsd_write`'s cut rows). Prepared as 0.3.2, never tagged, then broken.
+      Before it: [COMPATIBILITY.md](COMPATIBILITY.md) regenerated with the version, the PR merged
+      and CI green on `master`; Platemaker sets `composite_alpha = 1` when it moves to 0.4.0.
 
 ## 5. Round trip and conveniences
 
@@ -567,18 +571,33 @@ once Platemaker does.
       950 empty layers); a 1024 x 30000 PSD read with `access=sequential` leaves libvips holding
       under 2 MB of its 60 MB (all of it when the loader is not sequential). A PSD, not a PSB: the same bands.
 - [x] **S7.4** Saver: an image as a one-layer PSD or PSB with its composite, the image whole in
-      memory; RLE, or ZIP through zlib.
+      memory; RLE, or ZIP through zlib. (S7.5 changed what it writes and how; see there.)
       *Done when:* psd-tools and GIMP open what it writes, and the loader reads it back the same.
       As done: `psdsave`, `_buffer`, `_target`; options `psb`, `zip`, `layer_name`. psd-tools
       opens every file the test writes, its composite the layer (but where alpha is partial, by
       the matte's rounding), full cyan as (255, 0, 0, 0); GIMP opens them, by hand. GIMP showed a
       32-bit file's transparency as an extra channel: the writer now names it as Photoshop does
       where the layer count cannot (see the changelog).
-- [ ] **S7.5** Row provider (`W6`): a layer's or the composite's rows asked from a callback instead
+- [x] **S7.5** Row provider (`W6`): a layer's or the composite's rows asked from a callback instead
       of an `pixels` pointer, twice with RLE or ZIP (sizing, then writing), so it must be
       deterministic, as libvips pipelines are. The saver then streams.
       *Done when:* the saver writes an image larger than the memory it is given, the bytes the
       same as from memory.
+      As done: not a row provider. libvips hands a saver an image it may read once, top to
+      bottom, and a provider would be asked for every channel's rows twice, so the saver encodes
+      each channel once, as its rows come, and gives minipsd the channels as stored: the row
+      functions made public for it (`minipsd_encode_row`, `minipsd_predict_row`,
+      `minipsd_matte_row`), ZIP through a zlib stream a channel. Memory is about the file's size,
+      not the image's: 20000 x 20000 RGB, an 813 MB file, 1994 MB to 1215 MB, 2.1 s to 1.5 s;
+      not below the file, so a file larger than memory still fails (temporary files were
+      declined). Found on the way, and done with it: an image without alpha is written flat (no
+      layer, no transparency, as Photoshop does; `layered` keeps a layer without it), so
+      `composite_alpha` now governs every composite and a layer may be `no_alpha` (breaking);
+      `compression` (`rle`, `zip`, `zip-predicted`, `none`) in place of `zip`, and a layer's own
+      compression in minipsd (the constants renumbered, breaking); a PSB chosen by itself when a
+      PSD cannot hold the file; the plugin released as a zip. psdsave is now as fast as
+      ImageMagick's `magicksave` or faster, its files 4 to 6 times smaller, with the right
+      pixels where magicksave's are wrong (alpha) or it fails (20000 x 20000).
 
 ## 8. Test quality
 
@@ -604,7 +623,11 @@ Large cases. Each would start with a *design* step, and only when a real consume
 
 - The composed composite learning blend modes, masks, clipping or groups: a supplied composite
   is the way to get them right.
-- Layer-at-a-time producer (`W8`); the row provider (`W6`) is S7.5.
+- Layer-at-a-time producer (`W8`); the row provider (`W6`), which S7.5 did without.
+- A streaming deflate (init, feed, finish) beside `minipsd_deflate_fn`, so the writer holds no
+  ZIP channel whole; and the writer keeping each layer row's size, so RLE encodes a row twice,
+  not three times. Both only when a program writing with minipsd itself needs them: the plugin
+  encodes its channels itself.
 - Parallel encoding split API (`W9`).
 - Segment output for zero-copy saves (`E3`).
 - In-place patching of fixed-size fields.

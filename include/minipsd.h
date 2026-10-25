@@ -81,8 +81,9 @@
  * Bytes come out in order, never seeking back, so a pipe or a socket works as well as a file:
  * pulled by the caller into its own buffer (minipsd_writer_fill), or pushed to a callback
  * (minipsd_write).  The pull writer allocates nothing; its workspace, from the caller, holds a
- * size table (layer_count * 6 numbers), the composite's row sizes and one composite row.
- * minipsd_write allocates that workspace once.  Layer pixels and a supplied composite are read
+ * size table (layer_count * 7 numbers), the composite's row sizes and one composite row, and,
+ * when a layer is ZIP, its largest channel twice (raw, then deflated).  minipsd_write allocates
+ * that workspace once, with a buffer for the widest row.  Layer pixels and a supplied composite are read
  * in place, never copied whole.
  *
  * \par Project
@@ -110,12 +111,12 @@
  * The single source of the project version: CMakeLists.txt reads these three lines.
  */
 #define MINIPSD_VERSION_MAJOR 0
-#define MINIPSD_VERSION_MINOR 3
-#define MINIPSD_VERSION_PATCH 2
+#define MINIPSD_VERSION_MINOR 4
+#define MINIPSD_VERSION_PATCH 0
 
 #define MPSD__STR(x)  #x
 #define MPSD__XSTR(x) MPSD__STR(x)
-/** \brief The version as a string literal, e.g. "0.3.2". */
+/** \brief The version as a string literal, e.g. "0.4.0". */
 #define MINIPSD_VERSION_STRING \
     MPSD__XSTR(MINIPSD_VERSION_MAJOR) "." MPSD__XSTR(MINIPSD_VERSION_MINOR) "." MPSD__XSTR(MINIPSD_VERSION_PATCH)
 
@@ -730,8 +731,8 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *doc, const minipsd_write_opt
 /**
  * \brief Writes a document as PSD (or PSB) through a callback.
  *
- * The callback receives the whole file front to back, in pieces of up to 4 KiB, and is never
- * asked to seek.  After it returns 0 it is not called again.  The same document always produces
+ * The callback receives the whole file front to back, in pieces of up to 4 KiB (or of the
+ * widest row's MINIPSD_ROW_BOUND, when that is more), and is never asked to seek.  After it returns 0 it is not called again.  The same document always produces
  * the same bytes.  This is the pull writer driven to the end on a workspace from MINIPSD_MALLOC.
  *
  * \param doc  The document to write.
@@ -811,8 +812,10 @@ MINIPSDDEF uint64_t minipsd_writer_total(const minipsd_writer *w);
  * order, and returns at once: the writer never waits on anything, so it suits a non-blocking
  * target as well as a blocking one.  A target that took only part of the bytes is the caller's
  * business: keep the rest and send it before calling again.  Any cap works, 1 included; a call
- * re-encodes the row it stops in, so a buffer of a few rows (64 KiB is plenty) keeps that cost
- * negligible.  The bytes are those minipsd_write produces for the same document.
+ * re-encodes the row it stops in from its start, so a buffer of at least the widest row
+ * (MINIPSD_ROW_BOUND of its width and the depth: a row is one channel's, so 64 KiB holds every
+ * PSD row at 8 and 16 bits, and rows to about 16 000 px at 32) cuts each row at most once.
+ * The bytes are those minipsd_write produces for the same document.
  *
  * \param w        A writer from minipsd_writer_init.
  * \param buf      Receives up to cap bytes.
@@ -1221,8 +1224,9 @@ typedef struct minipsd_decode_opts {
     int      keep_matte; /*!< Composite only: non-zero keeps the white matte, as stored.        */
     int      depth;      /*!< The target's bits a sample, which must be the file's
                               (minipsd_info.depth): 1, 0 or 8, 16, 32 (see minipsd_plane).      */
-    minipsd_inflate_fn inflate; /*!< Layers and masks: decodes ZIP channels (compression 2, and
-                              3 with prediction); NULL leaves them MINIPSD_ERR_UNSUPPORTED.      */
+    minipsd_inflate_fn inflate; /*!< Layers and masks: decodes ZIP channels (the file's marker 2,
+                              and 3 with prediction: MINIPSD_ZIP and MINIPSD_ZIP_PREDICTED
+                              when written); NULL leaves them MINIPSD_ERR_UNSUPPORTED.          */
     void    *inflate_user; /*!< Passed to inflate.                                               */
     uint8_t *scratch;    /*!< With inflate: where a ZIP channel is inflated whole, even for a
                               band; at least the layer's (or mask's) height times rows of

@@ -24,9 +24,31 @@ add_subdirectory(minipsd-vips-<version>)
 target_link_libraries(my-app PRIVATE minipsd::vips)
 ```
 
-A project with libvips of its own defines two targets before `add_subdirectory`, and nothing is
-fetched or found: `minipsd_libvips` (libvips, glib, gobject) and `minipsd_libvips_zlib` (the zlib
-libvips links), each an `INTERFACE` library or `IMPORTED GLOBAL`.
+Or, with FetchContent, straight from the release:
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(minipsd_vips
+    URL      https://github.com/ShadobaDev/minipsd/releases/download/<version>/minipsd-vips-<version>.zip
+    URL_HASH SHA256=<the hash in minipsd-vips-<version>.zip.sha256>)
+FetchContent_MakeAvailable(minipsd_vips)
+```
+
+**One libvips.** Linux and macOS take the system's libvips and zlib through pkg-config. Windows
+fetches libvips' prebuilt build, and zlib's headers, which that build lacks. A program that
+fetches libvips' Windows build itself points the plugin at it first, so that one libvips is
+fetched and the plugin is compiled against the headers of the DLLs the program ships:
+
+```cmake
+FetchContent_GetProperties(my_vips SOURCE_DIR my_vips_dir)       # vips-dev-x64-*.zip, unpacked
+set(FETCHCONTENT_SOURCE_DIR_MINIPSD_LIBVIPS "${my_vips_dir}")   # the plugin takes this libvips
+FetchContent_MakeAvailable(minipsd_vips)
+```
+
+zlib's headers are still fetched, so `zlib.h` is always there. A program whose libvips comes from
+anywhere else defines two targets first, and nothing is fetched or found: `minipsd_libvips`
+(libvips, glib, gobject) and `minipsd_libvips_zlib` (zlib's headers and the zlib libvips links),
+each an `INTERFACE` library or `IMPORTED GLOBAL`.
 
 On its own, with its example as the test:
 

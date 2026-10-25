@@ -172,7 +172,9 @@ This is not the roadmap, just where each case fits against the current plan in
 - **Large, only on real demand:**
   - R9 (streaming parser): PSD's planar layout means a whole compressed layer held when read
     forward only (ROADMAP S6.15);
-  - W6 and W8 (row provider, layer-at-a-time);
+  - W6 and W8 (row provider, layer-at-a-time); W6's own case, a saver that reads its image once,
+    is served without it: the channels encoded by the program, row by row, and given as stored
+    (`minipsd_encode_row`, the libvips plugin's `psdsave`);
   - W9 (parallel split API);
   - E3 (segment output);
   - in-place patching.

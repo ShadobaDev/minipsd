@@ -13,7 +13,9 @@
 #   MINIPSD_LIBVIPS_ENV    the environment its tests run in (Windows: the DLLs on PATH), or ""
 #
 # A program with libvips of its own defines both targets before adding minipsd, visible to it (an
-# INTERFACE library, or IMPORTED GLOBAL); nothing is then fetched or found here.
+# INTERFACE library, or IMPORTED GLOBAL); nothing is then fetched or found here.  A program that
+# fetched libvips' Windows build itself sets FETCHCONTENT_SOURCE_DIR_MINIPSD_LIBVIPS to where it is
+# unpacked: that one is used, and only zlib's headers are fetched.
 # ---------------------------------------------------------------------------
 
 if(TARGET minipsd_libvips AND TARGET minipsd_libvips_zlib)
@@ -24,13 +26,13 @@ endif()
 if(WIN32)
     set(MINIPSD_VIPS_VERSION 8.18.7)
     include(FetchContent)
-    FetchContent_Declare(minipsd_vips
+    FetchContent_Declare(minipsd_libvips   # named as its target: a program may call the plugin minipsd_vips
         URL https://github.com/libvips/build-win64-mxe/releases/download/v${MINIPSD_VIPS_VERSION}/vips-dev-x64-web-${MINIPSD_VIPS_VERSION}.zip
         URL_HASH SHA256=3a122eb3d588690008216f786338e2f9329dba3c3c2768b5933cf7299d549241
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SOURCE_SUBDIR no-cmake-project)   # files only: nothing to add as a subproject
-    FetchContent_MakeAvailable(minipsd_vips)
-    set(_vips "${minipsd_vips_SOURCE_DIR}")
+    FetchContent_MakeAvailable(minipsd_libvips)
+    set(_vips "${minipsd_libvips_SOURCE_DIR}")
     add_library(minipsd_libvips INTERFACE IMPORTED)
     if(MSVC)   # the zip's import libraries
         target_link_libraries(minipsd_libvips INTERFACE

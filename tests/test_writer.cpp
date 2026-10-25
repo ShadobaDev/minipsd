@@ -1417,7 +1417,7 @@ TEST(MinipsdWriterTest, ZipChannelsGoThroughTheCallersDeflate)
         ASSERT_EQ(minipsd_reader_next_layer(pr, &pv), MINIPSD_MORE);
         Bytes rows(row * h), stream(rows.size() * 2 + 64);
         for (std::uint32_t y = 0; y < h; ++y)   // red: the pixel's first sample
-            ASSERT_EQ(minipsd_predict_row(depth, pixels.data() + y * w * pixel, pixel, w, rows.data() + y * row, row), MINIPSD_OK);
+            ASSERT_EQ(minipsd_predict_row(depth, pixels.data() + std::size_t(y) * w * pixel, pixel, w, rows.data() + y * row, row), MINIPSD_OK);
         std::size_t n = stream.size();
         ASSERT_EQ(zlib_stored_compress(nullptr, rows.data(), rows.size(), stream.data(), &n), 0);
         Bytes want{0, ZIP_PREDICTED_MARKER};

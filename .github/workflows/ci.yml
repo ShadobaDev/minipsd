@@ -95,7 +95,7 @@ jobs:
           cmake -E chdir "$env:RUNNER_TEMP" cmake -E tar xf $zip.FullName
           $deps = "$env:GITHUB_WORKSPACE/build/${{ matrix.preset }}/_deps"
           cmake -S (Join-Path $env:RUNNER_TEMP $zip.BaseName) -B "$env:RUNNER_TEMP/plugin" `
-                "-DFETCHCONTENT_SOURCE_DIR_MINIPSD_VIPS=$deps/minipsd_vips-src" `
+                "-DFETCHCONTENT_SOURCE_DIR_MINIPSD_LIBVIPS=$deps/minipsd_libvips-src" `
                 "-DFETCHCONTENT_SOURCE_DIR_MINIPSD_ZLIB_HEADERS=$deps/minipsd_zlib_headers-src"
           cmake --build "$env:RUNNER_TEMP/plugin"
           ctest --test-dir "$env:RUNNER_TEMP/plugin" -C Debug --output-on-failure
