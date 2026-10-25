@@ -164,6 +164,47 @@ TEST(MinipsdWriterTest, ASuppliedCompositeIsMattedAndWrittenWithoutComposing)
         EXPECT_EQ(pullTotal(d), write(d).size());
         EXPECT_EQ(composedRows, 0);
 
+        // The caller's own encoding, each row matted (minipsd_matte_row) then each channel's rows
+        // encoded (minipsd_encode_row), given as stored: the bytes minipsd writes from the pixels.
+        if (compression == MINIPSD_RLE) {
+            minipsd_doc own = d;
+            own.composite_matted = 0;
+            const Bytes fromPixels = write(own);
+            Bytes px2 = other;
+            for (std::uint32_t y = 0; y < 5; ++y)
+                ASSERT_EQ(minipsd_matte_row(MINIPSD_MODE_RGB, 8, px2.data() + std::size_t(y) * 37 * 4, 37), MINIPSD_OK);
+            EXPECT_EQ(px2, matted(other)) << "matted as the writer mattes";
+            Bytes counts{0, 1}, rows;   // PackBits: the marker, every channel's row sizes, the rows
+            Bytes row(MINIPSD_ROW_BOUND(37, 8));
+            for (std::size_t k = 0; k < 4; ++k)
+                for (std::uint32_t y = 0; y < 5; ++y) {
+                    std::size_t n = 0;
+                    ASSERT_EQ(minipsd_encode_row(MINIPSD_RLE, 8, px2.data() + std::size_t(y) * 37 * 4 + k, 4, 37, row.data(), row.size(), &n),
+                              MINIPSD_OK);
+                    counts.push_back(static_cast<std::uint8_t>(n >> 8));
+                    counts.push_back(static_cast<std::uint8_t>(n));
+                    rows.insert(rows.end(), row.begin(), row.begin() + static_cast<std::ptrdiff_t>(n));
+                }
+            Bytes block = counts;
+            block.insert(block.end(), rows.begin(), rows.end());
+            own.composite          = nullptr;
+            own.composite_stored   = {block.data(), block.size()};
+            own.composite_channels = 4;
+            EXPECT_EQ(write(own), fromPixels) << "encoded by the caller, the same bytes";
+
+            std::size_t n = 0;
+            EXPECT_EQ(minipsd_encode_row(MINIPSD_RLE, 8, px2.data(), 4, 37, row.data(), 1, &n), MINIPSD_ERR_SIZE);
+            EXPECT_GT(n, 1u) << "the bytes it needs";
+            EXPECT_EQ(minipsd_encode_row(MINIPSD_ZIP, 8, px2.data(), 4, 37, row.data(), row.size(), &n), MINIPSD_ERR_ARG);
+            EXPECT_EQ(minipsd_encode_row(MINIPSD_RLE, 12, px2.data(), 4, 37, row.data(), row.size(), &n), MINIPSD_ERR_ARG);
+            ASSERT_EQ(minipsd_encode_row(MINIPSD_RAW, 8, px2.data(), 4, 37, row.data(), row.size(), &n), MINIPSD_OK);
+            EXPECT_EQ(n, 37u) << "raw: the samples";
+            Bytes cmyk = other;
+            EXPECT_EQ(minipsd_matte_row(MINIPSD_MODE_CMYK, 8, cmyk.data(), 37), MINIPSD_OK);
+            EXPECT_EQ(cmyk, other) << "only RGB is matted";
+            EXPECT_EQ(minipsd_matte_row(MINIPSD_MODE_RGB, 1, cmyk.data(), 37), MINIPSD_ERR_ARG);
+        }
+
         // Stored: R, G, B as a file stores them (raw), copied, never encoded; three channels, the
         // layer count positive.  A supplied composite wins over it.
         Bytes planes{0, 0};

@@ -408,6 +408,63 @@ static VipsImage *make_image(const void *data, int bands, VipsBandFormat format,
     return image;
 }
 
+/* What minipsd_write makes of the image from its pixels, as psdsave wrote it before it encoded the
+   channels itself: one layer when layered (without transparency when the image has no alpha),
+   the composite, CMYK as PSD's inverted ink (8-bit, as the tests' images are), the image's
+   resolution, the EXIF, XMP and IPTC libvips gave psdsave (taken from its file); an option ("zip",
+   "psb") as psdsave takes it. */
+static int from_pixels(VipsImage *image, unsigned colors, int layered, const char *option, int value, const uint8_t *file,
+                       size_t file_size, out_buffer *b)
+{
+    static const uint16_t kept[] = { MINIPSD_RES_EXIF_DATA_1, MINIPSD_RES_XMP_METADATA, MINIPSD_RES_IPTC_NAA };
+    uint8_t            workspace[WORKSPACE_SIZE];
+    minipsd_reader    *r;
+    minipsd_info       info;
+    minipsd_resource   resources[sizeof kept / sizeof kept[0]];
+    minipsd_layer      layer;
+    minipsd_doc        doc;
+    minipsd_write_opts opts;
+    size_t             bytes = 0, i, count = 0;
+    uint8_t           *pixels = (uint8_t *)vips_image_write_to_memory(image, &bytes);
+    const int          alpha  = (unsigned)image->Bands > colors;
+    int                rc;
+    if (!pixels) return MINIPSD_ERR_ALLOC;
+    if (image->Type == VIPS_INTERPRETATION_CMYK && image->BandFmt == VIPS_FORMAT_UCHAR)
+        for (i = 0; i < bytes; ++i)
+            if (i % (size_t)image->Bands < CMYK_COLORS) pixels[i] = (uint8_t)(UCHAR_MAX - pixels[i]);
+    memset(&layer, 0, sizeof layer);
+    memset(&doc, 0, sizeof doc);
+    memset(&opts, 0, sizeof opts);
+    layer.name     = "Layer 1";
+    layer.pixels   = pixels;
+    layer.opacity  = UCHAR_MAX;
+    layer.no_alpha = (uint8_t)!alpha;
+    doc.width      = (uint32_t)image->Xsize;
+    doc.height     = (uint32_t)image->Ysize;
+    doc.dpi        = image->Xres * MM_PER_INCH;
+    doc.color_mode = image->Type == VIPS_INTERPRETATION_CMYK ? MINIPSD_MODE_CMYK : colors == 3 ? MINIPSD_MODE_RGB : MINIPSD_MODE_GREY;
+    doc.depth      = image->BandFmt == VIPS_FORMAT_FLOAT ? 32 : image->BandFmt == VIPS_FORMAT_USHORT ? 16 : 8;
+    doc.layers          = layered ? &layer : NULL;
+    doc.layer_count     = layered ? 1 : 0;
+    doc.composite       = pixels;
+    doc.composite_alpha = (uint8_t)alpha;
+    doc.compression     = option && strcmp(option, "zip") == 0 && value ? MINIPSD_ZIP : MINIPSD_RLE;
+    doc.format          = option && strcmp(option, "psb") == 0 && value ? MINIPSD_PSB : MINIPSD_PSD;
+    opts.deflate        = deflate_zlib;
+    if (minipsd_reader_init(&r, file, file_size, workspace, sizeof workspace, NULL, &info) == MINIPSD_OK)
+        for (i = 0; i < sizeof kept / sizeof kept[0]; ++i)   /* in psdsave's order */
+            if (minipsd_reader_find_resource(r, kept[i], &resources[count]) == MINIPSD_OK) {
+                resources[count].name.data = NULL;
+                resources[count].name.size = 0;
+                ++count;
+            }
+    doc.resources      = resources;
+    doc.resource_count = count;
+    rc = minipsd_write(&doc, &opts, to_buffer, b);
+    g_free(pixels);
+    return rc;
+}
+
 /* An image saved through psdsave as a file, into a buffer and into a target, the same bytes each
    time, then read back through psdload as it was, its bands too: with alpha one layer, and the
    composite when alpha is full (the matte undone exactly); without, a flat file, the composite
@@ -463,6 +520,14 @@ static void check_saved(VipsImage *image, const char *name, const char *dir, int
     colors  = image->Type == VIPS_INTERPRETATION_CMYK ? CMYK_COLORS : image->Bands >= 3 ? 3 : 1;
     layered = image->Bands > colors || (option && strcmp(option, "layered") == 0 && value);
     check(file && layer_count(file, file_size) == (layered ? 1u : 0u), layered ? "one layer" : "flat: no layer", name);
+    {   /* encoded once by psdsave, the bytes minipsd_write makes from the pixels */
+        out_buffer old = { NULL, 0, 0 };
+        check(file && from_pixels(image, (unsigned)colors, layered, option, value, file, file_size, &old) == MINIPSD_OK
+                  && old.size == file_size
+                  && memcmp(old.data, file, file_size) == 0,
+              "the bytes minipsd_write makes from the pixels", name);
+        free(old.data);
+    }
     want_image = image;
     g_object_ref(want_image);
     want = vips_image_write_to_memory(want_image, &want_bytes);

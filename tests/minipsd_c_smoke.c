@@ -75,6 +75,15 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
     if (rc != MINIPSD_OK || pulled != b.size || memcmp(again, b.data, b.size) != 0)
         return -102;
 
+    /* A row encoded and a row matted by the caller, as the writer does them. */
+    {
+        uint8_t row[MINIPSD_ROW_BOUND(3, 8)], copy[sizeof px];
+        memcpy(copy, px, sizeof copy);
+        if (minipsd_encode_row(MINIPSD_RLE, 8, px, 4, 3, row, sizeof row, &n) != MINIPSD_OK || !n
+            || minipsd_matte_row(MINIPSD_MODE_RGB, 8, copy, 3) != MINIPSD_OK)
+            return -126;
+    }
+
     /* The reader, over the bytes just written: the file, its resources, its layers, their pixels and
        their blocks, the composite. */
     {

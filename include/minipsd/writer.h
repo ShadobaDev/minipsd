@@ -53,14 +53,57 @@ static void mpsd__raw(mpsd__sink *s, const uint8_t *src, size_t n, size_t stride
     }
 }
 
-/* One row of one channel, width samples of the document's depth, step bytes apart; at 1 bit
-   already packed, a byte apart. */
+/* One row of one channel, width samples of depth bits, step bytes apart; at 1 bit already packed,
+   a byte apart: raw with MINIPSD_RAW, else PackBits. */
+static void mpsd__row_as(mpsd__sink *s, int compression, unsigned depth, const uint8_t *row, size_t step, uint32_t width)
+{
+    const unsigned wide = mpsd__shift(depth);
+    const size_t   n    = (size_t)mpsd__row_bytes(width, depth);
+    if (compression == MINIPSD_RAW) mpsd__raw(s, row, n, step, wide);
+    else                            mpsd__packbits(s, row, n, step, wide);
+}
+
+/* ... of the document's depth and compression. */
 static void mpsd__row(mpsd__sink *s, const minipsd_doc *d, const uint8_t *row, size_t step, uint32_t width)
 {
-    const unsigned wide = mpsd__doc_shift(d);
-    const size_t   n    = (size_t)mpsd__row_bytes(width, mpsd__doc_depth(d));
-    if (d->compression == MINIPSD_RAW) mpsd__raw(s, row, n, step, wide);
-    else                               mpsd__packbits(s, row, n, step, wide);
+    mpsd__row_as(s, d->compression, mpsd__doc_depth(d), row, step, width);
+}
+
+/* A sink callback into a buffer of cap bytes; full, it takes nothing more (the sink keeps counting). */
+typedef struct mpsd__span {
+    uint8_t *out;
+    size_t   cap, used;
+} mpsd__span;
+
+static int mpsd__span_out(void *user, const void *data, size_t size)
+{
+    mpsd__span *b = (mpsd__span *)user;
+    if (size > b->cap - b->used) return 0;
+    memcpy(b->out + b->used, data, size);
+    b->used += size;
+    return 1;
+}
+
+MINIPSDDEF int minipsd_encode_row(int compression, int depth, const void *samples, size_t step, uint32_t width,
+                                  uint8_t *out, size_t cap, size_t *size)
+{
+    mpsd__span b;
+    mpsd__sink s;
+    if (!samples || !out || !size || (compression != MINIPSD_RLE && compression != MINIPSD_RAW) || !mpsd__depth_ok((uint32_t)depth))
+        return MINIPSD_ERR_ARG;
+    b.out = out; b.cap = cap; b.used = 0;
+    s.fn = mpsd__span_out; s.user = &b; s.count = 0; s.failed = 0;
+    mpsd__row_as(&s, compression, (unsigned)depth, (const uint8_t *)samples, step, width);
+    *size = (size_t)s.count;   /* past cap: what it needs */
+    return s.failed ? MINIPSD_ERR_SIZE : MINIPSD_OK;
+}
+
+MINIPSDDEF int minipsd_matte_row(int color_mode, int depth, void *pixels, uint32_t width)
+{
+    if (!pixels || depth == MPSD__CH_1BIT || !mpsd__depth_ok((uint32_t)depth)) return MINIPSD_ERR_ARG;
+    if (color_mode == MINIPSD_MODE_RGB)   /* the writer mattes RGB only; every other mode as given */
+        mpsd__matte((uint8_t *)pixels, width, MPSD__RGBA, MINIPSD_CH_A, mpsd__shift((unsigned)depth), mpsd__full((unsigned)depth));
+    return MINIPSD_OK;
 }
 
 /* The compression marker a channel the writer encodes starts with. */

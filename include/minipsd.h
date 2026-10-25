@@ -814,6 +814,59 @@ MINIPSDDEF uint64_t minipsd_writer_total(const minipsd_writer *w);
  * \retval MINIPSD_ERR_ARG w or produced is NULL, or buf is NULL with cap above 0.
  */
 MINIPSDDEF int minipsd_writer_fill(minipsd_writer *w, void *buf, size_t cap, size_t *produced);
+
+/** \brief The bytes a row of width samples of depth bits (1, 8, 16, 32) takes in a file, raw. */
+#define MINIPSD_ROW_BYTES(width, depth) (((uint64_t)(width) * (uint64_t)(depth) + 7) / 8)
+
+/** \brief The most bytes minipsd_encode_row writes for that row: raw, or PackBits' worst case, a
+    header byte for each 128 bytes. */
+#define MINIPSD_ROW_BOUND(width, depth) (MINIPSD_ROW_BYTES(width, depth) + (MINIPSD_ROW_BYTES(width, depth) + 127) / 128)
+
+/**
+ * \brief Encodes one row of one channel as minipsd_write encodes it: PackBits, or raw, its samples
+ *        big-endian as the file stores them.
+ *
+ * With every row of a channel encoded so, its compression marker (two bytes, big-endian: 1 for
+ * PackBits, 0 raw) and, for PackBits, each row's size ahead of the rows (two bytes in a PSD, four
+ * in a PSB), they are the channel as a file stores it: what minipsd_layer.stored and
+ * minipsd_doc.composite_stored take, written then as they are.  A program that holds its image
+ * whole or reads it once, top to bottom, encodes each channel once this way, where minipsd_write,
+ * which keeps nothing between pieces, encodes a row again for its size.
+ *
+ * \param compression MINIPSD_RLE or MINIPSD_RAW.
+ * \param depth       Bits a sample: 8, 16 (a uint16_t in host order), 32 (a float); at 1, the
+ *                    row already packed, eight pixels a byte, step 1.
+ * \param samples     The row's first sample.
+ * \param step        Bytes from a sample to the next: the pixel's size for one channel out of
+ *                    interleaved pixels.
+ * \param width       Samples in the row.
+ * \param out         Receives the row; cap bytes, MINIPSD_ROW_BOUND(width, depth) always enough.
+ * \param cap         The size of out.
+ * \param size        Receives the bytes written; with MINIPSD_ERR_SIZE, the bytes it needs.
+ * \return MINIPSD_OK or an error code.
+ *
+ * \retval MINIPSD_ERR_ARG  samples, out or size is NULL, the compression is not MINIPSD_RLE or
+ *                          MINIPSD_RAW, or the depth not 1, 8, 16 or 32.
+ * \retval MINIPSD_ERR_SIZE The row does not fit in cap bytes.
+ */
+MINIPSDDEF int minipsd_encode_row(int compression, int depth, const void *samples, size_t step, uint32_t width,
+                                  uint8_t *out, size_t cap, size_t *size);
+
+/**
+ * \brief Mattes a row of a composite against white in place, as minipsd_write stores a supplied
+ *        composite with transparency: c * a + max * (max - a), rounded (at 32 bits c * a + 1 - a).
+ *
+ * minipsd_write mattes an RGB composite only; every other mode is left as given, and so it is
+ * here.  A program that encodes a composite itself (minipsd_encode_row, for composite_stored)
+ * mattes each row first, as minipsd_write would.
+ *
+ * \param color_mode MINIPSD_MODE_*.
+ * \param depth      Bits a sample: 8, 16 or 32.
+ * \param pixels     width pixels: the mode's colour channels, then transparency.
+ * \param width      Pixels in the row.
+ * \return MINIPSD_OK, or MINIPSD_ERR_ARG when pixels is NULL or the depth not 8, 16 or 32.
+ */
+MINIPSDDEF int minipsd_matte_row(int color_mode, int depth, void *pixels, uint32_t width);
 #endif /* MINIPSD_NO_WRITER */
 
 #ifndef MINIPSD_NO_READER

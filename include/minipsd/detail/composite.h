@@ -136,6 +136,27 @@ MPSD__SHARED static void mpsd__compose(const minipsd_doc *d, uint8_t *row, uint3
     }
 }
 
+/* width pixels of `pixel` samples matted against white in place, as the merged image is stored:
+   each of the colour channels before the alpha at `colors`, c * a + max * (max - a) rounded, or at
+   32 bits (floats) c * a + 1 - a. */
+MPSD__SHARED static void mpsd__matte(uint8_t *row, uint32_t width, unsigned pixel, unsigned colors, unsigned wide, uint32_t max)
+{
+    uint32_t x;
+    for (x = 0; x < width && wide == MPSD__SHIFT_32; ++x) {   /* floats: c * a + (1 - a) */
+        uint8_t    *o = row + ((size_t)x * pixel << wide);
+        const float a = mpsd__float(o + (colors << wide));
+        unsigned k;
+        for (k = 0; k < colors; ++k) mpsd__set_float(o + (k << wide), mpsd__float(o + (k << wide)) * a + (1.0f - a));
+    }
+    for (x = 0; x < width && wide != MPSD__SHIFT_32; ++x) {
+        uint8_t       *o = row + ((size_t)x * pixel << wide);
+        const uint32_t a = mpsd__sample(o + (colors << wide), wide);
+        unsigned k;
+        for (k = 0; k < colors; ++k)                      /* at most max * max + max / 2: fits 32 bits */
+            mpsd__set_sample(o + (k << wide), wide, (mpsd__sample(o + (k << wide), wide) * a + max * (max - a) + max / 2) / max);
+    }
+}
+
 /* The composite's row y as the file stores it, matted against white: a supplied row that is
    already matted, of another mode than RGB, or without transparency (nothing to matte), as it is
    (bitmap packed into the caller's row), mpsd__composite_step samples a pixel; otherwise the
@@ -161,19 +182,7 @@ MPSD__SHARED static const uint8_t *mpsd__composite_row(mpsd__composite *c, uint3
     else if (d->composite_matted || mpsd__doc_mode(d) != MINIPSD_MODE_RGB)   /* other modes: as given */
         return d->composite + (size_t)y * size;
     else                            memcpy(c->row, d->composite + (size_t)y * size, size);
-    for (x = 0; x < d->width && wide == MPSD__SHIFT_32; ++x) {   /* floats: c * a + (1 - a) */
-        uint8_t    *o = c->row + (size_t)x * pixel;
-        const float a = mpsd__float(o + ((unsigned)MINIPSD_CH_A << wide));
-        unsigned k;
-        for (k = 0; k < MINIPSD_CH_A; ++k) mpsd__set_float(o + (k << wide), mpsd__float(o + (k << wide)) * a + (1.0f - a));
-    }
-    for (x = 0; x < d->width && wide != MPSD__SHIFT_32; ++x) {   /* the merged image is stored over white */
-        uint8_t       *o = c->row + (size_t)x * pixel;
-        const uint32_t a = mpsd__sample(o + ((unsigned)MINIPSD_CH_A << wide), wide);
-        unsigned k;
-        for (k = 0; k < MINIPSD_CH_A; ++k)               /* at most max * max + max / 2: fits 32 bits */
-            mpsd__set_sample(o + (k << wide), wide, (mpsd__sample(o + (k << wide), wide) * a + max * (max - a) + max / 2) / max);
-    }
+    mpsd__matte(c->row, d->width, mpsd__doc_pixel(d), MINIPSD_CH_A, wide, max);   /* the merged image is stored over white */
     return c->row;
 }
 
