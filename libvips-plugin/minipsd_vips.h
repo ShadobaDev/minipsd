@@ -6,7 +6,8 @@
  * libvips' prebuilt Windows builds load no modules, so a program registers them itself: call
  * minipsd_vips_init() once, after VIPS_INIT().  vips_image_new_from_file("x.psd"),
  * vips_image_write_to_file(image, "x.psd") and the other ways libvips finds a loader or a saver
- * then find these.
+ * then find these.  A saver writes one image; a layered document is psdsave_layers, an
+ * operation over an array of images, one a layer (vips_psdsave_layers below).
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
@@ -14,6 +15,8 @@
 
 #ifndef MINIPSD_VIPS_H
 #define MINIPSD_VIPS_H
+
+#include <vips/vips.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -39,6 +42,35 @@ typedef enum {
  * \return 0.
  */
 int minipsd_vips_init(void);
+
+/**
+ * \brief Saves images as the layers of one PSD or PSB (the operation psdsave_layers).
+ *
+ * in holds the layers, bottom first.  Each image's psd-layer-* fields, the ones psdload sets,
+ * give its layer's name ("psd-layer-name", else "Layer N"), opacity ("psd-layer-opacity", 0 to
+ * 255), visibility ("psd-layer-hidden"), blend mode ("psd-layer-blend-mode", a four-character
+ * key such as "mul ") and clipping ("psd-layer-clipping"); its position is its xoffset and
+ * yoffset.  "psd-layer-empty" set makes it an empty layer, no pixels, as Photoshop writes an
+ * unpainted one (the image's pixels are ignored).  Every layer with pixels is of one mode and
+ * depth (grey, RGB or CMYK, with or without alpha; uchar, ushort or float); none is converted.
+ *
+ * Options, as NULL-ended name and value pairs: "composite" (a VipsImage, the canvas's size: the
+ * composite as given; else vips_composite of the visible layers, blend modes mapped as the spec's
+ * table, flattened against white when no layer has alpha), "compression"
+ * (VipsForeignPsdCompression, the layers'), "psb", "width" and "height" (the canvas; 0: the
+ * composite's size, else every layer's rectangle from (left, top)), "left" and "top" (where the
+ * canvas lies in the layers' coordinates).  Each image is read once for its layer, and once more
+ * by vips_composite unless the composite is given.
+ *
+ * \return 0, or -1 with libvips' error set.
+ */
+int vips_psdsave_layers(VipsImage **in, int n, const char *filename, ...) G_GNUC_NULL_TERMINATED;
+
+/** \brief vips_psdsave_layers into a target. */
+int vips_psdsave_layers_target(VipsImage **in, int n, VipsTarget *target, ...) G_GNUC_NULL_TERMINATED;
+
+/** \brief vips_psdsave_layers into a new buffer, *buf (g_free it) of *len bytes. */
+int vips_psdsave_layers_buffer(VipsImage **in, int n, void **buf, size_t *len, ...) G_GNUC_NULL_TERMINATED;
 
 #ifdef __cplusplus
 }

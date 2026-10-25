@@ -22,5 +22,8 @@ int minipsd_vips_init(void)
     (void)vips_foreign_save_psd_file_get_type();
     (void)vips_foreign_save_psd_buffer_get_type();
     (void)vips_foreign_save_psd_target_get_type();
+    (void)vips_foreign_save_psd_layers_file_get_type();
+    (void)vips_foreign_save_psd_layers_buffer_get_type();
+    (void)vips_foreign_save_psd_layers_target_get_type();
     return 0;
 }

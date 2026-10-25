@@ -56,5 +56,9 @@ GType vips_foreign_save_psd_get_type(void);
 GType vips_foreign_save_psd_target_get_type(void);
 GType vips_foreign_save_psd_file_get_type(void);
 GType vips_foreign_save_psd_buffer_get_type(void);
+GType vips_foreign_save_psd_layers_get_type(void);
+GType vips_foreign_save_psd_layers_target_get_type(void);
+GType vips_foreign_save_psd_layers_file_get_type(void);
+GType vips_foreign_save_psd_layers_buffer_get_type(void);
 
 #endif /* VIPS_FOREIGN_PSD_H */

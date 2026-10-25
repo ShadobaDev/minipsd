@@ -61,6 +61,7 @@ typedef struct _VipsForeignLoadPsd {
     unsigned           bands;          /* what libvips gets: planes, or indexed's RGB(A) */
     int                indexed;        /* the palette makes the colour */
     int                transparent;    /* indexed: the transparent index (resource 1047), or -1 */
+    int                empty;          /* the layer has no pixels: one transparent pixel stands for it */
     size_t             scratch_size;   /* a ZIP layer's channels inflated whole; 0 without ZIP */
     double             xres, yres;     /* pixels per mm */
 } VipsForeignLoadPsd;
@@ -173,12 +174,12 @@ static int vips_foreign_load_psd_find_layer(VipsForeignLoadPsd *psd)
             vips_foreign_load_psd_error(psd, rc == MINIPSD_OK ? "no such layer" : minipsd_error_string(rc));
             return -1;
         }
-    if (psd->view.right <= psd->view.left || psd->view.bottom <= psd->view.top) {
-        vips_foreign_load_psd_error(psd, "the layer is empty");
-        return -1;
-    }
-    psd->width  = (uint32_t)(psd->view.right - psd->view.left);
-    psd->height = (uint32_t)(psd->view.bottom - psd->view.top);
+    /* An empty layer (no area: Photoshop writes its new, unpainted layers so) has no pixels, and a
+       libvips image has one at least: one transparent pixel, with psd-layer-empty, which
+       psdsave_layers writes back as an empty layer. */
+    psd->empty  = psd->view.right <= psd->view.left || psd->view.bottom <= psd->view.top;
+    psd->width  = psd->empty ? 1 : (uint32_t)(psd->view.right - psd->view.left);
+    psd->height = psd->empty ? 1 : (uint32_t)(psd->view.bottom - psd->view.top);
     /* Transparency when the layer has its channel: a layer without one comes without alpha, as it
        was saved. */
     psd->planes = psd->info.color_channels;
@@ -191,6 +192,8 @@ static int vips_foreign_load_psd_find_layer(VipsForeignLoadPsd *psd)
     vips_image_set_string(out, "psd-layer-blend-mode", psd->view.blend_mode);
     vips_image_set_int(out, "psd-layer-opacity", psd->view.opacity);
     vips_image_set_int(out, "psd-layer-hidden", psd->view.hidden);
+    vips_image_set_int(out, "psd-layer-clipping", psd->view.clipping);
+    vips_image_set_int(out, "psd-layer-empty", psd->empty);
     return 0;
 }
 
@@ -223,7 +226,7 @@ static int vips_foreign_load_psd_header(VipsForeignLoad *load)
     /* Channels past MINIPSD_PLANES (a multichannel file's sixth on) are not decoded. */
     psd->planes = VIPS_MIN(psd->info.color_channels + (psd->info.composite_has_alpha ? 1u : 0u), MINIPSD_PLANES);
     if (psd->layer >= 0 && vips_foreign_load_psd_find_layer(psd)) return -1;
-    psd->scratch_size = psd->layer >= 0 ? vips_foreign_load_psd_scratch_size(psd) : 0;
+    psd->scratch_size = psd->layer >= 0 && !psd->empty ? vips_foreign_load_psd_scratch_size(psd) : 0;
 
     /* Indexed: the palette's RGB, and transparency where resource 1047 names an index. */
     psd->bands       = psd->planes;
@@ -341,6 +344,10 @@ static int vips_foreign_load_psd_generate(VipsRegion *region, void *seq, void *a
     if (rect->left != 0 || rect->width != region->im->Xsize) {
         vips_foreign_load_psd_error(psd, "only whole rows are decoded");
         return -1;
+    }
+    if (psd->empty) {   /* no pixels: transparent, and colour 0 */
+        for (y = 0; y < rect->height; ++y) memset(top + (size_t)y * skip, 0, (size_t)rect->width * psd->bands * (size_t)vips_format_sizeof(region->im->BandFmt));
+        return 0;
     }
     memset(&opts, 0, sizeof opts);
     opts.y_first = (uint32_t)rect->top;

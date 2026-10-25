@@ -58,6 +58,7 @@
 #define STORED_ZIP_PREDICTED 3
 #define WIDE_W         16400  /* 32-bit noise rows longer than a PSD's two-byte counts hold */
 #define WIDE_H         2
+#define COMPOSED_LEVELS 2    /* vips_composite's float rounding, doubled where the matte is undone */
 #define PSD_RGB_BANDS  3
 #define PSD_VERSION_AT 5      /* the header's version, 1 PSD or 2 PSB: its low byte */
 
@@ -159,9 +160,9 @@ static void invert_cmyk(uint8_t *pixels, size_t count, unsigned bands, size_t sa
 
 /* The composite (layer -1) or a layer as minipsd decodes it, laid out as the loader gives it:
    interleaved, the colour channels and transparency (a layer's always) up to MINIPSD_PLANES,
-   bitmap's black 0 and white 255, indexed through its palette, CMYK's ink 0 for none.  NULL with
-   the error in *rc when
-   minipsd refuses it, or MINIPSD_ERR_SIZE for an empty layer, which the loader refuses too. */
+   bitmap's black 0 and white 255, indexed through its palette, CMYK's ink 0 for none; an empty
+   layer as one pixel of zeros, as the loader gives it.  NULL with the error in *rc when minipsd
+   refuses it. */
 static uint8_t *decode_image(const void *file, size_t size, int layer, size_t *bytes, int *rc)
 {
     uint8_t             workspace[WORKSPACE_SIZE], *pixels, *scratch = NULL, *p;
@@ -175,7 +176,7 @@ static uint8_t *decode_image(const void *file, size_t size, int layer, size_t *b
     uint32_t            width, height;
     unsigned            planes, bands;
     uint16_t            index;
-    int                 transparent = -1, n;
+    int                 transparent = -1, n, empty = 0;
     if ((*rc = minipsd_reader_workspace_size(&need)) != MINIPSD_OK) return NULL;
     if (need > sizeof workspace) {
         *rc = MINIPSD_ERR_ARG;
@@ -192,12 +193,9 @@ static uint8_t *decode_image(const void *file, size_t size, int layer, size_t *b
                 if (*rc == MINIPSD_OK) *rc = MINIPSD_ERR_NOT_FOUND;
                 return NULL;
             }
-        if (view.right <= view.left || view.bottom <= view.top) {
-            *rc = MINIPSD_ERR_SIZE;
-            return NULL;
-        }
-        width  = (uint32_t)(view.right - view.left);
-        height = (uint32_t)(view.bottom - view.top);
+        empty  = view.right <= view.left || view.bottom <= view.top;   /* no pixels: one, transparent */
+        width  = empty ? 1 : (uint32_t)(view.right - view.left);
+        height = empty ? 1 : (uint32_t)(view.bottom - view.top);
         planes = info.color_channels;   /* then transparency, when the layer has its channel */
         if (planes < MINIPSD_PLANES && view.channel[planes].size) ++planes;
     }
@@ -214,6 +212,11 @@ static uint8_t *decode_image(const void *file, size_t size, int layer, size_t *b
     if (!(pixels = (uint8_t *)malloc(*bytes ? *bytes : 1))) {
         *rc = MINIPSD_ERR_ALLOC;
         return NULL;
+    }
+    if (empty) {
+        memset(pixels, 0, *bytes);
+        *rc = MINIPSD_OK;
+        return pixels;
     }
     minipsd_target_interleaved(&target, pixels, row, planes, info.depth);
     if (info.color_mode == MINIPSD_MODE_INDEXED) target.channel[0].pixel_step = (ptrdiff_t)bands;
@@ -734,6 +737,202 @@ static void check_list(const char *list)
            files, decoded, layers_decoded, layers);
 }
 
+/* An image's pixels whole, or NULL. */
+static uint8_t *pixels_of(VipsImage *image, size_t *bytes)
+{
+    return image ? (uint8_t *)vips_image_write_to_memory(image, bytes) : NULL;
+}
+
+/* The bytes of a file, as written by minipsd_write; 0 on failure. */
+static int write_file(const minipsd_doc *doc, const char *path)
+{
+    out_buffer b = { NULL, 0, 0 };
+    FILE      *f = NULL;
+    int        ok = minipsd_write(doc, NULL, to_buffer, &b) == MINIPSD_OK && (f = fopen(path, "wb")) != NULL;
+    if (ok) ok = fwrite(b.data, 1, b.size, f) == b.size;
+    if (f && fclose(f) != 0) ok = 0;
+    free(b.data);
+    return ok;
+}
+
+/* Two files the same, byte for byte. */
+static int same_files(const char *a, const char *b)
+{
+    size_t   na = 0, nb = 0;
+    uint8_t *fa = read_all(a, &na), *fb = read_all(b, &nb);
+    const int same = fa && fb && na == nb && memcmp(fa, fb, na) == 0;
+    free(fa);
+    free(fb);
+    return same;
+}
+
+/* An empty layer as psdsave_layers takes it, and psdload gives it: one pixel, psd-layer-empty. */
+static VipsImage *empty_layer(const char *name)
+{
+    VipsImage *black, *one = NULL;
+    if (vips_black(&black, 1, 1, "bands", RGBA, NULL)) return NULL;
+    if (vips_copy(black, &one, "interpretation", VIPS_INTERPRETATION_sRGB, NULL)) one = NULL;
+    g_object_unref(black);
+    if (one) {
+        vips_image_set_int(one, "psd-layer-empty", 1);
+        vips_image_set_string(one, "psd-layer-name", name);
+    }
+    return one;
+}
+
+/* psdsave_layers: a layered document from images, each a layer.  Platemaker's template (a layer
+   and an empty one above) byte for byte as minipsd_write makes it from the same layers; its
+   composite made by libvips, the layer's own; a document minipsd wrote, every layer loaded with
+   psdload and saved, the same bytes back (position, opacity, blend mode, clipping, an empty
+   layer); the canvas placed by left and top, or sized from the layers; what it refuses. */
+static void check_layers_saved(const uint8_t *rgba, const char *dir)
+{
+    char           path[PATH_MAX_SIZE], again[PATH_MAX_SIZE];
+    VipsImage     *template_image = make_image(rgba, RGBA, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), *empty = empty_layer("Layer");
+    VipsImage     *pair[2], *back = NULL, *given = NULL, *made = NULL;
+    minipsd_layer  layers[3];
+    minipsd_doc    doc;
+    size_t         given_bytes = 0, made_bytes = 0, i;
+    uint8_t       *a, *b;
+    int            k;
+
+    if (!template_image || !empty) {
+        check(0, "images made", "psdsave_layers");
+        return;
+    }
+    vips_image_set_string(template_image, "psd-layer-name", "Template");
+    pair[0] = template_image;
+    pair[1] = empty;
+
+    /* Platemaker's template, its composite given (the template itself: the layer above is empty). */
+    snprintf(path, sizeof path, "%s/layers-template.psd", dir);
+    check(vips_psdsave_layers(pair, 2, path, "composite", template_image, NULL) == 0, "saved", path);
+    memset(layers, 0, sizeof layers);
+    memset(&doc, 0, sizeof doc);
+    layers[0].name    = "Template";
+    layers[0].pixels  = rgba;
+    layers[0].opacity = UCHAR_MAX;
+    layers[1].name    = "Layer";
+    layers[1].opacity = UCHAR_MAX;
+    doc.width = WIDTH, doc.height = HEIGHT, doc.dpi = DPI;
+    doc.layers = layers, doc.layer_count = 2, doc.composite = rgba, doc.composite_alpha = 1;
+    snprintf(again, sizeof again, "%s/layers-template-minipsd.psd", dir);
+    check(write_file(&doc, again) && same_files(path, again), "the bytes minipsd_write makes from the same layers", path);
+
+    /* Its composite made by libvips from the layers: the template's own pixels. */
+    snprintf(again, sizeof again, "%s/layers-template-composed.psd", dir);
+    check(vips_psdsave_layers(pair, 2, again, NULL) == 0, "saved, composite composed", again);
+    given = vips_image_new_from_file(path, NULL);
+    made  = vips_image_new_from_file(again, NULL);
+    a     = pixels_of(given, &given_bytes);
+    b     = pixels_of(made, &made_bytes);
+    {   /* libvips composes in floats: exact where alpha is full; within a level, doubled by the
+           matte undone, where it is partial */
+        size_t j, off = 0;
+        for (j = 0; a && b && given_bytes == made_bytes && j < given_bytes; ++j) {
+            const unsigned alpha = a[j - j % RGBA + 3], d = (unsigned)abs((int)a[j] - (int)b[j]);
+            if (alpha == UCHAR_MAX ? d != 0 : d > COMPOSED_LEVELS) ++off;
+        }
+        check(a && b && given_bytes == made_bytes && off == 0, "composite composed by libvips: the layer's", again);
+    }
+    g_free(a);
+    g_free(b);
+    VIPS_UNREF(given);
+    VIPS_UNREF(made);
+
+    /* The empty layer loaded: one transparent pixel, psd-layer-empty, its name. */
+    back = vips_image_new_from_file(path, "layer", 1, NULL);
+    {
+        const char *name = NULL;
+        check(back && back->Xsize == 1 && back->Ysize == 1 && vips_image_get_int(back, "psd-layer-empty", &k) == 0 && k == 1
+                  && vips_image_get_string(back, "psd-layer-name", &name) == 0 && name && strcmp(name, "Layer") == 0,
+              "an empty layer loads as one pixel, psd-layer-empty", path);
+    }
+    VIPS_UNREF(back);
+
+    /* A document minipsd writes: an opaque base, a smaller layer placed, half opaque, multiplied,
+       clipped, and an empty layer; each loaded with psdload and saved back: the same bytes. */
+    {
+        enum { SMALL_W = 50, SMALL_H = 40, SMALL_X = 30, SMALL_Y = 20 };
+        uint8_t   *base = (uint8_t *)malloc(PIXELS * RGBA), *small = (uint8_t *)malloc(SMALL_W * SMALL_H * RGBA);
+        VipsImage *loaded[3] = { NULL, NULL, NULL }, *composite = NULL;
+        memset(layers, 0, sizeof layers);
+        memset(&doc, 0, sizeof doc);
+        if (base && small) {
+            memcpy(base, rgba, PIXELS * RGBA);
+            for (i = 0; i < PIXELS; ++i) base[i * RGBA + 3] = UCHAR_MAX;   /* opaque: the composite comes back exactly */
+            for (i = 0; i < SMALL_W * SMALL_H * RGBA; ++i) small[i] = (uint8_t)(i * 11 + 3);
+            layers[0].name = "Base", layers[0].pixels = base, layers[0].opacity = UCHAR_MAX;
+            layers[1].name = "Clip", layers[1].pixels = small, layers[1].opacity = HALF_OPAQUE, layers[1].clipping = 1;
+            layers[1].top = SMALL_Y, layers[1].left = SMALL_X, layers[1].bottom = SMALL_Y + SMALL_H, layers[1].right = SMALL_X + SMALL_W;
+            memcpy(layers[1].blend_mode, "mul ", 4);
+            layers[2].name = "Empty", layers[2].opacity = UCHAR_MAX, layers[2].hidden = 1;
+            doc.width = WIDTH, doc.height = HEIGHT, doc.dpi = DPI;
+            doc.layers = layers, doc.layer_count = 3, doc.composite_alpha = 1;
+            snprintf(path, sizeof path, "%s/layers-minipsd.psd", dir);
+            check(write_file(&doc, path), "written by minipsd", path);
+            for (k = 0; k < 3; ++k) loaded[k] = vips_image_new_from_file(path, "layer", k, NULL);
+            composite = vips_image_new_from_file(path, NULL);
+            snprintf(again, sizeof again, "%s/layers-resaved.psd", dir);
+            check(loaded[0] && loaded[1] && loaded[2] && composite
+                      && vips_psdsave_layers(loaded, 3, again, "composite", composite, NULL) == 0,
+                  "every layer loaded and saved", again);
+            check(same_files(path, again), "the same bytes back: names, position, opacity, blend mode, clipping, empty", again);
+            vips_error_clear();
+        }
+        for (k = 0; k < 3; ++k) VIPS_UNREF(loaded[k]);
+        VIPS_UNREF(composite);
+        free(base);
+        free(small);
+    }
+
+    /* The canvas: placed by left and top, sized from the layers without width and height. */
+    {
+        enum { AT_X = 7, AT_Y = 3 };
+        VipsImage     *moved = NULL, *one[1];
+        uint8_t        workspace[WORKSPACE_SIZE], *file;
+        size_t         size = 0;
+        minipsd_reader *r;
+        minipsd_info   info;
+        minipsd_layer_view view;
+        if (vips_copy(template_image, &moved, "xoffset", AT_X, "yoffset", AT_Y, NULL)) moved = NULL;
+        one[0] = moved;
+        snprintf(path, sizeof path, "%s/layers-canvas.psd", dir);
+        check(moved && vips_psdsave_layers(one, 1, path, "left", AT_X, "top", AT_Y, NULL) == 0, "saved, canvas placed", path);
+        file = read_all(path, &size);
+        check(file && minipsd_reader_init(&r, file, size, workspace, sizeof workspace, NULL, &info) == MINIPSD_OK
+                  && info.width == WIDTH && info.height == HEIGHT && minipsd_reader_next_layer(r, &view) == MINIPSD_MORE
+                  && view.left == 0 && view.top == 0,
+              "the canvas at (left, top): the layer at its corner", path);
+        free(file);
+        snprintf(path, sizeof path, "%s/layers-grown.psd", dir);
+        check(moved && vips_psdsave_layers(one, 1, path, NULL) == 0, "saved, canvas from the layers", path);
+        file = read_all(path, &size);
+        check(file && minipsd_reader_init(&r, file, size, workspace, sizeof workspace, NULL, &info) == MINIPSD_OK
+                  && info.width == WIDTH + AT_X && info.height == HEIGHT + AT_Y,
+              "the canvas from (0, 0), every layer in it", path);
+        free(file);
+        VIPS_UNREF(moved);
+    }
+
+    /* Refused: no layers; a layer of another depth; a blend mode that is not a key. */
+    {
+        VipsImage *deep = NULL, *mixed[2];
+        snprintf(path, sizeof path, "%s/layers-refused.psd", dir);
+        check(vips_psdsave_layers(pair, 0, path, NULL) != 0, "no layers refused", path);
+        if (vips_cast(template_image, &deep, VIPS_FORMAT_USHORT, NULL)) deep = NULL;
+        mixed[0] = template_image;
+        mixed[1] = deep;
+        check(deep && vips_psdsave_layers(mixed, 2, path, NULL) != 0, "a layer of another depth refused", path);
+        vips_image_set_string(template_image, "psd-layer-blend-mode", "mul");
+        check(vips_psdsave_layers(pair, 2, path, NULL) != 0, "a blend mode of three characters refused", path);
+        vips_error_clear();
+        VIPS_UNREF(deep);
+    }
+    g_object_unref(template_image);
+    g_object_unref(empty);
+}
+
 int main(int argc, char **argv)
 {
     static const uint8_t icc[] = "not a real ICC profile";
@@ -987,6 +1186,8 @@ int main(int argc, char **argv)
         vips_error_clear();
         if (image) g_object_unref(image);
     }
+
+    check_layers_saved(rgba, argv[1]);
 
     /* Not a PSD: psdload does not claim it. */
     loader = vips_foreign_find_load_buffer(junk, sizeof junk);
