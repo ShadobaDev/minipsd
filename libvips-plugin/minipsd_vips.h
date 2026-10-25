@@ -54,9 +54,17 @@ int minipsd_vips_init(void);
  * unpainted one (the image's pixels are ignored).  Every layer with pixels is of one mode and
  * depth (grey, RGB or CMYK, with or without alpha; uchar, ushort or float); none is converted.
  *
+ * A mask is an image in "psd-layer-mask": one band of the layers' depth, its own rectangle in its
+ * xoffset and yoffset, with "psd-layer-mask-default-color" (0 or 255, its value outside; 255
+ * without it) and "psd-layer-mask-disabled".  A group is records in the list, as the file has
+ * them: below its layers an image with "psd-layer-section" "end", above them one with "open" or
+ * "closed" and the group's name, visibility, opacity and blend mode ("pass", or none, passes
+ * through).  Records have no pixels.  psdload gives masks and records the same way.
+ *
  * Options, as NULL-ended name and value pairs: "composite" (a VipsImage, the canvas's size: the
  * composite as given; else vips_composite of the visible layers, blend modes mapped as the spec's
- * table, flattened against white when no layer has alpha), "compression"
+ * table, masks and groups' visibility and opacity in the layers' alpha, flattened against white
+ * when no layer has alpha; clipping, and a group's own mode and mask, are not drawn), "compression"
  * (VipsForeignPsdCompression, the layers'), "psb", "width" and "height" (the canvas; 0: the
  * composite's size, else every layer's rectangle from (left, top)), "left" and "top" (where the
  * canvas lies in the layers' coordinates).  Each image is read once for its layer, and once more

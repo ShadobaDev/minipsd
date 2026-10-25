@@ -13,6 +13,8 @@
 
 const char *vips__foreign_psd_suffs[] = { ".psd", ".psb", NULL };
 
+const char *const vips__foreign_psd_sections[PSD_SECTIONS] = { NULL, "open", "closed", "end" };
+
 void vips__foreign_psd_class_properties(void *class)
 {
     GObjectClass *gobject_class = G_OBJECT_CLASS(class);

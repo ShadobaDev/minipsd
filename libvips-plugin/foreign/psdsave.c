@@ -440,6 +440,20 @@ static minipsd_bytes vips_foreign_save_psd_composite_block(VipsForeignSavePsdCha
     return vips_foreign_save_psd_block(c->channel, c->planes, c->height, count, c->compression);
 }
 
+/* One image read once into c, encoded by compression; a composite's joined as the file stores it.
+   -1 on failure, *memory set when memory ran out (else the image's own error, reported). */
+static int vips_foreign_save_psd_encode_image(VipsForeignSavePsdChannels *c, VipsImage *in, int depth, int mode, int compression,
+                                              int composite, int matte, int *memory)
+{
+    *memory = 1;
+    if (vips_foreign_save_psd_channels_init(c, in, depth, compression, composite, matte)) return -1;
+    if (vips_foreign_save_psd_pass(in, depth, mode, &c, 1, memory)) return -1;
+    *memory = 1;
+    if (vips_foreign_save_psd_finish(c)) return -1;
+    *memory = 0;
+    return 0;
+}
+
 /* Whether a PSD holds the document: its layer section within the 4 GiB its length counts
    (minipsd refuses one past it, MINIPSD_ERR_SIZE), the file within PSD_MAX_FILE.  Any other
    refusal is minipsd_write's to report. */
@@ -757,6 +771,9 @@ static void vips_foreign_save_psd_buffer_init(VipsForeignSavePsdBuffer *buffer)
    one.  The composite is given, or made by vips_composite from the visible layers. */
 
 #define PSD_BLEND_KEY_SIZE 4   /* a blend mode's key: four characters, such as "mul " */
+#define PSD_COMPOSE_STEPS  9   /* the images vips_foreign_save_psd_compose makes for a layer */
+#define PSD_MASK_DISABLED  0x02   /* a mask's flag: disabled */
+#define PSD_DIVIDER_NAME   "</Layer group>"   /* a divider's name, as Photoshop names it */
 
 typedef struct _VipsForeignSavePsdLayers {
     VipsOperation             parent_object;
@@ -787,9 +804,30 @@ static int vips_foreign_save_psd_field(VipsImage *image, const char *name, int f
     return vips_image_get_typeof(image, name) && !vips_image_get_int(image, name, &value) ? value : fallback;
 }
 
+/* A record's MINIPSD_SECTION_* from its psd-layer-section: a layer without one; -1 for another
+   text. */
+static int vips_foreign_save_psd_section(VipsImage *image)
+{
+    const char *text;
+    int         k;
+    if (!vips_image_get_typeof(image, "psd-layer-section") || vips_image_get_string(image, "psd-layer-section", &text))
+        return MINIPSD_SECTION_LAYER;
+    for (k = MINIPSD_SECTION_GROUP; k < PSD_SECTIONS; ++k)
+        if (strcmp(text, vips__foreign_psd_sections[k]) == 0) return k;
+    return -1;
+}
+
+/* No pixels: an empty layer, or a group's record. */
 static int vips_foreign_save_psd_empty(VipsImage *image)
 {
-    return vips_foreign_save_psd_field(image, "psd-layer-empty", 0) != 0;
+    return vips_foreign_save_psd_field(image, "psd-layer-empty", 0) != 0 || vips_foreign_save_psd_section(image) != MINIPSD_SECTION_LAYER;
+}
+
+/* The image's mask (a new reference), or NULL without one. */
+static VipsImage *vips_foreign_save_psd_mask(VipsImage *image)
+{
+    VipsImage *mask;
+    return vips_image_get_typeof(image, "psd-layer-mask") && !vips_image_get_image(image, "psd-layer-mask", &mask) ? mask : NULL;
 }
 
 /* A PSD blend key as a libvips blend mode, as the spec's table maps them (Working with libvips);
@@ -814,26 +852,56 @@ static VipsBlendMode vips_foreign_save_psd_blend_mode(const char key[PSD_BLEND_K
     return VIPS_BLEND_MODE_OVER;
 }
 
+/* Each layer's visibility and opacity (0 to 1) with its groups': a hidden group hides its layers,
+   its opacity multiplies theirs.  Walked top down: a group's top record comes before its layers,
+   its divider after them. */
+static void vips_foreign_save_psd_groups(VipsImage **in, int n, int *hidden, double *opacity)
+{
+    int     *group_hidden = g_new0(int, (gsize)n + 1), level = 0, i;
+    double  *group_opacity = g_new(double, (gsize)n + 1);
+    group_opacity[0] = 1.0;
+    for (i = n - 1; i >= 0; --i) {
+        const int    section = vips_foreign_save_psd_section(in[i]);
+        const int    own     = vips_foreign_save_psd_field(in[i], "psd-layer-hidden", 0) != 0;
+        const double alpha   = VIPS_CLIP(0, vips_foreign_save_psd_field(in[i], "psd-layer-opacity", UCHAR_MAX), UCHAR_MAX) / (double)UCHAR_MAX;
+        hidden[i]  = group_hidden[level] || own;
+        opacity[i] = group_opacity[level] * alpha;
+        if (section == MINIPSD_SECTION_GROUP || section == MINIPSD_SECTION_GROUP_CLOSED) {
+            ++level;
+            group_hidden[level]  = hidden[i];
+            group_opacity[level] = opacity[i];
+        } else if (section == MINIPSD_SECTION_GROUP_END && level > 0) {
+            --level;
+        }
+    }
+    g_free(group_hidden);
+    g_free(group_opacity);
+}
+
 /* The visible layers composed by vips_composite onto a transparent canvas of width x height, at
-   their positions less (left, top), their opacity in their alpha, their blend modes mapped; with
-   no layer's transparency, flattened against white (as minipsd mattes a composite without it).
-   Its bands and format are the layers'.  Clipping, and a blend mode libvips lacks, are drawn as
-   normal.  NULL with an error. */
+   their positions less (left, top), their opacity (with their groups') and their mask in their
+   alpha, their blend modes mapped; with no layer's transparency, flattened against white (as
+   minipsd mattes a composite without it).  Its bands and format are the layers'.  Clipping, a
+   group's blend mode and mask, and a blend mode libvips lacks are drawn as normal (pass through
+   for a group).  NULL with an error. */
 static VipsImage *vips_foreign_save_psd_compose(VipsForeignSavePsdLayers *psd, VipsImage **in, int n, const VipsImage *ref,
                                                 size_t colors, int mode, int depth, int width, int height, int alpha)
 {
     const double   max   = depth == 32 ? 1.0 : depth == 16 ? (double)UINT16_MAX : (double)UCHAR_MAX;
     const int      bands = (int)colors + 1;
-    VipsImage    **t     = (VipsImage **)vips_object_local_array(VIPS_OBJECT(psd), 3 * n + 4);
+    VipsImage    **t     = (VipsImage **)vips_object_local_array(VIPS_OBJECT(psd), PSD_COMPOSE_STEPS * n + 3);
     VipsImage    **layers = (VipsImage **)vips_object_local_array(VIPS_OBJECT(psd), n + 1);   /* the canvas, then each */
     int           *modes = (int *)vips_malloc(VIPS_OBJECT(psd), (size_t)(n + 1) * sizeof(int));
     int           *xs    = (int *)vips_malloc(VIPS_OBJECT(psd), (size_t)(n + 1) * sizeof(int));
     int           *ys    = (int *)vips_malloc(VIPS_OBJECT(psd), (size_t)(n + 1) * sizeof(int));
-    double         white[PSD_MAX_PLANES], scale[PSD_MAX_PLANES], offset[PSD_MAX_PLANES];
+    int           *hidden  = (int *)vips_malloc(VIPS_OBJECT(psd), (size_t)n * sizeof(int));
+    double        *opacity = (double *)vips_malloc(VIPS_OBJECT(psd), (size_t)n * sizeof(double));
+    double         white[PSD_MAX_PLANES];
     VipsImage     *out, *composed = NULL;
     int            count = 0, i, k, rc;
 
-    if (!modes || !xs || !ys) return NULL;
+    if (!modes || !xs || !ys || !hidden || !opacity) return NULL;
+    vips_foreign_save_psd_groups(in, n, hidden, opacity);
     if (mode == MINIPSD_MODE_CMYK && depth != 8) {   /* libvips takes CMYK's alpha as 8-bit */
         vips_error(VIPS_OBJECT_GET_CLASS(psd)->nickname, "%s", "a 16-bit CMYK document needs its composite given");
         return NULL;
@@ -844,23 +912,46 @@ static VipsImage *vips_foreign_save_psd_compose(VipsForeignSavePsdLayers *psd, V
         return NULL;
     ++count;
     for (i = 0; i < n; ++i) {   /* bottom first, as minipsd and vips_composite both list them */
-        VipsImage *layer = in[i];
-        char       key[PSD_BLEND_KEY_SIZE] = { 'n', 'o', 'r', 'm' };
+        VipsImage  *layer = in[i], *alpha_band = NULL, *mask;
+        VipsImage **s     = t + 2 + PSD_COMPOSE_STEPS * i;   /* this layer's steps */
+        char        key[PSD_BLEND_KEY_SIZE] = { 'n', 'o', 'r', 'm' };
         const char *given;
-        const int  opacity = VIPS_CLIP(0, vips_foreign_save_psd_field(layer, "psd-layer-opacity", UCHAR_MAX), UCHAR_MAX);
-        if (vips_foreign_save_psd_empty(layer) || vips_foreign_save_psd_field(layer, "psd-layer-hidden", 0)) continue;
+        if (vips_foreign_save_psd_empty(layer) || hidden[i]) continue;
         if (layer->Bands == (int)colors) {   /* without transparency: opaque */
-            if (vips_bandjoin_const1(layer, &t[2 + 3 * i], max, NULL)) return NULL;
-            layer = t[2 + 3 * i];
+            if (vips_bandjoin_const1(layer, &s[0], max, NULL)) return NULL;
+            layer = s[0];
         }
-        if (opacity < UCHAR_MAX) {   /* the opacity in the alpha */
-            for (k = 0; k < bands; ++k) scale[k] = 1.0, offset[k] = 0.0;
-            scale[bands - 1] = opacity / (double)UCHAR_MAX;
-            if (vips_linear(layer, &t[3 + 3 * i], scale, offset, bands, NULL)) return NULL;
-            layer = t[3 + 3 * i];
+        /* The mask over the layer's rectangle, its colour outside its own. */
+        if ((mask = vips_foreign_save_psd_mask(in[i])) && !vips_foreign_save_psd_field(in[i], "psd-layer-mask-disabled", 0)) {
+            const double outside = vips_foreign_save_psd_field(in[i], "psd-layer-mask-default-color", UCHAR_MAX) ? max : 0.0;
+            if (vips_foreign_save_psd_empty(mask))
+                rc = vips_black(&s[1], layer->Xsize, layer->Ysize, NULL) || vips_linear1(s[1], &s[2], 1.0, outside, NULL);
+            else {
+                VipsArrayDouble *background = vips_array_double_new(&outside, 1);
+                rc = vips_embed(mask, &s[2], mask->Xoffset - in[i]->Xoffset, mask->Yoffset - in[i]->Yoffset, layer->Xsize, layer->Ysize,
+                                "extend", VIPS_EXTEND_BACKGROUND, "background", background, NULL);
+                vips_area_unref(VIPS_AREA(background));
+            }
+            if (!rc) rc = vips_extract_band(layer, &s[3], (int)colors, NULL) || vips_multiply(s[3], s[2], &s[4], NULL);
+            g_object_unref(mask);
+            if (rc) return NULL;
+            alpha_band = s[4];
+            opacity[i] /= max;   /* the mask's scale */
+        } else {
+            VIPS_UNREF(mask);
+            if (opacity[i] < 1.0) {
+                if (vips_extract_band(layer, &s[3], (int)colors, NULL)) return NULL;
+                alpha_band = s[3];
+            }
         }
-        if (vips_copy(layer, &t[4 + 3 * i], "interpretation", ref->Type, NULL)) return NULL;
-        layers[count] = t[4 + 3 * i];
+        if (alpha_band) {   /* the opacity (and the mask) in the alpha_band */
+            if (vips_linear1(alpha_band, &s[5], opacity[i], 0.0, NULL) || vips_extract_band(layer, &s[6], 0, "n", (int)colors, NULL)
+                || vips_bandjoin2(s[6], s[5], &s[7], NULL))
+                return NULL;
+            layer = s[7];
+        }
+        if (vips_copy(layer, &s[8], "interpretation", ref->Type, NULL)) return NULL;
+        layers[count] = s[8];
         g_object_ref(layers[count]);   /* both arrays drop theirs */
         if (vips_image_get_typeof(in[i], "psd-layer-blend-mode") && !vips_image_get_string(in[i], "psd-layer-blend-mode", &given)
             && strlen(given) == PSD_BLEND_KEY_SIZE)
@@ -890,9 +981,9 @@ static VipsImage *vips_foreign_save_psd_compose(VipsForeignSavePsdLayers *psd, V
         if (rc) return NULL;
         composed = out;
     }
-    rc = vips_cast(composed, &t[2 + 3 * n], ref->BandFmt, NULL);   /* vips_composite may give a wider format */
+    rc = vips_cast(composed, &t[2 + PSD_COMPOSE_STEPS * n], ref->BandFmt, NULL);   /* vips_composite may give a wider format */
     g_object_unref(composed);
-    if (rc || vips_copy(t[2 + 3 * n], &out, "interpretation", ref->Type, NULL)) return NULL;
+    if (rc || vips_copy(t[2 + PSD_COMPOSE_STEPS * n], &out, "interpretation", ref->Type, NULL)) return NULL;
     return out;
 }
 
@@ -901,8 +992,10 @@ static int vips_foreign_save_psd_layers_build(VipsObject *object)
     VipsForeignSavePsdLayers   *psd      = (VipsForeignSavePsdLayers *)object;
     const char                 *nickname = VIPS_OBJECT_GET_CLASS(object)->nickname;
     VipsImage                 **in, *ref = NULL, *composite = NULL;
-    VipsForeignSavePsdChannels *channels = NULL, composite_channels, *target;
+    VipsForeignSavePsdChannels *channels = NULL, composite_channels;
     minipsd_layer              *layers   = NULL;
+    minipsd_mask               *masks    = NULL;
+    VipsImage                 **mask_images = NULL;
     minipsd_bytes              *stored   = NULL;
     char                      **names    = NULL;
     minipsd_resource            resources[PSD_MAX_RESOURCES];
@@ -911,7 +1004,8 @@ static int vips_foreign_save_psd_layers_build(VipsObject *object)
     const char                 *filename, *error = NULL, *text;
     size_t                      colors = 0, icc_size, count = 0, longest = 0;
     unsigned                    table;
-    int                         n, i, mode, depth, width, height, alpha = 0, psb, memory = 0, rc = MINIPSD_OK, failed = 0;
+    int                         n, i, mode, depth, compression, section, width, height, alpha = 0, psb, memory = 0, rc = MINIPSD_OK,
+                                failed = 0;
 
     if (VIPS_OBJECT_CLASS(vips_foreign_save_psd_layers_parent_class)->build(object)) return -1;
     in = vips_array_image_get(psd->in, &n);
@@ -932,6 +1026,10 @@ static int vips_foreign_save_psd_layers_build(VipsObject *object)
         return -1;
     }
     for (i = 0; i < n; ++i) {
+        if (vips_foreign_save_psd_section(in[i]) < 0) {
+            vips_error(nickname, "layer %d: psd-layer-section is not \"open\", \"closed\" or \"end\"", i);
+            return -1;
+        }
         if (vips_foreign_save_psd_empty(in[i])) continue;
         if (vips_foreign_save_psd_depth(in[i]) != depth || (in[i]->Bands != (int)colors && in[i]->Bands != (int)colors + 1)
             || (mode == MINIPSD_MODE_CMYK) != (in[i]->Type == VIPS_INTERPRETATION_CMYK)) {
@@ -967,18 +1065,25 @@ static int vips_foreign_save_psd_layers_build(VipsObject *object)
         return -1;
     }
 
-    /* Each layer read once, its channels encoded as its rows come; then the composite. */
+    /* Each layer read once, its channels encoded as its rows come, then its mask; then the
+       composite.  channels holds the layers', then the masks'. */
     memset(&composite_channels, 0, sizeof composite_channels);
-    channels = g_new0(VipsForeignSavePsdChannels, (gsize)n);
-    layers   = g_new0(minipsd_layer, (gsize)n);
+    compression = vips_foreign_save_psd_layer_compression(psd->compression);
+    channels    = g_new0(VipsForeignSavePsdChannels, 2 * (gsize)n);
+    layers      = g_new0(minipsd_layer, (gsize)n);
+    masks       = g_new0(minipsd_mask, (gsize)n);
+    mask_images = g_new0(VipsImage *, (gsize)n);
     stored   = g_new0(minipsd_bytes, (gsize)n * PSD_MAX_PLANES);
     names    = g_new0(char *, (gsize)n);
     for (i = 0; i < n && !failed; ++i) {
-        minipsd_layer *l = &layers[i];
+        minipsd_layer *l    = &layers[i];
+        VipsImage     *mask = mask_images[i] = vips_foreign_save_psd_mask(in[i]);
+        section             = vips_foreign_save_psd_section(in[i]);
         if (vips_image_get_typeof(in[i], "psd-layer-name") && !vips_image_get_string(in[i], "psd-layer-name", &text))
             l->name = text;
         else
-            l->name = names[i] = g_strdup_printf("Layer %d", i + 1);
+            l->name = section == MINIPSD_SECTION_GROUP_END ? PSD_DIVIDER_NAME : (names[i] = g_strdup_printf("Layer %d", i + 1));
+        l->section_divider_type = (uint8_t)section;
         l->opacity  = (uint8_t)VIPS_CLIP(0, vips_foreign_save_psd_field(in[i], "psd-layer-opacity", UCHAR_MAX), UCHAR_MAX);
         l->hidden   = (uint8_t)(vips_foreign_save_psd_field(in[i], "psd-layer-hidden", 0) != 0);
         l->clipping = (uint8_t)(vips_foreign_save_psd_field(in[i], "psd-layer-clipping", 0) != 0);
@@ -988,7 +1093,30 @@ static int vips_foreign_save_psd_layers_build(VipsObject *object)
                 failed = 1;
                 break;
             }
-            memcpy(l->blend_mode, text, PSD_BLEND_KEY_SIZE);
+            /* A group passing through: none given, which minipsd writes as Photoshop does. */
+            if (section == MINIPSD_SECTION_LAYER || section == MINIPSD_SECTION_GROUP_END || memcmp(text, "pass", PSD_BLEND_KEY_SIZE) != 0)
+                memcpy(l->blend_mode, text, PSD_BLEND_KEY_SIZE);
+        }
+        if (mask) {   /* one band of the layers' depth, its own rectangle; encoded as the layer is */
+            if (mask->Bands != 1 || vips_foreign_save_psd_depth(mask) != depth) {
+                error  = "a psd-layer-mask is not one band of the layers' depth";
+                failed = 1;
+                break;
+            }
+            masks[i].default_color = vips_foreign_save_psd_field(in[i], "psd-layer-mask-default-color", UCHAR_MAX) ? UCHAR_MAX : 0;
+            masks[i].flags         = vips_foreign_save_psd_field(in[i], "psd-layer-mask-disabled", 0) ? PSD_MASK_DISABLED : 0;
+            l->mask                = &masks[i];
+            if (!vips_foreign_save_psd_empty(mask)) {
+                masks[i].top    = mask->Yoffset - psd->top;
+                masks[i].left   = mask->Xoffset - psd->left;
+                masks[i].bottom = masks[i].top + mask->Ysize;
+                masks[i].right  = masks[i].left + mask->Xsize;
+                if (vips_foreign_save_psd_encode_image(&channels[n + i], mask, depth, MINIPSD_MODE_GREY, compression, 0, 0, &memory)) {
+                    failed = 1;
+                    break;
+                }
+                longest = VIPS_MAX(longest, channels[n + i].longest);
+            }
         }
         if (vips_foreign_save_psd_empty(in[i])) continue;   /* no pixels, no rectangle: as Photoshop writes one */
         l->top      = in[i]->Yoffset - psd->top;
@@ -997,14 +1125,7 @@ static int vips_foreign_save_psd_layers_build(VipsObject *object)
         l->right    = l->left + in[i]->Xsize;
         l->no_alpha = (uint8_t)(in[i]->Bands == (int)colors);
         l->stored   = &stored[(size_t)i * PSD_MAX_PLANES];
-        target      = &channels[i];
-        if (vips_foreign_save_psd_channels_init(&channels[i], in[i], depth, vips_foreign_save_psd_layer_compression(psd->compression),
-                                                0, 0))
-            memory = failed = 1;
-        else if (vips_foreign_save_psd_pass(in[i], depth, mode, &target, 1, &memory))   /* memory says whose error */
-            failed = 1;
-        else if (vips_foreign_save_psd_finish(&channels[i]))
-            memory = failed = 1;
+        if (vips_foreign_save_psd_encode_image(&channels[i], in[i], depth, mode, compression, 0, 0, &memory)) failed = 1;
         longest = VIPS_MAX(longest, channels[i].longest);
     }
     if (!failed) {
@@ -1012,15 +1133,10 @@ static int vips_foreign_save_psd_layers_build(VipsObject *object)
         if (!composite) failed = 1;
     }
     if (!failed) {
-        target = &composite_channels;
-        if (vips_foreign_save_psd_channels_init(&composite_channels, composite, depth,
-                                                psd->compression == VIPS_FOREIGN_PSD_COMPRESSION_NONE ? MINIPSD_RAW : MINIPSD_RLE, 1,
-                                                composite->Bands > (int)colors))
-            memory = failed = 1;
-        else if (vips_foreign_save_psd_pass(composite, depth, mode, &target, 1, &memory))
+        if (vips_foreign_save_psd_encode_image(&composite_channels, composite, depth, mode,
+                                               psd->compression == VIPS_FOREIGN_PSD_COMPRESSION_NONE ? MINIPSD_RAW : MINIPSD_RLE, 1,
+                                               composite->Bands > (int)colors, &memory))
             failed = 1;
-        else if (vips_foreign_save_psd_finish(&composite_channels))
-            memory = failed = 1;
         longest = VIPS_MAX(longest, composite_channels.longest);
     }
 
@@ -1054,8 +1170,10 @@ static int vips_foreign_save_psd_layers_build(VipsObject *object)
         for (;;) {
             table      = psb ? PSD_COUNT_PSB : PSD_COUNT_PSD;
             doc.format = psb ? MINIPSD_PSB : MINIPSD_PSD;
-            for (i = 0; i < n; ++i)
+            for (i = 0; i < n; ++i) {
                 if (layers[i].stored) vips_foreign_save_psd_layer_blocks(&channels[i], table, stored + (size_t)i * PSD_MAX_PLANES);
+                if (channels[n + i].planes) vips_foreign_save_psd_layer_blocks(&channels[n + i], table, &masks[i].stored);
+            }
             doc.composite_stored = vips_foreign_save_psd_composite_block(&composite_channels, table);
             if (psb || vips_foreign_save_psd_fits_psd(&doc)) break;
             psb = 1;
@@ -1063,7 +1181,10 @@ static int vips_foreign_save_psd_layers_build(VipsObject *object)
         rc = minipsd_write(&doc, NULL, vips_foreign_save_psd_to_target, psd->target);
     }
 
-    for (i = 0; channels && i < n; ++i) vips_foreign_save_psd_channels_free(&channels[i]);
+    for (i = 0; channels && i < 2 * n; ++i) vips_foreign_save_psd_channels_free(&channels[i]);
+    for (i = 0; mask_images && i < n; ++i) VIPS_UNREF(mask_images[i]);
+    g_free(mask_images);
+    g_free(masks);
     vips_foreign_save_psd_channels_free(&composite_channels);
     for (i = 0; names && i < n; ++i) g_free(names[i]);
     g_free(names);

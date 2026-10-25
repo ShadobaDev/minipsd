@@ -60,6 +60,8 @@
 #define WIDE_H         2
 #define COMPOSED_LEVELS 2    /* vips_composite's float rounding, doubled where the matte is undone */
 #define PSD_RGB_BANDS  3
+#define MASK_DISABLED  0x02   /* a mask's flag */
+#define RECORDS        5      /* the round trip's: a layer, a group (divider, two layers, top record) */
 #define PSD_VERSION_AT 5      /* the header's version, 1 PSD or 2 PSB: its low byte */
 
 /* The ZIP document's two layers: one reaching past the canvas's left edge, one inside. */
@@ -780,17 +782,36 @@ static VipsImage *empty_layer(const char *name)
     return one;
 }
 
+/* The composite's pixel (x, y) in a file: its first n bands into px; 0 on failure. */
+static int composite_pixel(const char *path, int x, int y, double *px, int n)
+{
+    VipsImage *image  = vips_image_new_from_file(path, NULL);
+    double    *values = NULL;
+    int        bands  = 0;
+    const int  ok     = image && !vips_getpoint(image, &values, &bands, x, y, NULL) && bands >= n;
+    if (ok) memcpy(px, values, (size_t)n * sizeof *values);
+    g_free(values);
+    VIPS_UNREF(image);
+    return ok;
+}
+
+/* Within the composite's rounding of each other. */
+static int near(double a, double b)
+{
+    return fabs(a - b) <= COMPOSED_LEVELS;
+}
+
 /* psdsave_layers: a layered document from images, each a layer.  Platemaker's template (a layer
    and an empty one above) byte for byte as minipsd_write makes it from the same layers; its
    composite made by libvips, the layer's own; a document minipsd wrote, every layer loaded with
    psdload and saved, the same bytes back (position, opacity, blend mode, clipping, an empty
-   layer); the canvas placed by left and top, or sized from the layers; what it refuses. */
+   layer, a mask, a group); masks and groups in the composite libvips makes; the canvas placed by left and top, or sized from the layers; what it refuses. */
 static void check_layers_saved(const uint8_t *rgba, const char *dir)
 {
     char           path[PATH_MAX_SIZE], again[PATH_MAX_SIZE];
     VipsImage     *template_image = make_image(rgba, RGBA, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), *empty = empty_layer("Layer");
     VipsImage     *pair[2], *back = NULL, *given = NULL, *made = NULL;
-    minipsd_layer  layers[3];
+    minipsd_layer  layers[RECORDS];
     minipsd_doc    doc;
     size_t         given_bytes = 0, made_bytes = 0, i;
     uint8_t       *a, *b;
@@ -850,40 +871,113 @@ static void check_layers_saved(const uint8_t *rgba, const char *dir)
     }
     VIPS_UNREF(back);
 
-    /* A document minipsd writes: an opaque base, a smaller layer placed, half opaque, multiplied,
-       clipped, and an empty layer; each loaded with psdload and saved back: the same bytes. */
+    /* A document minipsd writes: an opaque base; a smaller layer placed, half opaque, multiplied,
+       clipped to it, with a disabled mask of its own rectangle; a group (passing through, opacity
+       200) holding a hidden empty layer; each record loaded with psdload and saved back: the same
+       bytes. */
     {
-        enum { SMALL_W = 50, SMALL_H = 40, SMALL_X = 30, SMALL_Y = 20 };
-        uint8_t   *base = (uint8_t *)malloc(PIXELS * RGBA), *small = (uint8_t *)malloc(SMALL_W * SMALL_H * RGBA);
-        VipsImage *loaded[3] = { NULL, NULL, NULL }, *composite = NULL;
+        enum { SMALL_W = 50, SMALL_H = 40, SMALL_X = 30, SMALL_Y = 20, MASK_W = 20, MASK_H = 10, MASK_X = 35, MASK_Y = 25,
+               GROUP_OPACITY = 200 };
+        uint8_t     *base = (uint8_t *)malloc(PIXELS * RGBA), *small = (uint8_t *)malloc(SMALL_W * SMALL_H * RGBA);
+        uint8_t      mask_pixels[MASK_W * MASK_H];
+        minipsd_mask mask;
+        VipsImage   *loaded[RECORDS] = { NULL }, *composite = NULL;
+        int          all = 1;
         memset(layers, 0, sizeof layers);
         memset(&doc, 0, sizeof doc);
+        memset(&mask, 0, sizeof mask);
         if (base && small) {
             memcpy(base, rgba, PIXELS * RGBA);
             for (i = 0; i < PIXELS; ++i) base[i * RGBA + 3] = UCHAR_MAX;   /* opaque: the composite comes back exactly */
             for (i = 0; i < SMALL_W * SMALL_H * RGBA; ++i) small[i] = (uint8_t)(i * 11 + 3);
+            for (i = 0; i < MASK_W * MASK_H; ++i) mask_pixels[i] = (uint8_t)(i * 7);
+            mask.top = MASK_Y, mask.left = MASK_X, mask.bottom = MASK_Y + MASK_H, mask.right = MASK_X + MASK_W;
+            mask.pixels = mask_pixels, mask.flags = MASK_DISABLED;
             layers[0].name = "Base", layers[0].pixels = base, layers[0].opacity = UCHAR_MAX;
             layers[1].name = "Clip", layers[1].pixels = small, layers[1].opacity = HALF_OPAQUE, layers[1].clipping = 1;
             layers[1].top = SMALL_Y, layers[1].left = SMALL_X, layers[1].bottom = SMALL_Y + SMALL_H, layers[1].right = SMALL_X + SMALL_W;
+            layers[1].mask = &mask;
             memcpy(layers[1].blend_mode, "mul ", 4);
-            layers[2].name = "Empty", layers[2].opacity = UCHAR_MAX, layers[2].hidden = 1;
+            layers[2].name = "</Layer group>", layers[2].opacity = UCHAR_MAX, layers[2].section_divider_type = MINIPSD_SECTION_GROUP_END;
+            layers[3].name = "Empty", layers[3].opacity = UCHAR_MAX, layers[3].hidden = 1;
+            layers[4].name = "Group", layers[4].opacity = GROUP_OPACITY, layers[4].section_divider_type = MINIPSD_SECTION_GROUP;
             doc.width = WIDTH, doc.height = HEIGHT, doc.dpi = DPI;
-            doc.layers = layers, doc.layer_count = 3, doc.composite_alpha = 1;
+            doc.layers = layers, doc.layer_count = RECORDS, doc.composite_alpha = 1;
             snprintf(path, sizeof path, "%s/layers-minipsd.psd", dir);
             check(write_file(&doc, path), "written by minipsd", path);
-            for (k = 0; k < 3; ++k) loaded[k] = vips_image_new_from_file(path, "layer", k, NULL);
+            for (k = 0; k < RECORDS; ++k) all &= (loaded[k] = vips_image_new_from_file(path, "layer", k, NULL)) != NULL;
             composite = vips_image_new_from_file(path, NULL);
             snprintf(again, sizeof again, "%s/layers-resaved.psd", dir);
-            check(loaded[0] && loaded[1] && loaded[2] && composite
-                      && vips_psdsave_layers(loaded, 3, again, "composite", composite, NULL) == 0,
-                  "every layer loaded and saved", again);
-            check(same_files(path, again), "the same bytes back: names, position, opacity, blend mode, clipping, empty", again);
+            check(all && composite && vips_psdsave_layers(loaded, RECORDS, again, "composite", composite, NULL) == 0,
+                  "every record loaded and saved", again);
+            check(same_files(path, again),
+                  "the same bytes back: names, position, opacity, blend mode, clipping, empty, mask, group", again);
             vips_error_clear();
         }
-        for (k = 0; k < 3; ++k) VIPS_UNREF(loaded[k]);
+        for (k = 0; k < RECORDS; ++k) VIPS_UNREF(loaded[k]);
         VIPS_UNREF(composite);
         free(base);
         free(small);
+    }
+
+    /* Masks and groups in the composite libvips makes, no layer with alpha (so against white): a
+       mask's hole (0 inside, 255 outside) shows white; a hidden group hides its red layer; shown
+       at half opacity, the red is half over what is beneath; the mask disabled, no hole. */
+    {
+        enum { HOLE_SIDE = 10, HOLE_AT = 5, INSIDE = 6 };
+        static const double none[PSD_RGB_BANDS] = { 0.0, 0.0, 0.0 }, ink[PSD_RGB_BANDS] = { UCHAR_MAX, 0.0, 0.0 };
+        VipsImage *rgb = NULL, *black = NULL, *hole = NULL, *flat = NULL, *lit = NULL, *red8 = NULL, *red = NULL;
+        VipsImage *divider = empty_layer("</Layer group>"), *group = empty_layer("Group"), *records[4];
+        double     at_corner[PSD_RGB_BANDS], in_hole[PSD_RGB_BANDS];
+        const double half = HALF_OPAQUE / (double)UCHAR_MAX;
+        const int  ready = divider && group && !vips_extract_band(template_image, &rgb, 0, "n", PSD_RGB_BANDS, NULL)
+                      && !vips_black(&black, HOLE_SIDE, HOLE_SIDE, NULL)
+                      && !vips_copy(black, &hole, "xoffset", HOLE_AT, "yoffset", HOLE_AT, NULL)
+                      && !vips_black(&flat, WIDTH, HEIGHT, "bands", PSD_RGB_BANDS, NULL)
+                      && !vips_linear(flat, &lit, none, ink, PSD_RGB_BANDS, NULL) && !vips_cast(lit, &red8, VIPS_FORMAT_UCHAR, NULL)
+                      && !vips_copy(red8, &red, "interpretation", VIPS_INTERPRETATION_sRGB, NULL);
+        check(ready, "images made", "masks and groups");
+        if (ready) {
+            vips_image_set_image(rgb, "psd-layer-mask", hole);
+            vips_image_set_int(rgb, "psd-layer-mask-default-color", UCHAR_MAX);
+            vips_image_set_string(divider, "psd-layer-section", "end");
+            vips_image_set_string(group, "psd-layer-section", "open");
+            vips_image_set_int(group, "psd-layer-hidden", 1);
+            records[0] = rgb, records[1] = divider, records[2] = red, records[3] = group;
+            snprintf(path, sizeof path, "%s/layers-masked.psd", dir);
+            check(vips_psdsave_layers(records, 4, path, NULL) == 0 && composite_pixel(path, 0, 0, at_corner, PSD_RGB_BANDS)
+                      && composite_pixel(path, INSIDE, INSIDE, in_hole, PSD_RGB_BANDS),
+                  "saved, composite composed", path);
+            check(near(at_corner[0], rgba[0]) && near(at_corner[1], rgba[1]) && near(at_corner[2], rgba[2]),
+                  "a hidden group's layer not drawn", path);
+            check(near(in_hole[0], UCHAR_MAX) && near(in_hole[1], UCHAR_MAX) && near(in_hole[2], UCHAR_MAX),
+                  "the mask's hole shows white", path);
+            vips_image_set_int(group, "psd-layer-hidden", 0);
+            vips_image_set_int(group, "psd-layer-opacity", HALF_OPAQUE);
+            snprintf(path, sizeof path, "%s/layers-grouped.psd", dir);
+            check(vips_psdsave_layers(records, 4, path, NULL) == 0 && composite_pixel(path, 0, 0, at_corner, PSD_RGB_BANDS)
+                      && composite_pixel(path, INSIDE, INSIDE, in_hole, PSD_RGB_BANDS),
+                  "saved, composite composed", path);
+            check(near(at_corner[0], UCHAR_MAX * half + rgba[0] * (1.0 - half)) && near(at_corner[1], rgba[1] * (1.0 - half))
+                      && near(in_hole[0], UCHAR_MAX) && near(in_hole[1], UCHAR_MAX * (1.0 - half)),
+                  "a group's opacity multiplies its layer's", path);
+            vips_image_set_int(group, "psd-layer-hidden", 1);
+            vips_image_set_int(rgb, "psd-layer-mask-disabled", 1);
+            snprintf(path, sizeof path, "%s/layers-unmasked.psd", dir);
+            i = ((size_t)INSIDE * WIDTH + INSIDE) * RGBA;
+            check(vips_psdsave_layers(records, 4, path, NULL) == 0 && composite_pixel(path, INSIDE, INSIDE, in_hole, PSD_RGB_BANDS)
+                      && near(in_hole[0], rgba[i]) && near(in_hole[1], rgba[i + 1]) && near(in_hole[2], rgba[i + 2]),
+                  "a disabled mask hides nothing", path);
+        }
+        VIPS_UNREF(rgb);
+        VIPS_UNREF(black);
+        VIPS_UNREF(hole);
+        VIPS_UNREF(flat);
+        VIPS_UNREF(lit);
+        VIPS_UNREF(red8);
+        VIPS_UNREF(red);
+        VIPS_UNREF(divider);
+        VIPS_UNREF(group);
     }
 
     /* The canvas: placed by left and top, sized from the layers without width and height. */

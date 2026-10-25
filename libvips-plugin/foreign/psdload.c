@@ -11,7 +11,9 @@
  *
  * The image is the composite, or with `layer` one layer (its position in xoffset and yoffset), as
  * the file stores it, no colour converted: the mode's colour channels, then transparency where it
- * has one (a layer's channel, the composite's).  What libvips has no interpretation for (Lab,
+ * has one (a layer's channel, the composite's).  A layer's look comes in psd-layer-* fields
+ * (name, opacity, hidden, blend mode, clipping, empty; a group record's psd-layer-section; its
+ * mask, an image, in psd-layer-mask), the ones psdsave_layers takes back.  What libvips has no interpretation for (Lab,
  * multichannel) is MULTIBAND; the colour mode data is kept as "psd-color-mode-data".  Indexed is
  * the exception: libvips has no indexed image, so it comes through its palette as sRGB, as
  * libvips' own loaders give PNG, GIF and TIFF palettes (a lookup, no colour converted).  CMYK
@@ -41,10 +43,15 @@
 #define PSD_SIGNATURE_SIZE   4
 #define PSD_SNIFF_SIZE       6    /* the signature and the version (1 PSD, 2 PSB), big-endian */
 #define PSD_UNIT_CM          2    /* resolution info's hResUnit: pixels per cm, shown in cm */
+#define PSD_MARKER_SIZE      2    /* a stored channel's compression marker, big-endian */
 #define PSD_STORED_ZIP       2    /* a channel's stored compression marker: ZIP, and ... */
 #define PSD_STORED_ZIP_PRED  3    /* ... ZIP with prediction */
 #define PSD_PALETTE_ENTRIES  256  /* an indexed file's palette: 256 reds, 256 greens, 256 blues */
 #define PSD_COMPOSITE        (-1) /* the `layer` option's default: the composite */
+#define PSD_LSCT_MODE        8    /* an 'lsct' block: the type, "8BIM", then the group's mode ... */
+#define PSD_LSCT_FULL        12   /* ... which ends here */
+#define PSD_MODE_SIZE        4    /* a blend mode's key */
+#define PSD_MASK_DISABLED    0x02 /* a mask's flag: disabled */
 
 /* --- The base class: a PSD read from a source --------------------------------------------- */
 
@@ -162,11 +169,84 @@ static size_t vips_foreign_load_psd_scratch_size(const VipsForeignLoadPsd *psd)
     return zip ? psd->planes * psd->height * row : 0;
 }
 
+/* zlib's uncompress, as minipsd_inflate_fn: the stream must fill dst exactly. */
+static int vips_foreign_load_psd_inflate(void *user, const uint8_t *src, size_t src_size, uint8_t *dst, size_t dst_size)
+{
+    uLongf n = (uLongf)dst_size;
+    (void)user;
+    if ((uLong)src_size != src_size || n != dst_size) return 1;   /* past zlib's uLong: 32 bits on Windows */
+    return uncompress(dst, &n, src, (uLong)src_size) != Z_OK || n != dst_size;
+}
+
+/* A group's own blend mode, from its 'lsct' block, into mode (a C string); 0 without one.  The
+   record's own key says "norm" for a group that passes through. */
+static int vips_foreign_load_psd_group_mode(const minipsd_layer_view *view, char mode[PSD_MODE_SIZE + 1])
+{
+    minipsd_block block;
+    size_t        pos = 0;
+    while (minipsd_layer_next_block(view, &pos, &block) == MINIPSD_MORE)
+        if (memcmp(block.key, "lsct", PSD_MODE_SIZE) == 0 && block.data.size >= PSD_LSCT_FULL) {
+            memcpy(mode, block.data.data + PSD_LSCT_MODE, PSD_MODE_SIZE);
+            mode[PSD_MODE_SIZE] = '\0';
+            return 1;
+        }
+    return 0;
+}
+
+/* The layer's mask as an image on out: "psd-layer-mask", one band of the file's depth, its own
+   rectangle in xoffset and yoffset (one pixel with psd-layer-empty for a rectangle without area),
+   its colour outside in "psd-layer-mask-default-color", "psd-layer-mask-disabled".  Decoded
+   whole: a mask is one band. */
+static int vips_foreign_load_psd_mask(VipsForeignLoadPsd *psd, VipsImage *out)
+{
+    const minipsd_mask  *m      = &psd->view.mask;
+    const int            empty  = m->right <= m->left || m->bottom <= m->top;
+    const uint32_t       width  = empty ? 1 : (uint32_t)(m->right - m->left), height = empty ? 1 : (uint32_t)(m->bottom - m->top);
+    const VipsBandFormat format = vips_foreign_load_psd_format(&psd->info);
+    const size_t         row    = (size_t)width * (size_t)vips_format_sizeof(format), bytes = row * height;
+    const int            zip    = m->stored.size >= PSD_MARKER_SIZE && m->stored.data
+                      && (m->stored.data[1] == PSD_STORED_ZIP || m->stored.data[1] == PSD_STORED_ZIP_PRED);
+    uint8_t             *pixels = (uint8_t *)g_try_malloc0(bytes), *scratch = zip ? (uint8_t *)g_try_malloc(bytes) : NULL;
+    VipsImage           *image  = NULL;
+    minipsd_decode_opts  opts;
+    minipsd_plane        plane;
+    int                  rc     = !pixels || (zip && !scratch) ? MINIPSD_ERR_ALLOC : MINIPSD_OK;
+
+    if (rc == MINIPSD_OK && !empty) {
+        memset(&opts, 0, sizeof opts);
+        opts.depth        = psd->info.depth;
+        opts.inflate      = vips_foreign_load_psd_inflate;
+        opts.scratch      = scratch;
+        opts.scratch_size = zip ? bytes : 0;
+        plane.data        = pixels;
+        plane.pixel_step  = (ptrdiff_t)vips_format_sizeof(format);
+        plane.row_step    = (ptrdiff_t)row;
+        rc                = minipsd_decode_mask(psd->reader, &psd->view, &plane, &opts);
+    }
+    if (rc == MINIPSD_OK && !(image = vips_image_new_from_memory_copy(pixels, bytes, (int)width, (int)height, 1, format)))
+        rc = MINIPSD_ERR_ALLOC;
+    g_free(pixels);
+    g_free(scratch);
+    if (rc != MINIPSD_OK) {
+        vips_foreign_load_psd_error(psd, minipsd_error_string(rc));
+        return -1;
+    }
+    image->Type    = psd->info.depth == 16 ? VIPS_INTERPRETATION_GREY16 : VIPS_INTERPRETATION_B_W;
+    image->Xoffset = m->left;
+    image->Yoffset = m->top;
+    vips_image_set_int(image, "psd-layer-empty", empty);
+    vips_image_set_image(out, "psd-layer-mask", image);
+    g_object_unref(image);
+    vips_image_set_int(out, "psd-layer-mask-default-color", m->default_color);
+    vips_image_set_int(out, "psd-layer-mask-disabled", (m->flags & PSD_MASK_DISABLED) != 0);
+    return 0;
+}
+
 /* The layer the option names: its record, its size, its name and look as metadata. */
 static int vips_foreign_load_psd_find_layer(VipsForeignLoadPsd *psd)
 {
     VipsImage *out = ((VipsForeignLoad *)psd)->out;
-    char      *name;
+    char      *name, mode[PSD_MODE_SIZE + 1];
     size_t     needed = 0;
     int        rc, i;
     for (i = 0; i <= psd->layer; ++i)
@@ -189,12 +269,19 @@ static int vips_foreign_load_psd_find_layer(VipsForeignLoadPsd *psd)
         && (name = (char *)vips_malloc(VIPS_OBJECT(psd), needed))
         && minipsd_layer_name(&psd->view, name, needed, &needed) == MINIPSD_OK)
         vips_image_set_string(out, "psd-layer-name", name);
-    vips_image_set_string(out, "psd-layer-blend-mode", psd->view.blend_mode);
+    /* A group's top record: its own mode (pass through, or one it is composed in). */
+    if ((psd->view.section_divider_type == MINIPSD_SECTION_GROUP || psd->view.section_divider_type == MINIPSD_SECTION_GROUP_CLOSED)
+        && vips_foreign_load_psd_group_mode(&psd->view, mode))
+        vips_image_set_string(out, "psd-layer-blend-mode", mode);
+    else
+        vips_image_set_string(out, "psd-layer-blend-mode", psd->view.blend_mode);
     vips_image_set_int(out, "psd-layer-opacity", psd->view.opacity);
     vips_image_set_int(out, "psd-layer-hidden", psd->view.hidden);
     vips_image_set_int(out, "psd-layer-clipping", psd->view.clipping);
     vips_image_set_int(out, "psd-layer-empty", psd->empty);
-    return 0;
+    if (psd->view.section_divider_type && psd->view.section_divider_type < PSD_SECTIONS)
+        vips_image_set_string(out, "psd-layer-section", vips__foreign_psd_sections[psd->view.section_divider_type]);
+    return psd->view.has_mask && psd->info.depth >= CHAR_BIT ? vips_foreign_load_psd_mask(psd, out) : 0;
 }
 
 static int vips_foreign_load_psd_header(VipsForeignLoad *load)
@@ -273,15 +360,6 @@ static int vips_foreign_load_psd_header(VipsForeignLoad *load)
                            || minipsd_resource_version_info(&res, &version) != MINIPSD_OK
                            || version.has_real_merged_data);
     return 0;
-}
-
-/* zlib's uncompress, as minipsd_inflate_fn: the stream must fill dst exactly. */
-static int vips_foreign_load_psd_inflate(void *user, const uint8_t *src, size_t src_size, uint8_t *dst, size_t dst_size)
-{
-    uLongf n = (uLongf)dst_size;
-    (void)user;
-    if ((uLong)src_size != src_size || n != dst_size) return 1;   /* past zlib's uLong: 32 bits on Windows */
-    return uncompress(dst, &n, src, (uLong)src_size) != Z_OK || n != dst_size;
 }
 
 /* A thread's sequence: the scratch a ZIP layer's channels stay inflated in, between its bands. */

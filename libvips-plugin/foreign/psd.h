@@ -37,6 +37,12 @@
 /* The suffixes libvips matches files by: .psd and .psb. */
 extern const char *vips__foreign_psd_suffs[];
 
+/* A record's psd-layer-section, by its MINIPSD_SECTION_* type: NULL for a layer, then "open",
+   "closed" (a group's top record, shown open or closed) and "end" (the divider below a group's
+   layers).  psdload sets it, psdsave_layers reads it. */
+#define PSD_SECTIONS 4
+extern const char *const vips__foreign_psd_sections[PSD_SECTIONS];
+
 /* GObject resets set_property and get_property in every class (g_object_base_class_init), so
    each class with arguments of its own sets libvips' again. */
 void vips__foreign_psd_class_properties(void *class);
