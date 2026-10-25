@@ -114,9 +114,9 @@ cpack --config build/package/CPackConfig.cmake -G DEB
 Check and install the `.deb`:
 
 ```bash
-dpkg-deb -I dist/libminipsd-dev_0.2.0_all.deb       # metadata
-dpkg-deb -c dist/libminipsd-dev_0.2.0_all.deb       # files
-sudo apt install ./dist/libminipsd-dev_0.2.0_all.deb
+dpkg-deb -I dist/libminipsd-dev_0.3.2_all.deb       # metadata
+dpkg-deb -c dist/libminipsd-dev_0.3.2_all.deb       # files
+sudo apt install ./dist/libminipsd-dev_0.3.2_all.deb
 sudo apt remove libminipsd-dev
 ```
 

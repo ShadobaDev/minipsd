@@ -24,7 +24,7 @@ Procreate open as layered documents.
 
 # Status
 
-**release: 0.3.1**
+**release: 0.3.2**
 The API is [include/minipsd.h](include/minipsd.h); the implementation is in
 [include/minipsd/](include/minipsd/).
 

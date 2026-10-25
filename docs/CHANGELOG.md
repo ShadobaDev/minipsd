@@ -3,7 +3,7 @@
 Changes between releases, for users of minipsd. Versioning follows the pre-1.0 rules in
 [TODO.md](TODO.md): breaking changes bump the MINOR, additions and fixes the PATCH.
 
-## [Unreleased]
+## [0.3.2] — 2026-10-25
 
 ### Added
 - The libvips plugin (`libvips-plugin/`, `MINIPSD_VIPS_PLUGIN`, the static library

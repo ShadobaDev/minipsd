@@ -814,7 +814,8 @@ vips_image_write_to_file(page, "copy.psd", "layer_name", "Page", NULL);
   depth. With it: the resolution, the ICC profile, EXIF, XMP, IPTC, `bits-per-sample`, and
   `psd-*` fields such as `psd-layer-count` and a layer's name, blend mode and opacity (the list:
   the spec's [Working with libvips](SPECIFICATION.md#working-with-libvips)). Bands of rows are
-  decoded from libvips' threads at once; with `access=sequential` memory stays at a few bands.
+  decoded from libvips' threads at once; with `access=sequential` memory stays at a few bands
+  of rows per thread, so it grows with the width and the threads, not the height.
 - **Saving** (`psdsave`, `psdsave_buffer`, `psdsave_target`): one layer that is also the
   composite; grey, RGB or CMYK at 8 or 16 bits, grey and RGB as floats; alpha kept, or the layer
   made opaque. Options: `psb` (also a file named `.psb`), `zip`, `layer_name`. The image is

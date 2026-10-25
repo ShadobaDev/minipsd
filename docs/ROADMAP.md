@@ -35,10 +35,10 @@ The order of work from 0.1.0 to the design in [CODE-ARCH.md](CODE-ARCH.md). Case
 | [1. Module split](#1-module-split) | the API stays in `minipsd.h`, the implementation becomes modules | 0.2.0, at S3.4 |
 | [2. Pull writer](#2-pull-writer) | non-blocking, heap-free writing | 0.2.0, at S3.4 |
 | [3. I/O out of the core](#3-io-out-of-the-core) | stdio leaves the library; examples instead | **0.2.0**, at S3.4 (breaking) |
-| [4. Reader](#4-reader) | buffer to structure, for minipsd's own subset | the next release, at S4.10 |
+| [4. Reader](#4-reader) | buffer to structure, for minipsd's own subset | 0.3.0, at S4.10 |
 | [5. Round trip and conveniences](#5-round-trip-and-conveniences) | layer rectangles, full import, cheap re-save, kept unknown content | batched, when decided |
 | [6. Format features](#6-format-features) | blend modes, groups, masks, 16-bit, PSB | batched, when decided |
-| [7. Interoperability](#7-interoperability) | libvips | batched, when decided |
+| [7. Interoperability](#7-interoperability) | libvips | 0.3.0 (S7.1), 0.3.2 (S7.2 to S7.4, at S4.12) |
 | [8. Test quality](#8-test-quality) | branch coverage of compound conditions | with any release |
 | [Not scheduled](#not-scheduled) | large cases, only on real demand | — |
 
@@ -189,12 +189,16 @@ Additive. See [Reader](CODE-ARCH.md#reader).
       the pre-1.0 rules. Before it: regenerate [COMPATIBILITY.md](COMPATIBILITY.md) with the new
       version, and have one CI job fetch psd-tools' files (`MINIPSD_PSD_TOOLS_FILES`; done: `linux-gcc`), so that
       Photoshop's ZIP files are checked through zlib there too, not only locally.
-- [ ] **S4.11** Release **0.3.1** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md): additions and a fix,
+- [x] **S4.11** Release **0.3.1** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md): additions and a fix,
       so a PATCH. `MINIPSD_STATIC` without unused-function warnings, `MINIPSD_NO_READER` and
       `MINIPSD_NO_WRITER`, the typed setters (S6.20), the pixel aspect ratio (S6.21); the release
       workflow checks CI's run on the tagged commit instead of running it again. Before it:
       [COMPATIBILITY.md](COMPATIBILITY.md) regenerated with the version (done), the PR merged
       and CI green on `master`.
+- [ ] **S4.12** Release **0.3.2** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md): an addition and a
+      fix, so a PATCH. The libvips plugin (S7.2 to S7.4); the writer names a composite's
+      transparency where the layer count cannot. Before it: [COMPATIBILITY.md](COMPATIBILITY.md)
+      regenerated with the version (done), the PR merged and CI green on `master`.
 
 ## 5. Round trip and conveniences
 

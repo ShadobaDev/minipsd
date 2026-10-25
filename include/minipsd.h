@@ -109,11 +109,11 @@
  */
 #define MINIPSD_VERSION_MAJOR 0
 #define MINIPSD_VERSION_MINOR 3
-#define MINIPSD_VERSION_PATCH 1
+#define MINIPSD_VERSION_PATCH 2
 
 #define MPSD__STR(x)  #x
 #define MPSD__XSTR(x) MPSD__STR(x)
-/** \brief The version as a string literal, e.g. "0.3.1". */
+/** \brief The version as a string literal, e.g. "0.3.2". */
 #define MINIPSD_VERSION_STRING \
     MPSD__XSTR(MINIPSD_VERSION_MAJOR) "." MPSD__XSTR(MINIPSD_VERSION_MINOR) "." MPSD__XSTR(MINIPSD_VERSION_PATCH)
 
