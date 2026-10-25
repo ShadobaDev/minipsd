@@ -20,6 +20,17 @@ extern "C" {
 #endif
 
 /**
+ * \brief psdsave's `compression`: of the layer's channels; the composite is RLE, or raw with none.
+ *
+ * From the command line or an option string, by its nick: `compression=zip`.
+ */
+typedef enum {
+    MINIPSD_VIPS_COMPRESSION_RLE  = 0, /*!< PackBits, as Photoshop writes 8-bit layers: the default. */
+    MINIPSD_VIPS_COMPRESSION_ZIP  = 1, /*!< zlib, without prediction.                               */
+    MINIPSD_VIPS_COMPRESSION_NONE = 2  /*!< Raw: the largest file, the least work.                  */
+} MinipsdVipsCompression;
+
+/**
  * \brief Registers minipsd's operations with libvips.  Safe to call more than once.
  *
  * \return 0.

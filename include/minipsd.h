@@ -235,16 +235,19 @@ enum {
 };
 
 /**
- * \brief Channel compression.  Zero is RLE, so a zero-initialised document gets the compact one.
+ * \brief Channel compression.  Zero is the default: a document's RLE, the compact one; a layer's
+ *        the document's.
  *
  * ZIP is for the layers' and masks' channels, through the caller's deflate
- * (minipsd_write_opts.deflate); the composite is then RLE, as Photoshop writes it.
+ * (minipsd_write_opts.deflate); the composite is RLE then, as Photoshop writes it, and raw only in
+ * a raw document.
  */
 enum {
-    MINIPSD_RLE = 0,          /*!< PackBits run-length encoding.                               */
-    MINIPSD_RAW = 1,          /*!< Uncompressed.                                               */
-    MINIPSD_ZIP = 2,          /*!< zlib, through the caller's deflate.                         */
-    MINIPSD_ZIP_PREDICTED = 3 /*!< zlib of each sample's difference from its left neighbour,
+    MINIPSD_COMPRESSION_DEFAULT = 0, /*!< A document's: RLE; a layer's: the document's.             */
+    MINIPSD_RLE = 1,          /*!< PackBits run-length encoding.                               */
+    MINIPSD_RAW = 2,          /*!< Uncompressed.                                               */
+    MINIPSD_ZIP = 3,          /*!< zlib, through the caller's deflate.                         */
+    MINIPSD_ZIP_PREDICTED = 4 /*!< zlib of each sample's difference from its left neighbour,
                                    as Photoshop writes its 16-bit layers.                      */
 };
 
@@ -426,12 +429,16 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
                                     channel (composed as opaque).  A stored layer says it by its
                                     transparency of size 0 instead.  minipsd_read sets it for a
                                     layer whose file has none.                                     */
+    int            compression; /*!< This layer's channels, its mask's too: MINIPSD_RLE, _RAW,
+                                    _ZIP or _ZIP_PREDICTED (a ZIP one with
+                                    minipsd_write_opts.deflate); 0 (MINIPSD_COMPRESSION_DEFAULT):
+                                    the document's.  Stored channels keep their own.               */
 } minipsd_layer;
 
 /**
  * \brief A whole document: canvas, resolution, layers and options.
  *
- * Zero-initialise it and set the fields you need; zero compression selects RLE.  Pointers are
+ * Zero-initialise it and set the fields you need; zero compression is the default, RLE.  Pointers are
  * borrowed for the duration of the write call.
  */
 typedef struct minipsd_doc {
@@ -443,8 +450,11 @@ typedef struct minipsd_doc {
                                               a flat file, its image the composite.           */
     const uint8_t       *icc;            /*!< Optional ICC profile; NULL means none (sRGB).  */
     size_t               icc_size;       /*!< Size of icc in bytes; 0 when icc is NULL.      */
-    int                  compression;    /*!< MINIPSD_RLE, MINIPSD_RAW, or MINIPSD_ZIP(_PREDICTED)
-                                              with minipsd_write_opts.deflate.                */
+    int                  compression;    /*!< The layers' channels: MINIPSD_RLE (or 0, the
+                                              default), MINIPSD_RAW, or MINIPSD_ZIP(_PREDICTED)
+                                              with minipsd_write_opts.deflate; a layer may have
+                                              its own (minipsd_layer.compression).  The
+                                              composite: raw when this is, else RLE.          */
     const uint8_t       *composite;      /*!< The composite (merged) image: width * height
                                               pixels, the mode's colour channels then, with
                                               composite_alpha, transparency; rows top down,
@@ -833,7 +843,7 @@ MINIPSDDEF int minipsd_writer_fill(minipsd_writer *w, void *buf, size_t cap, siz
  * whole or reads it once, top to bottom, encodes each channel once this way, where minipsd_write,
  * which keeps nothing between pieces, encodes a row again for its size.
  *
- * \param compression MINIPSD_RLE or MINIPSD_RAW.
+ * \param compression MINIPSD_RLE (or 0, the default) or MINIPSD_RAW.
  * \param depth       Bits a sample: 8, 16 (a uint16_t in host order), 32 (a float); at 1, the
  *                    row already packed, eight pixels a byte, step 1.
  * \param samples     The row's first sample.

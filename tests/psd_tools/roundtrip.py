@@ -34,7 +34,8 @@ import zlib
 from psd_tools import PSDImage
 from psd_tools.constants import Compression, Resource as ResourceId
 
-MINIPSD_OK, MINIPSD_RLE, MINIPSD_RAW, MINIPSD_ZIP, MINIPSD_ZIP_PREDICTED = 0, 0, 1, 2, 3
+MINIPSD_OK, MINIPSD_RLE, MINIPSD_RAW, MINIPSD_ZIP, MINIPSD_ZIP_PREDICTED = 0, 1, 2, 3, 4
+MARKER = {MINIPSD_RAW: 0, MINIPSD_RLE: 1, MINIPSD_ZIP: 2, MINIPSD_ZIP_PREDICTED: 3}   # the file's numbers
 MINIPSD_ERR_UNSUPPORTED = -7
 WRITE_FN = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t)
 INFLATE_FN = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
@@ -113,7 +114,8 @@ class Layer(ctypes.Structure):
                 ("additional_info", Bytes), ("stored", ctypes.c_void_p),
                 ("section_divider_type", ctypes.c_uint8), ("mask", ctypes.POINTER(Mask)),
                 ("blending_ranges", ctypes.POINTER(BlendingRange)), ("blending_range_count", ctypes.c_uint32),
-                ("name_pascal", Bytes), ("no_alpha", ctypes.c_uint8)]
+                ("name_pascal", Bytes), ("no_alpha", ctypes.c_uint8),
+                ("compression", ctypes.c_int)]
 
 
 class Doc(ctypes.Structure):
@@ -1308,7 +1310,7 @@ def main():
         found = check(name, psd, w, h, dpi, layers)
         if psd.version != (2 if fmt else 1):
             found.append(f"{name}: version {psd.version}")
-        if compression >= MINIPSD_ZIP and compressions(psd) != {Compression(compression)}:
+        if compression >= MINIPSD_ZIP and compressions(psd) != {Compression(MARKER[compression])}:
             found.append(f"{name}: layer channels compressed as {compressions(psd)}")
         errors += found
         print(f"{name}: {'FAILED' if found else 'ok'}")
@@ -1330,7 +1332,7 @@ def main():
         path = out / f"{name}.psd"
         rc, expected = deep(lib, path, compression)
         found = [f"{name}: minipsd_write returned {rc}"] if rc != MINIPSD_OK else check_deep(PSDImage.open(path), expected)
-        if rc == MINIPSD_OK and compression and compressions(PSDImage.open(path)) != {Compression(compression)}:
+        if rc == MINIPSD_OK and compression >= MINIPSD_ZIP and compressions(PSDImage.open(path)) != {Compression(MARKER[compression])}:
             found.append(f"{name}: layer channels compressed as {compressions(PSDImage.open(path))}")
         errors += found
         print(f"{name}: {'FAILED' if found else 'ok'}")

@@ -23,6 +23,7 @@
 #define MINIPSD_IMPLEMENTATION
 #include "minipsd.h"
 
+#include "minipsd_vips.h"
 #include "minipsd_vips_psdsave.h"
 #include "minipsd_vips_util.h"
 
@@ -44,7 +45,7 @@ typedef struct _MinipsdVipsPsdsave {
     VipsForeignSave parent_object;
     VipsTarget     *target;      /* set by the subclass's build */
     gboolean        psb;         /* the option; also a .psb file, or a side past PSD's */
-    gboolean        zip;         /* the option: ZIP the layer's channels */
+    MinipsdVipsCompression compression;   /* the option: the layer's channels; none: the composite's too */
     char           *layer_name;  /* the option */
     gboolean        layered;     /* the option: a layer also for an image without alpha */
 } MinipsdVipsPsdsave;
@@ -52,6 +53,22 @@ typedef struct _MinipsdVipsPsdsave {
 typedef VipsForeignSaveClass MinipsdVipsPsdsaveClass;
 
 G_DEFINE_ABSTRACT_TYPE(MinipsdVipsPsdsave, minipsd_vips_psdsave, VIPS_TYPE_FOREIGN_SAVE)
+
+/* MinipsdVipsCompression as a GEnum, so libvips takes it by its nick ("rle", "zip", "none"). */
+static GType minipsd_vips_psdsave_compression_get_type(void)
+{
+    static gsize type = 0;
+    if (g_once_init_enter(&type)) {
+        static const GEnumValue values[] = {
+            { MINIPSD_VIPS_COMPRESSION_RLE, "MINIPSD_VIPS_COMPRESSION_RLE", "rle" },
+            { MINIPSD_VIPS_COMPRESSION_ZIP, "MINIPSD_VIPS_COMPRESSION_ZIP", "zip" },
+            { MINIPSD_VIPS_COMPRESSION_NONE, "MINIPSD_VIPS_COMPRESSION_NONE", "none" },
+            { 0, NULL, NULL },
+        };
+        g_once_init_leave(&type, g_enum_register_static("MinipsdVipsCompression", values));
+    }
+    return (GType)type;
+}
 
 /* What libvips' band formats become: 8-bit, 16-bit and float samples, as PSD has them. */
 static VipsBandFormat minipsd_vips_psdsave_save_formats[] = {
@@ -89,6 +106,7 @@ static void minipsd_vips_psdsave_keep_blob(VipsImage *image, const char *name, u
 /* --- The channels, encoded once: rows as they come, kept compressed, written as stored ------- */
 
 #define PSD_MARKER_SIZE    2           /* a stored channel's compression marker, big-endian */
+#define PSD_STORED_RAW     0           /* ... raw */
 #define PSD_STORED_RLE     1           /* ... PackBits, its rows' sizes ahead of them */
 #define PSD_STORED_ZIP     2           /* ... zlib, without prediction */
 #define PSD_COUNT_PSD      2           /* an RLE row's size: two bytes in a PSD */
@@ -125,7 +143,8 @@ typedef struct _MinipsdVipsPsdsaveChannel {
 typedef struct _MinipsdVipsPsdsaveEncoding {
     MinipsdVipsPsdsaveChannel layer[PSD_MAX_PLANES], composite[PSD_MAX_PLANES];
     unsigned                  planes;      /* the image's bands: colour channels, then alpha */
-    int                       layered, zip, alpha, depth, mode;
+    int                       layered, alpha, depth, mode;
+    MinipsdVipsCompression    compression;
     uint32_t                  width, height;
     uint8_t                  *row;         /* one encoded row, MINIPSD_ROW_BOUND */
     size_t                    row_size;
@@ -147,14 +166,14 @@ static void minipsd_vips_psdsave_encoding_free(MinipsdVipsPsdsaveEncoding *e)
 }
 
 static int minipsd_vips_psdsave_encoding_init(MinipsdVipsPsdsaveEncoding *e, VipsImage *in, int depth, int mode, int alpha,
-                                              int layered, int zip)
+                                              int layered, MinipsdVipsCompression compression)
 {
     const size_t sample = (size_t)(depth / CHAR_BIT);
     unsigned     k;
     memset(e, 0, sizeof *e);
     e->planes   = (unsigned)in->Bands;
     e->layered  = layered;
-    e->zip      = zip;
+    e->compression = compression;
     e->alpha    = alpha;
     e->depth    = depth;
     e->mode     = mode;
@@ -198,14 +217,16 @@ static int minipsd_vips_psdsave_encode_rows(MinipsdVipsPsdsaveEncoding *e, const
     for (i = 0; i < count; ++i, rows += stride) {
         const uint8_t *composite = rows;
         for (k = 0; e->layered && k < e->planes; ++k)
-            if (minipsd_vips_psdsave_encode(e, &e->layer[k], rows, k, y + i, e->zip)) return -1;
+            if (minipsd_vips_psdsave_encode(e, &e->layer[k], rows, k, y + i, e->compression != MINIPSD_VIPS_COMPRESSION_RLE))
+                return -1;
         if (e->alpha) {   /* matted as minipsd mattes a composite it is given (RGB; the others as they are) */
             memcpy(e->matted, rows, bytes);
             (void)minipsd_matte_row(e->mode, e->depth, e->matted, e->width);
             composite = e->matted;
         }
         for (k = 0; k < e->planes; ++k)
-            if (minipsd_vips_psdsave_encode(e, &e->composite[k], composite, k, y + i, 0)) return -1;
+            if (minipsd_vips_psdsave_encode(e, &e->composite[k], composite, k, y + i, e->compression == MINIPSD_VIPS_COMPRESSION_NONE))
+                return -1;
     }
     return 0;
 }
@@ -218,21 +239,21 @@ static uint8_t *minipsd_vips_psdsave_put(uint8_t *p, uint64_t n, unsigned size)
     return p + size;
 }
 
-/* Channels as a file stores them, one block: one marker, every channel's row sizes, then every
-   channel's rows (the composite's layout; a layer channel is the same, one channel).  NULL when a
-   size does not fit its count, or memory runs out. */
-static uint8_t *minipsd_vips_psdsave_stored_rle(MinipsdVipsPsdsaveChannel *c, unsigned channels, uint32_t height, unsigned count,
-                                                size_t *size)
+/* Channels as a file stores them, one block: one marker, every channel's row sizes (RLE), then
+   every channel's rows (the composite's layout; a layer channel is the same, one channel).  NULL
+   when a size does not fit its count, or memory runs out. */
+static uint8_t *minipsd_vips_psdsave_stored(MinipsdVipsPsdsaveChannel *c, unsigned channels, uint32_t height, unsigned count,
+                                            int raw, size_t *size)
 {
     const uint64_t max = count == PSD_COUNT_PSD ? UINT16_MAX : UINT32_MAX;
     uint8_t       *block, *p;
     unsigned       k;
     uint32_t       y;
-    *size = PSD_MARKER_SIZE + (size_t)channels * height * count;
+    *size = PSD_MARKER_SIZE + (raw ? 0 : (size_t)channels * height * count);
     for (k = 0; k < channels; ++k) *size += c[k].rows.size;
     if (!(block = (uint8_t *)g_try_malloc(*size))) return NULL;
-    p = minipsd_vips_psdsave_put(block, PSD_STORED_RLE, PSD_MARKER_SIZE);
-    for (k = 0; k < channels; ++k)
+    p = minipsd_vips_psdsave_put(block, raw ? PSD_STORED_RAW : PSD_STORED_RLE, PSD_MARKER_SIZE);
+    for (k = 0; !raw && k < channels; ++k)
         for (y = 0; y < height; ++y) {
             if (c[k].sizes[y] > max) {
                 g_free(block);
@@ -324,18 +345,20 @@ static int minipsd_vips_psdsave_build(VipsObject *object)
     if (doc.color_mode == MINIPSD_MODE_CMYK) minipsd_vips__invert_cmyk(pixels, (size_t)in->Xsize * (size_t)in->Ysize, (unsigned)in->Bands, doc.depth);
     memset(blocks, 0, sizeof blocks);
     memset(stored, 0, sizeof stored);
-    failed = minipsd_vips_psdsave_encoding_init(&e, in, doc.depth, doc.color_mode, alpha, alpha || psd->layered, psd->zip)
+    failed = minipsd_vips_psdsave_encoding_init(&e, in, doc.depth, doc.color_mode, alpha, alpha || psd->layered, psd->compression)
              || minipsd_vips_psdsave_encode_rows(&e, (const uint8_t *)pixels, 0, e.height, bytes / e.height);
     g_free(pixels);
     for (k = 0; !failed && e.layered && k < e.planes; ++k) {   /* stored: the colour channels, then transparency */
-        blocks[k] = e.zip ? minipsd_vips_psdsave_stored_zip(&e.layer[k], &size)
-                          : minipsd_vips_psdsave_stored_rle(&e.layer[k], 1, e.height, table, &size);
+        blocks[k] = e.compression == MINIPSD_VIPS_COMPRESSION_ZIP
+                        ? minipsd_vips_psdsave_stored_zip(&e.layer[k], &size)
+                        : minipsd_vips_psdsave_stored(&e.layer[k], 1, e.height, table, e.compression == MINIPSD_VIPS_COMPRESSION_NONE, &size);
         failed    = !blocks[k];
         stored[k].data = blocks[k];
         stored[k].size = size;
     }
     if (!failed) {
-        blocks[PSD_MAX_PLANES] = minipsd_vips_psdsave_stored_rle(e.composite, e.planes, e.height, table, &size);
+        blocks[PSD_MAX_PLANES] = minipsd_vips_psdsave_stored(e.composite, e.planes, e.height, table,
+                                                             e.compression == MINIPSD_VIPS_COMPRESSION_NONE, &size);
         failed                 = !blocks[PSD_MAX_PLANES];
         doc.composite_stored.data = blocks[PSD_MAX_PLANES];
         doc.composite_stored.size = size;
@@ -401,8 +424,9 @@ static void minipsd_vips_psdsave_class_init(MinipsdVipsPsdsaveClass *class)
     PSD_ARGS_BEGIN
     VIPS_ARG_BOOL(class, "psb", 20, "PSB", "Save as PSB (also for a .psb file, or a side past 30000)",
                   VIPS_ARGUMENT_OPTIONAL_INPUT, G_STRUCT_OFFSET(MinipsdVipsPsdsave, psb), FALSE);
-    VIPS_ARG_BOOL(class, "zip", 21, "ZIP", "Compress the layer with ZIP instead of RLE",
-                  VIPS_ARGUMENT_OPTIONAL_INPUT, G_STRUCT_OFFSET(MinipsdVipsPsdsave, zip), FALSE);
+    VIPS_ARG_ENUM(class, "compression", 21, "Compression", "The layer's compression: rle, zip or none (the composite too)",
+                  VIPS_ARGUMENT_OPTIONAL_INPUT, G_STRUCT_OFFSET(MinipsdVipsPsdsave, compression),
+                  minipsd_vips_psdsave_compression_get_type(), MINIPSD_VIPS_COMPRESSION_RLE);
     VIPS_ARG_STRING(class, "layer_name", 22, "Layer name", "The layer's name, UTF-8",
                     VIPS_ARGUMENT_OPTIONAL_INPUT, G_STRUCT_OFFSET(MinipsdVipsPsdsave, layer_name), PSD_LAYER_NAME);
     VIPS_ARG_BOOL(class, "layered", 23, "Layered", "Without alpha, a layer too, without transparency (else flat)",

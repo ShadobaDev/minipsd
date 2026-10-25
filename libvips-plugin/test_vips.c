@@ -51,7 +51,8 @@
 #define TALL_W         1024   /* the tall image: PSD's highest, 60 MB of grey and transparency; */
 #define TALL_H         MINIPSD_MAX_SIDE   /* libvips caches rows, so its memory follows the width */
 #define BOUND          8      /* read in bands, libvips holds less than an eighth of it */
-#define STORED_RLE     1      /* a channel's stored compression markers */
+#define STORED_RAW     0      /* a channel's stored compression markers */
+#define STORED_RLE     1
 #define STORED_ZIP     2
 
 /* The ZIP document's two layers: one reaching past the canvas's left edge, one inside. */
@@ -411,7 +412,7 @@ static VipsImage *make_image(const void *data, int bands, VipsBandFormat format,
 /* What minipsd_write makes of the image from its pixels, as psdsave wrote it before it encoded the
    channels itself: one layer when layered (without transparency when the image has no alpha),
    the composite, CMYK as PSD's inverted ink (8-bit, as the tests' images are), the image's
-   resolution, the EXIF, XMP and IPTC libvips gave psdsave (taken from its file); an option ("zip",
+   resolution, the EXIF, XMP and IPTC libvips gave psdsave (taken from its file); an option ("compression",
    "psb") as psdsave takes it. */
 static int from_pixels(VipsImage *image, unsigned colors, int layered, const char *option, int value, const uint8_t *file,
                        size_t file_size, out_buffer *b)
@@ -448,7 +449,10 @@ static int from_pixels(VipsImage *image, unsigned colors, int layered, const cha
     doc.layer_count     = layered ? 1 : 0;
     doc.composite       = pixels;
     doc.composite_alpha = (uint8_t)alpha;
-    doc.compression     = option && strcmp(option, "zip") == 0 && value ? MINIPSD_ZIP : MINIPSD_RLE;
+    doc.compression     = !option || strcmp(option, "compression") != 0 ? MINIPSD_RLE
+                          : value == MINIPSD_VIPS_COMPRESSION_ZIP    ? MINIPSD_ZIP
+                          : value == MINIPSD_VIPS_COMPRESSION_NONE   ? MINIPSD_RAW
+                                                                     : MINIPSD_RLE;
     doc.format          = option && strcmp(option, "psb") == 0 && value ? MINIPSD_PSB : MINIPSD_PSD;
     opts.deflate        = deflate_zlib;
     if (minipsd_reader_init(&r, file, file_size, workspace, sizeof workspace, NULL, &info) == MINIPSD_OK)
@@ -867,7 +871,18 @@ int main(int argc, char **argv)
               "CMYK stored as PSD's inverted ink", path);
         check_saved(make_image(rgbf, 3, VIPS_FORMAT_FLOAT, VIPS_INTERPRETATION_scRGB), "save-float.psd", argv[1], 1, NULL, 0);
         check_saved(make_image(rgb8, 3, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-layered.psd", argv[1], 1, "layered", TRUE);
-        check_saved(make_image(rgba, RGBA, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-zip.psd", argv[1], 0, "zip", TRUE);
+        check_saved(make_image(rgba, RGBA, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-zip.psd", argv[1], 0, "compression",
+                    MINIPSD_VIPS_COMPRESSION_ZIP);
+        check_saved(make_image(rgba, RGBA, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-raw.psd", argv[1], 0, "compression",
+                    MINIPSD_VIPS_COMPRESSION_NONE);
+        snprintf(path, sizeof path, "%s/save-raw.psd", argv[1]);
+        check(first_layer_compression(path) == STORED_RAW, "raw by option", path);
+        image = make_image(rgba, RGBA, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB);   /* by its nick, in an option string */
+        snprintf(path, sizeof path, "%s/save-nick.psd[compression=zip]", argv[1]);
+        check(image && vips_image_write_to_file(image, path, NULL) == 0, "saved with compression=zip", path);
+        if (image) g_object_unref(image);
+        snprintf(path, sizeof path, "%s/save-nick.psd", argv[1]);
+        check(first_layer_compression(path) == STORED_ZIP, "zip by its nick", path);
         snprintf(path, sizeof path, "%s/save-zip.psd", argv[1]);
         check(first_layer_compression(path) == STORED_ZIP, "ZIP by option", path);
         snprintf(path, sizeof path, "%s/save-rgba8.psd", argv[1]);

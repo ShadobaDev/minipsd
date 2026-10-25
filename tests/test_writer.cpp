@@ -617,9 +617,10 @@ TEST(MinipsdWriterTest, SixteenBitDocumentsAreWrittenAndReadBack)
             ASSERT_EQ(info.layer_count, 2u);
             minipsd_layer_view v;
             ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
-            if (f == file && compression >= MINIPSD_ZIP) {   // RLE and RAW markers are 1 and 0
-                EXPECT_EQ(v.channel[0].data[1], compression) << "the layer's marker";
-                EXPECT_EQ(v.mask.stored.data[1], compression) << "the mask's";
+            if (f == file && compression >= MINIPSD_ZIP) {   // the file's markers: 2 ZIP, 3 predicted
+                const int marker = compression == MINIPSD_ZIP ? ZIP_MARKER : ZIP_PREDICTED_MARKER;
+                EXPECT_EQ(v.channel[0].data[1], marker) << "the layer's marker";
+                EXPECT_EQ(v.mask.stored.data[1], marker) << "the mask's";
             }
             std::vector<std::uint16_t> got(px.size()), gotMask(ramp.size());
             minipsd_target t;
@@ -1328,19 +1329,49 @@ TEST(MinipsdWriterTest, ZipChannelsGoThroughTheCallersDeflate)
     ASSERT_EQ(minipsd_reader_init(&r, file.data(), file.size(), workspace.data(), workspace.size(), nullptr, &info), MINIPSD_OK);
     minipsd_layer_view v;
     ASSERT_EQ(minipsd_reader_next_layer(r, &v), MINIPSD_MORE);
-    EXPECT_EQ(v.channel[MINIPSD_CH_R].data[1], MINIPSD_ZIP_PREDICTED);
+    EXPECT_EQ(v.channel[MINIPSD_CH_R].data[1], ZIP_PREDICTED_MARKER);
     minipsd_target t;
     minipsd_target_rgba(&t, out.data(), std::size_t(w) * 4);
     const minipsd_decode_opts zip{0, 0, 0, 8, zlib_stored_inflate, nullptr, scratch.data(), scratch.size()};
     ASSERT_EQ(minipsd_decode_layer(r, &v, &t, &zip), MINIPSD_OK);
     EXPECT_EQ(out, px);
 
-    // Refused: no deflate, a compression that is none of the four.
+    // A layer's own compression: ZIP in an RLE document, and RLE in a ZIP one; the composite RLE
+    // in both, the deflate asked for whenever a layer deflates.
+    {
+        minipsd_layer zipped = layer;
+        zipped.compression   = MINIPSD_ZIP;
+        minipsd_doc rle      = docOf(w, h, &zipped, 1);
+        EXPECT_EQ(minipsd_doc_check(&rle, nullptr), MINIPSD_ERR_ARG) << "a ZIP layer without deflate";
+        const minipsd_write_opts stored{0, zlib_stored_compress, nullptr};
+        const Bytes zf = write(rle, MINIPSD_OK, &stored);
+        Bytes zws(256);
+        minipsd_reader *zr = nullptr;
+        minipsd_info zi{};
+        ASSERT_EQ(minipsd_reader_init(&zr, zf.data(), zf.size(), zws.data(), zws.size(), nullptr, &zi), MINIPSD_OK);
+        minipsd_layer_view zv;
+        ASSERT_EQ(minipsd_reader_next_layer(zr, &zv), MINIPSD_MORE);
+        for (int k = 0; k < 4; ++k) EXPECT_EQ(zv.channel[k].data[1], ZIP_MARKER) << "the layer's own, channel " << k;
+        minipsd_layer plain = layer;
+        plain.compression   = MINIPSD_RLE;
+        minipsd_doc zipDoc  = docOf(w, h, &plain, 1);
+        zipDoc.compression  = MINIPSD_ZIP;
+        const Psd r2 = read(write(zipDoc, MINIPSD_OK, &stored));
+        EXPECT_EQ(r2.layers[0].compression, (std::vector<int>(4, RLE_MARKER))) << "the layer's own, in a ZIP document";
+        EXPECT_EQ(r2.layers[0].pixels, px);
+        EXPECT_EQ(r2.compositeCompression, RLE_MARKER) << "the composite: RLE in a ZIP document";
+    }
+
+    // Refused: no deflate, a compression that is none of the four, the document's or a layer's.
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG);
-    for (int bad : {-1, 4}) {
+    for (int bad : {-1, MINIPSD_ZIP_PREDICTED + 1}) {
         minipsd_doc b = d;
         b.compression = bad;
         EXPECT_EQ(minipsd_doc_check(&b, &opts), MINIPSD_ERR_ARG) << bad;
+        minipsd_layer l = layer;
+        l.compression   = bad;
+        b = docOf(w, h, &l, 1);
+        EXPECT_EQ(minipsd_doc_check(&b, &opts), MINIPSD_ERR_ARG) << "a layer's " << bad;
     }
 
     // A failing deflate, while sizing or while writing; one whose second stream is longer.
