@@ -1,13 +1,14 @@
 /**
  * \file
- * \brief psdsave, psdsave_buffer, psdsave_target: an image as a one-layer PSD or PSB.
+ * \brief psdsave, psdsave_buffer, psdsave_target: an image as a PSD or PSB, one layer or flat.
  *
  * Laid out as libvips' own savers are (a base class over a VipsTarget; the file and buffer
  * variants make one), so the code can move into libvips/foreign/ (as psdsave.c, the minipsd_vips_
- * names back to vips_foreign_).  The image is written as one layer that is also the composite:
- * grey, RGB or CMYK, 8 or 16 bits, grey and RGB also 32, transparency kept or made opaque, CMYK
- * back to PSD's inverted ink; the resolution, the ICC profile, EXIF, XMP and IPTC kept.  The image
- * is held whole in memory while it is written.
+ * names back to vips_foreign_).  An image with alpha is written as one layer that is also the
+ * composite; one without, flat, as Photoshop saves an image without layers: the composite only,
+ * without transparency (with `layered`, one layer without transparency too).  Grey, RGB or CMYK,
+ * 8 or 16 bits, grey and RGB also 32, CMYK back to PSD's inverted ink; the resolution, the ICC
+ * profile, EXIF, XMP and IPTC kept.  The image is held whole in memory while it is written.
  *
  * minipsd's writer is compiled in here, private (MINIPSD_STATIC; the reader left out), so a
  * program that uses minipsd itself keeps its own.
@@ -43,6 +44,7 @@ typedef struct _MinipsdVipsPsdsave {
     gboolean        psb;         /* the option; also a .psb file, or a side past PSD's */
     gboolean        zip;         /* the option: ZIP the layer's channels */
     char           *layer_name;  /* the option */
+    gboolean        layered;     /* the option: a layer also for an image without alpha */
 } MinipsdVipsPsdsave;
 
 typedef VipsForeignSaveClass MinipsdVipsPsdsaveClass;
@@ -97,7 +99,6 @@ static int minipsd_vips_psdsave_build(VipsObject *object)
 {
     VipsForeignSave    *save = (VipsForeignSave *)object;
     MinipsdVipsPsdsave *psd  = (MinipsdVipsPsdsave *)object;
-    VipsImage         **t    = (VipsImage **)vips_object_local_array(object, 1);
     VipsImage          *in;
     minipsd_resource    resources[PSD_MAX_RESOURCES];
     minipsd_layer       layer;
@@ -106,9 +107,9 @@ static int minipsd_vips_psdsave_build(VipsObject *object)
     const void         *icc;
     const char         *filename;
     size_t              icc_size, bytes, colors, count = 0;
-    double              ratio, full;
+    double              ratio;
     void               *pixels;
-    int                 rc;
+    int                 rc, alpha;
 
     if (VIPS_OBJECT_CLASS(minipsd_vips_psdsave_parent_class)->build(object)) return -1;
     in = save->ready;
@@ -130,27 +131,25 @@ static int minipsd_vips_psdsave_build(VipsObject *object)
     }
     doc.depth = in->BandFmt == VIPS_FORMAT_FLOAT ? 32 : in->BandFmt == VIPS_FORMAT_USHORT ? 16 : 8;
 
-    /* A layer always has transparency: opaque, when the image has none. */
-    if ((size_t)in->Bands == colors) {
-        full = doc.depth == 32 ? 1.0 : doc.depth == 16 ? USHRT_MAX : UCHAR_MAX;
-        if (vips_bandjoin_const1(in, &t[0], full, NULL)) return -1;
-        in = t[0];
-    }
+    /* Transparency as the image has it: none, none added. */
+    alpha = (size_t)in->Bands > colors;
     if (!(pixels = vips_image_write_to_memory(in, &bytes))) return -1;
     if (doc.color_mode == MINIPSD_MODE_CMYK) minipsd_vips__invert_cmyk(pixels, (size_t)in->Xsize * (size_t)in->Ysize, (unsigned)in->Bands, doc.depth);
 
     memset(&layer, 0, sizeof layer);
-    layer.name    = psd->layer_name ? psd->layer_name : PSD_LAYER_NAME;
-    layer.pixels  = (const uint8_t *)pixels;
-    layer.opacity = UCHAR_MAX;
+    layer.name     = psd->layer_name ? psd->layer_name : PSD_LAYER_NAME;
+    layer.pixels   = (const uint8_t *)pixels;
+    layer.opacity  = UCHAR_MAX;
+    layer.no_alpha = (uint8_t)!alpha;
 
     doc.width       = (uint32_t)in->Xsize;
     doc.height      = (uint32_t)in->Ysize;
     doc.dpi         = in->Xres * MM_PER_INCH;
     if (!(doc.dpi > 0.0 && doc.dpi < PSD_MAX_DPI)) doc.dpi = PSD_DEFAULT_DPI;
-    doc.layers      = &layer;
-    doc.layer_count = 1;
+    doc.layers      = alpha || psd->layered ? &layer : NULL;   /* without alpha: flat, unless asked */
+    doc.layer_count = doc.layers ? 1 : 0;
     doc.composite   = (const uint8_t *)pixels;   /* one layer, at full opacity: the composite itself */
+    doc.composite_alpha = (uint8_t)alpha;
     doc.compression = psd->zip ? MINIPSD_ZIP : MINIPSD_RLE;
     /* PSB by the option, a file named .psb (libvips writes files through a target too), or a side
        past PSD's. */
@@ -211,6 +210,8 @@ static void minipsd_vips_psdsave_class_init(MinipsdVipsPsdsaveClass *class)
                   VIPS_ARGUMENT_OPTIONAL_INPUT, G_STRUCT_OFFSET(MinipsdVipsPsdsave, zip), FALSE);
     VIPS_ARG_STRING(class, "layer_name", 22, "Layer name", "The layer's name, UTF-8",
                     VIPS_ARGUMENT_OPTIONAL_INPUT, G_STRUCT_OFFSET(MinipsdVipsPsdsave, layer_name), PSD_LAYER_NAME);
+    VIPS_ARG_BOOL(class, "layered", 23, "Layered", "Without alpha, a layer too, without transparency (else flat)",
+                  VIPS_ARGUMENT_OPTIONAL_INPUT, G_STRUCT_OFFSET(MinipsdVipsPsdsave, layered), FALSE);
     PSD_ARGS_END
 }
 

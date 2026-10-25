@@ -9,8 +9,8 @@
  * Pixels are decoded in bands of rows as libvips asks for them, from its threads at once.
  *
  * The image is the composite, or with `layer` one layer (its position in xoffset and yoffset), as
- * the file stores it, no colour converted: the mode's colour channels, then transparency (a
- * layer's always, opaque when it has none).  What libvips has no interpretation for (Lab,
+ * the file stores it, no colour converted: the mode's colour channels, then transparency where it
+ * has one (a layer's channel, the composite's).  What libvips has no interpretation for (Lab,
  * multichannel) is MULTIBAND; the colour mode data is kept as "psd-color-mode-data".  Indexed is
  * the exception: libvips has no indexed image, so it comes through its palette as sRGB, as
  * libvips' own loaders give PNG, GIF and TIFF palettes (a lookup, no colour converted).  CMYK
@@ -179,7 +179,10 @@ static int minipsd_vips_psdload_find_layer(MinipsdVipsPsdload *psd)
     }
     psd->width  = (uint32_t)(psd->view.right - psd->view.left);
     psd->height = (uint32_t)(psd->view.bottom - psd->view.top);
-    psd->planes = VIPS_MIN(psd->info.color_channels + 1u, MINIPSD_PLANES);
+    /* Transparency when the layer has its channel: a layer without one comes without alpha, as it
+       was saved. */
+    psd->planes = psd->info.color_channels;
+    if (psd->planes < MINIPSD_PLANES && psd->view.channel[psd->planes].size) ++psd->planes;
 
     if (minipsd_layer_name(&psd->view, NULL, 0, &needed) == MINIPSD_MORE
         && (name = (char *)vips_malloc(VIPS_OBJECT(psd), needed))

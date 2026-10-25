@@ -113,7 +113,7 @@ class Layer(ctypes.Structure):
                 ("additional_info", Bytes), ("stored", ctypes.c_void_p),
                 ("section_divider_type", ctypes.c_uint8), ("mask", ctypes.POINTER(Mask)),
                 ("blending_ranges", ctypes.POINTER(BlendingRange)), ("blending_range_count", ctypes.c_uint32),
-                ("name_pascal", Bytes)]
+                ("name_pascal", Bytes), ("no_alpha", ctypes.c_uint8)]
 
 
 class Doc(ctypes.Structure):
@@ -323,6 +323,7 @@ def write(lib, path, w, h, dpi, compression, layers, fmt=0):
                            layer[5] if len(layer) > 5 else b"\0\0\0\0")
     doc = Doc(w, h, dpi, records, len(layers), None, 0, compression)
     doc.format = fmt
+    doc.composite_alpha = 1   # composed with the layers' transparency
     out = bytearray()
 
     def collect(_user, data, size):
@@ -441,6 +442,7 @@ def groups_and_mask(lib, path):
         records[i] = Layer(name=name.encode(), pixels=rgba, opacity=255, blend_mode=blend, section_divider_type=kind, mask=m)
     records[2].blending_ranges, records[2].blending_range_count = ranges, len(BLEND_IF)
     doc = Doc(w, h, 72.0, records, len(spec), None, 0, MINIPSD_RLE)
+    doc.composite_alpha = 1
     out = bytearray()
 
     def collect(_user, data, size):
@@ -504,7 +506,7 @@ def deep(lib, path, compression=MINIPSD_RLE):
     records[1] = Layer(name=b"Masked", pixels=samples(top), opacity=255, top=5, left=10, bottom=5 + lh, right=10 + lw,
                        mask=ctypes.pointer(mask))
     doc = Doc(w, h, 72.0, records, 2, None, 0, compression)
-    doc.depth = 16
+    doc.depth, doc.composite_alpha = 16, 1
     out = bytearray()
 
     def collect(_user, data, size):
@@ -596,6 +598,7 @@ def mode_document(lib, path, mode, depth, compression):
     records[1] = Layer(name=b"Top", pixels=samples(top), opacity=255, top=3, left=4, bottom=3 + lh, right=4 + lw)
     doc = Doc(w, h, 72.0, records, 2, None, 0, compression)
     doc.composite, doc.depth, doc.color_mode = samples(flat), depth, mode
+    doc.composite_alpha = 1   # the colour channels, then transparency
     if mode == MODE_DUOTONE:
         data = ctypes.create_string_buffer(DUOTONE_DATA, len(DUOTONE_DATA))
         keep.append(data)
@@ -655,9 +658,12 @@ def check_mode_document(psd, name, mode, depth, expected):
 
 MODE_BITMAP, MODE_INDEXED, MODE_MULTICHANNEL = 0, 2, 7
 # The flat modes: no layers, no transparency.  Bitmap's composite is a byte a pixel, packed by the
-# writer; indexed's one palette entry a pixel; multichannel's only copied, as a file stores it.
+# writer; indexed's one palette entry a pixel; multichannel's only copied, as a file stores it.  And
+# RGB and grey without transparency (composite_alpha 0): flat too, as Photoshop saves an image
+# without layers, the composite supplied as the mode's channels only.
 FLAT = [(MODE_BITMAP, 1, MINIPSD_RLE), (MODE_BITMAP, 1, MINIPSD_RAW), (MODE_INDEXED, 8, MINIPSD_RLE),
-        (MODE_MULTICHANNEL, 8, MINIPSD_RLE), (MODE_MULTICHANNEL, 16, MINIPSD_RLE)]
+        (MODE_MULTICHANNEL, 8, MINIPSD_RLE), (MODE_MULTICHANNEL, 16, MINIPSD_RLE),
+        (MODE_RGB, 8, MINIPSD_RLE), (MODE_GREY, 16, MINIPSD_RLE)]
 PALETTE = bytes(i * 5 % 256 for i in range(768))
 MULTICHANNELS = 3
 
@@ -691,10 +697,15 @@ def flat_document(lib, path, mode, depth, compression):
         want = [bytes(values)]
     else:
         spread = ((1 << depth) - 1) // 255   # the 8-bit pattern over the depth's whole range
-        want = [b"".join(((c * 61 + i * 13) % 256 * spread).to_bytes(sample, "big") for i in range(w * h))
-                for c in range(MULTICHANNELS)]
-        stored = buffer(bytes(2) + b"".join(want))   # the file's marker 0: raw
-        doc.composite_stored, doc.composite_channels = Bytes(ctypes.cast(stored, ctypes.c_void_p), len(stored)), MULTICHANNELS
+        channels = MODE_COLORS.get(mode, MULTICHANNELS)
+        values = [[(c * 61 + i * 13) % 256 * spread for i in range(w * h)] for c in range(channels)]
+        want = [b"".join(v.to_bytes(sample, "big") for v in plane) for plane in values]
+        if mode == MODE_MULTICHANNEL:
+            stored = buffer(bytes(2) + b"".join(want))   # the file's marker 0: raw
+            doc.composite_stored, doc.composite_channels = Bytes(ctypes.cast(stored, ctypes.c_void_p), len(stored)), channels
+        else:   # supplied, interleaved, in host order: the colour channels and nothing after them
+            doc.composite = ctypes.cast(buffer(b"".join(values[c][i].to_bytes(sample, sys.byteorder)
+                                                        for i in range(w * h) for c in range(channels))), ctypes.c_void_p)
     out = bytearray()
 
     def collect(_user, data, size):
@@ -787,6 +798,7 @@ def setters_document(lib, path):
     layer[0] = Layer(name=b"Layer", pixels=ctypes.cast(pixels, ctypes.c_void_p), opacity=255,
                      additional_info=made(lib.minipsd_layer_make_block_settings, None, 0, ctypes.byref(settings)))
     doc = Doc(2, 2, 72.0, layer, 1, None, 0, MINIPSD_RLE)
+    doc.composite_alpha = 1
     doc.resources, doc.resource_count = ctypes.cast(resources, ctypes.c_void_p), len(resources)
     doc.pixel_aspect_ratio = SETTER_ASPECT
     out = bytearray()
@@ -990,9 +1002,8 @@ def check_kept(name, before, after, stored=False):
         same(f"layer {i} blocks", blocks(b.tagged_blocks), blocks(a.tagged_blocks))
         same(f"layer {i} mask data", b.mask_data.tobytes() if b.mask_data else None, a.mask_data.tobytes() if a.mask_data else None)
         same(f"layer {i} blending ranges", b.blending_ranges.tobytes(), a.blending_ranges.tobytes())
-        ids = [c.id.value for c in b.channel_info]
-        added = [] if -1 in ids or stored else [-1]   # decoded, a layer without transparency gets an opaque one
-        same(f"layer {i} channels", sorted(added + ids), sorted(c.id.value for c in a.channel_info))
+        ids = [c.id.value for c in b.channel_info]   # a layer without transparency stays without, decoded too
+        same(f"layer {i} channels", sorted(ids), sorted(c.id.value for c in a.channel_info))
         same(f"layer {i} rectangle", rect(b), rect(a))
         same(f"layer {i} names", (b.name, blocks(b.tagged_blocks).get(b"luni")), (a.name, blocks(a.tagged_blocks).get(b"luni")))
         same(f"layer {i} opacity", b.opacity, a.opacity)

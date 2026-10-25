@@ -173,7 +173,8 @@ TEST(MinipsdWriterTest, ASuppliedCompositeIsMattedAndWrittenWithoutComposing)
         d.composite_stored   = {planes.data(), planes.size()};
         d.composite_channels = 3;
         EXPECT_EQ(write(d), withComposite) << "the supplied composite wins";
-        d.composite = nullptr;
+        d.composite       = nullptr;
+        d.composite_alpha = 0;   // what composite_alpha says is now the stored one's: R, G, B
         const Bytes copied = write(d);
         EXPECT_EQ(composedRows, 0) << "nothing composed";
         EXPECT_EQ(Bytes(copied.end() - static_cast<std::ptrdiff_t>(planes.size()), copied.end()), planes) << "copied as it is";
@@ -607,7 +608,7 @@ TEST(MinipsdWriterTest, SixteenBitDocumentsAreWrittenAndReadBack)
         check(file);
 
         // As a document, decoded or stored: the same bytes.  A stored layer without transparency
-        // gets an opaque one.
+        // reads back without one: R, G, B.
         const minipsd_read_opts inflating{0, zlib_stored_inflate, nullptr};
         for (int keep : {0, 1}) {
             const minipsd_read_opts opts{keep, zlib_stored_inflate, nullptr};
@@ -629,8 +630,10 @@ TEST(MinipsdWriterTest, SixteenBitDocumentsAreWrittenAndReadBack)
                 minipsd_doc *opaque = nullptr;
                 const Bytes f = write(e, MINIPSD_OK, &zipped);
                 ASSERT_EQ(minipsd_read(f.data(), f.size(), nullptr, &inflating, &opaque, nullptr), MINIPSD_OK);
+                EXPECT_EQ(opaque->layers[0].no_alpha, 1);
                 const auto *got = reinterpret_cast<const std::uint16_t *>(opaque->layers[0].pixels);
-                for (std::size_t i = 0; i < px.size(); ++i) ASSERT_EQ(got[i], i % 4 == 3 ? 65535 : px[i]) << i;
+                for (std::size_t i = 0; i < px.size() / 4; ++i)
+                    for (std::size_t k = 0; k < 3; ++k) ASSERT_EQ(got[i * 3 + k], px[i * 4 + k]) << i;
                 minipsd_doc_free(opaque);
             }
             minipsd_doc_free(back);
@@ -1086,7 +1089,8 @@ TEST(MinipsdWriterTest, RefusesBeforeWritingAnything)
     d = docOf(2, 2, nullptr, 1);
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG) << "a layer count, no layers";
     d = docOf(2, 2, &layer, 0);
-    d.composite = px.data();
+    d.composite       = px.data();
+    d.composite_alpha = 1;   // RGBA
     EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_OK) << "no layers, a composite: flat";
     {
         const Psd flat = read(write(d));

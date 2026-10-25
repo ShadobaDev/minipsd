@@ -168,7 +168,8 @@ static uint8_t *decode_image(const void *file, size_t size, int layer, size_t *b
         }
         width  = (uint32_t)(view.right - view.left);
         height = (uint32_t)(view.bottom - view.top);
-        planes = info.color_channels + 1u;
+        planes = info.color_channels;   /* then transparency, when the layer has its channel */
+        if (planes < MINIPSD_PLANES && view.channel[planes].size) ++planes;
     }
     if (planes > MINIPSD_PLANES) planes = MINIPSD_PLANES;
     bands = planes;
@@ -381,6 +382,7 @@ static void check_indexed(const char *path, const uint8_t *indices, const uint8_
 }
 
 static uint8_t *read_all(const char *path, size_t *size);
+static size_t   layer_count(const void *file, size_t size);
 
 /* The same samples: bytes, or floats within FLOAT_EPSILON. */
 static int same_samples(const void *got, const void *want, size_t bytes, int floats)
@@ -407,9 +409,10 @@ static VipsImage *make_image(const void *data, int bands, VipsBandFormat format,
 }
 
 /* An image saved through psdsave as a file, into a buffer and into a target, the same bytes each
-   time, then read back through psdload: the layer is the image (made opaque when it had no
-   alpha), and so is the composite when alpha is full (the matte undone exactly).  options are a
-   psdsave option and its value, or NULL. */
+   time, then read back through psdload as it was, its bands too: with alpha one layer, and the
+   composite when alpha is full (the matte undone exactly); without, a flat file, the composite
+   only, or with `layered` a layer without transparency as well.  options are a psdsave option and
+   its value, or NULL. */
 static void check_saved(VipsImage *image, const char *name, const char *dir, int full_alpha, const char *option,
                         int value)
 {
@@ -422,7 +425,7 @@ static void check_saved(VipsImage *image, const char *name, const char *dir, int
     size_t      file_size = 0, buffer_size = 0, want_bytes = 0, got_bytes = 0, target_size = 0;
     const void *target_data = NULL;
     const char *saver;
-    int         colors, saved, layer;
+    int         colors, saved, layer, layered;
     if (!image) {
         check(0, "image made", name);
         return;
@@ -456,24 +459,21 @@ static void check_saved(VipsImage *image, const char *name, const char *dir, int
           name);
     vips_error_clear();
 
-    /* Read back: the layer, then the composite. */
-    colors = image->Type == VIPS_INTERPRETATION_CMYK ? 4 : image->Bands >= 3 ? 3 : 1;
-    if (image->Bands == colors) {
-        vips_bandjoin_const1(image, &want_image, image->BandFmt == VIPS_FORMAT_FLOAT ? 1.0
-                                                 : image->BandFmt == VIPS_FORMAT_USHORT ? USHRT_MAX : UCHAR_MAX, NULL);
-    } else {
-        want_image = image;
-        g_object_ref(want_image);
-    }
-    if (want_image) want = vips_image_write_to_memory(want_image, &want_bytes);
-    for (layer = 0; layer >= COMPOSITE; --layer) {
+    /* Read back: the layer, when there is one, then the composite; the image as it is. */
+    colors  = image->Type == VIPS_INTERPRETATION_CMYK ? CMYK_COLORS : image->Bands >= 3 ? 3 : 1;
+    layered = image->Bands > colors || (option && strcmp(option, "layered") == 0 && value);
+    check(file && layer_count(file, file_size) == (layered ? 1u : 0u), layered ? "one layer" : "flat: no layer", name);
+    want_image = image;
+    g_object_ref(want_image);
+    want = vips_image_write_to_memory(want_image, &want_bytes);
+    for (layer = layered ? 0 : COMPOSITE; layer >= COMPOSITE; --layer) {
         if (layer == COMPOSITE && !full_alpha) break;
         back = vips_image_new_from_file(path, "layer", layer, NULL);
         got  = back ? vips_image_write_to_memory(back, &got_bytes) : NULL;
         check(want && got && got_bytes == want_bytes
                   && same_samples(got, want, want_bytes, layer == COMPOSITE && image->BandFmt == VIPS_FORMAT_FLOAT),
               layer == COMPOSITE ? "composite read back as the image" : "layer read back as the image", name);
-        if (back && layer == 0)
+        if (back && (layer == 0 || !layered))
             check(fabs(vips_image_get_xres(back) - DPI / MM_PER_INCH) < EPSILON, "resolution read back", name);
         vips_error_clear();
         g_free(got);
@@ -537,8 +537,9 @@ static void check_bounded(const char *dir)
     for (i = 0; i < bytes; ++i) composite[i] = (uint8_t)(i % 2 ? UCHAR_MAX : i / 2 % TALL_W);
     memset(&doc, 0, sizeof doc);
     doc.width = TALL_W, doc.height = TALL_H, doc.dpi = DPI;
-    doc.color_mode = MINIPSD_MODE_GREY;
-    doc.composite  = composite;
+    doc.color_mode      = MINIPSD_MODE_GREY;
+    doc.composite       = composite;
+    doc.composite_alpha = 1;   /* grey and transparency */
     check(minipsd_write(&doc, NULL, to_buffer, &b) == MINIPSD_OK, "tall image written", "bounded");
     free(composite);
     snprintf(path, sizeof path, "%s/tall.psd", dir);
@@ -682,7 +683,7 @@ int main(int argc, char **argv)
         layer.opacity = UCHAR_MAX;
         memset(&doc, 0, sizeof doc);
         doc.width = WIDTH, doc.height = HEIGHT, doc.dpi = DPI;
-        doc.layers = &layer, doc.layer_count = 1;
+        doc.layers = &layer, doc.layer_count = 1, doc.composite_alpha = 1;   /* RGBA, as the layer */
         doc.icc = icc, doc.icc_size = sizeof icc;
         doc.pixel_aspect_ratio = ASPECT;
         check_document(&doc, NULL, &psd, argv[1], path, sizeof path);
@@ -696,7 +697,7 @@ int main(int argc, char **argv)
         layer.pixels = (const uint8_t *)rgba16;
         memset(&doc, 0, sizeof doc);
         doc.width = WIDTH, doc.height = HEIGHT, doc.dpi = DPI;
-        doc.layers = &layer, doc.layer_count = 1;
+        doc.layers = &layer, doc.layer_count = 1, doc.composite_alpha = 1;   /* RGBA, as the layer */
         doc.depth = 16;
         check_document(&doc, NULL, &e, argv[1], path, sizeof path);
         check_layers(path, &doc, sizeof(uint16_t), e.name);
@@ -708,7 +709,7 @@ int main(int argc, char **argv)
         layer.pixels = (const uint8_t *)grey16;
         memset(&doc, 0, sizeof doc);
         doc.width = WIDTH, doc.height = HEIGHT, doc.dpi = DPI;
-        doc.layers = &layer, doc.layer_count = 1;
+        doc.layers = &layer, doc.layer_count = 1, doc.composite_alpha = 1;   /* RGBA, as the layer */
         doc.color_mode = MINIPSD_MODE_GREY, doc.depth = 16;
         doc.composite = (const uint8_t *)grey16;
         check_document(&doc, NULL, &e, argv[1], path, sizeof path);
@@ -719,7 +720,7 @@ int main(int argc, char **argv)
         layer.pixels = cmyka;
         memset(&doc, 0, sizeof doc);
         doc.width = WIDTH, doc.height = HEIGHT, doc.dpi = DPI;
-        doc.layers = &layer, doc.layer_count = 1;
+        doc.layers = &layer, doc.layer_count = 1, doc.composite_alpha = 1;   /* RGBA, as the layer */
         doc.color_mode = MINIPSD_MODE_CMYK;
         doc.composite  = cmyka;
         check_document(&doc, NULL, &e, argv[1], path, sizeof path);
@@ -767,7 +768,7 @@ int main(int argc, char **argv)
         }
         memset(&doc, 0, sizeof doc);
         doc.width = WIDTH, doc.height = HEIGHT, doc.dpi = DPI;
-        doc.layers = zip_layers, doc.layer_count = 2;
+        doc.layers = zip_layers, doc.layer_count = 2, doc.composite_alpha = 1;   /* composed with their transparency */
         doc.compression = MINIPSD_ZIP;
         memset(&opts, 0, sizeof opts);
         opts.deflate = deflate_zlib;
@@ -800,10 +801,11 @@ int main(int argc, char **argv)
         check(stored_sample(path, 0) == UCHAR_MAX - cmyka[0] && stored_sample(path, 3) == UCHAR_MAX - cmyka[3],
               "CMYK stored as PSD's inverted ink", path);
         check_saved(make_image(rgbf, 3, VIPS_FORMAT_FLOAT, VIPS_INTERPRETATION_scRGB), "save-float.psd", argv[1], 1, NULL, 0);
-        check_saved(make_image(rgb8, 3, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-zip.psd", argv[1], 1, "zip", TRUE);
+        check_saved(make_image(rgb8, 3, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-layered.psd", argv[1], 1, "layered", TRUE);
+        check_saved(make_image(rgba, RGBA, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-zip.psd", argv[1], 0, "zip", TRUE);
         snprintf(path, sizeof path, "%s/save-zip.psd", argv[1]);
         check(first_layer_compression(path) == STORED_ZIP, "ZIP by option", path);
-        snprintf(path, sizeof path, "%s/save-rgb8.psd", argv[1]);
+        snprintf(path, sizeof path, "%s/save-rgba8.psd", argv[1]);
         check(first_layer_compression(path) == STORED_RLE, "RLE by default", path);
         check_saved(make_image(rgb8, 3, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-psb.psd", argv[1], 1, "psb", TRUE);
         snprintf(path, sizeof path, "%s/save-psb.psd", argv[1]);
@@ -815,7 +817,7 @@ int main(int argc, char **argv)
         image = make_image(rgb8, 3, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB);
         check(image && vips_image_write_to_file(image, path, NULL) == 0, "saved", path);
         if (image) g_object_unref(image);
-        back = vips_image_new_from_file(path, "layer", 0, NULL);
+        back = vips_image_new_from_file(path, NULL);
         check(back != NULL, "read back", path);
         if (back) g_object_unref(back);
         file = read_all(path, &size);
@@ -829,7 +831,8 @@ int main(int argc, char **argv)
             want_icc = vips_blob_get(profile, &want_icc_size);
             if (image) vips_image_set_blob_copy(image, VIPS_META_ICC_NAME, want_icc, want_icc_size);
         }
-        check(image && vips_call("psdsave", image, path, "layer_name", "Ink", NULL) == 0, "saved by psdsave", path);
+        check(image && vips_call("psdsave", image, path, "layer_name", "Ink", "layered", TRUE, NULL) == 0, "saved by psdsave",
+              path);
         back = vips_image_new_from_file(path, "layer", 0, NULL);
         check(back && vips_image_get_string(back, "psd-layer-name", &got_name) == 0 && strcmp(got_name, "Ink") == 0,
               "layer name kept", path);

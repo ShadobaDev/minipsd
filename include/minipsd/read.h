@@ -128,7 +128,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     uint64_t            decoded, canvas;
     uint32_t            loss = 0;
     size_t              i, count, n = 0;
-    unsigned            wide, planes;
+    unsigned            wide, planes, cplanes;
     uint32_t            side;
     int                 rc, flat_mode;
 
@@ -149,6 +149,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     }
     wide   = r->shift;                                         /* wider samples, aligned for their type */
     planes = r->colors + !flat_mode;                           /* a pixel: the colour channels, then transparency */
+    cplanes = r->colors + (!flat_mode && info.composite_has_alpha && info.channels > r->colors);   /* the composite's, as the file has it */
     side   = mpsd__max_side(r->psb);
     memset(&all, 0, sizeof all);                               /* every row, un-matted; new fields zero */
     all.depth      = (int)r->depth;
@@ -158,7 +159,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     all.scratch_size = (size_t)a->zip;                         /* measured: the block holds it */
     as_stored = all;
     as_stored.keep_matte = 1;
-    canvas  = (uint64_t)info.width * info.height * planes << wide;
+    canvas  = (uint64_t)info.width * info.height * cplanes << wide;
     /* Stored: the composite copied as it is, every channel, never decoded; multichannel's always. */
     keep_composite = ((opts && opts->stored) || info.color_mode == MINIPSD_MODE_MULTICHANNEL) && info.channels >= r->colors;
     decoded = keep_composite ? 0 : canvas;                      /* the composite */
@@ -182,6 +183,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         uint8_t       *mask_pixels = NULL;
         uint32_t       j;
         int            k, keep;
+        unsigned       lplanes;                                 /* decoded: transparency only when the file has it */
         rc = minipsd_reader_next_layer(r, &v);
         if (rc != MINIPSD_MORE) return rc == MINIPSD_OK ? MINIPSD_ERR_FORMAT : rc;
         if (v.other_channels) loss |= MINIPSD_LOST_CHANNELS;    /* TODO: alpha and spot channels (ROADMAP, Not scheduled) */
@@ -198,12 +200,13 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
             stored = (minipsd_bytes *)mpsd__take(a, planes * sizeof *stored, 1);
             for (k = 0; k < (int)planes; ++k) copies[k] = mpsd__copy(a, v.channel[k]);
         }
-        pixels = w && h && !keep ? (uint8_t *)mpsd__take(a, w * h * planes << wide, (int)wide) : NULL;
+        lplanes = r->colors + (v.channel[r->colors].size != 0);
+        pixels = w && h && !keep ? (uint8_t *)mpsd__take(a, w * h * lplanes << wide, (int)wide) : NULL;
         extra  = mpsd__copy(a, v.additional_info);              /* every block, 'luni' too */
         pascal = mpsd__copy(a, v.name_pascal);
         ranges = (minipsd_blending_range *)mpsd__take(a, (uint64_t)v.blending_range_count * sizeof *ranges, 1);
-        if (pixels) decoded += w * h * planes << wide;
-        for (k = 0; w && h && !keep && k < (int)planes; ++k)    /* decoded: pixels, NULL while measuring */
+        if (pixels) decoded += w * h * lplanes << wide;
+        for (k = 0; w && h && !keep && k < (int)lplanes; ++k)   /* decoded: pixels, NULL while measuring */
             mpsd__zip_room(a, v.channel[k], w * h << wide);
         if (v.has_mask) {                                       /* the mask: decoded, or stored with the layer */
             const uint64_t mw = (uint64_t)((int64_t)v.mask.right - v.mask.left), mh = (uint64_t)((int64_t)v.mask.bottom - v.mask.top);
@@ -228,12 +231,13 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         if (!d) continue;
         (void)minipsd_layer_name(&v, name, n, NULL);
         if (pixels) {
-            mpsd__target(&t, pixels, (size_t)(w * planes << wide), planes, wide);
+            mpsd__target(&t, pixels, (size_t)(w * lplanes << wide), lplanes, wide);
             rc = minipsd_decode_layer(r, &v, &t, &all);
             if (rc != MINIPSD_OK) return rc;
         }
         layers[i].name    = name;
         layers[i].pixels  = pixels;
+        layers[i].no_alpha = (uint8_t)(lplanes == r->colors);   /* an empty one's too: its channels as the file's */
         layers[i].opacity = v.opacity;
         layers[i].hidden  = v.hidden;
         layers[i].top     = v.top;    layers[i].left  = v.left;
@@ -295,16 +299,17 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     if (!d) return MINIPSD_OK;
 
     if (pixels) {
-        mpsd__target(&t, pixels, (size_t)info.width * planes << wide, planes, wide);
+        mpsd__target(&t, pixels, (size_t)info.width * cplanes << wide, cplanes, wide);
         rc = minipsd_decode_composite(r, &t, &as_stored);
         if (rc != MINIPSD_OK) return rc;
     }
-    if (flat) {
-        mpsd__target(&t, flat, (size_t)info.width * planes << wide, planes, wide);
-        rc = minipsd_decode_composite(r, &t, &all);
+    if (flat) {   /* un-matted; without transparency there is no matte to undo */
+        mpsd__target(&t, flat, (size_t)info.width * cplanes << wide, cplanes, wide);
+        rc = minipsd_decode_composite(r, &t, cplanes > r->colors ? &all : &as_stored);
         if (rc != MINIPSD_OK) return rc;
         layers[0].name    = "Background";
         layers[0].pixels  = flat;
+        layers[0].no_alpha = (uint8_t)(cplanes == r->colors);
         layers[0].opacity = 255;
         layers[0].bottom  = (int32_t)info.height;   /* the rectangle a reader then sees */
         layers[0].right   = (int32_t)info.width;
@@ -320,7 +325,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
     d->composite_matted = 1;
     d->composite_stored = composite;
     d->composite_channels = keep_composite ? (uint16_t)info.channels : 0;
-    d->composite_alpha    = (uint8_t)(keep_composite && !flat_mode && info.composite_has_alpha && info.channels > r->colors);
+    d->composite_alpha    = (uint8_t)(cplanes > r->colors);   /* stored or decoded, as the file has it */
     {   /* the file's pixel aspect ratio, kept when it is one the writer takes; else 0: none of its own */
         minipsd_resource aspect;
         const double     ratio = info.pixel_aspect_ratio;

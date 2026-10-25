@@ -31,7 +31,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define RGBA 4     /* bands: 8-bit red, green, blue, alpha */
+#define RGB  3     /* bands: 8-bit red, green, blue */
+#define RGBA 4     /* ... and alpha */
 #define FULL 255   /* an 8-bit sample's full value */
 
 /* The whole file in a new buffer; NULL when it cannot be read. */
@@ -83,10 +84,17 @@ static VipsBlendMode blend_mode(const char key[4], int *mapped)
 /* A layer's pixels as a libvips image, wrapped without a copy, its opacity in its alpha. */
 static VipsImage *layer_image(const minipsd_layer *l)
 {
-    const int  w = (int)(l->right - l->left), h = (int)(l->bottom - l->top);
+    const int  w = (int)(l->right - l->left), h = (int)(l->bottom - l->top), bands = l->no_alpha ? RGB : RGBA;
     VipsImage *wrapped, *srgb, *out;
-    wrapped = vips_image_new_from_memory(l->pixels, (size_t)w * (size_t)h * RGBA, w, h, RGBA, VIPS_FORMAT_UCHAR);
+    wrapped = vips_image_new_from_memory(l->pixels, (size_t)w * (size_t)h * (size_t)bands, w, h, bands, VIPS_FORMAT_UCHAR);
     if (!wrapped) return NULL;
+    if (l->no_alpha) {   /* a layer without transparency: opaque, so that every layer is RGBA */
+        VipsImage *opaque;
+        const int  rc = vips_bandjoin_const1(wrapped, &opaque, FULL, NULL);
+        g_object_unref(wrapped);
+        if (rc) return NULL;
+        wrapped = opaque;
+    }
     if (vips_copy(wrapped, &srgb, "interpretation", VIPS_INTERPRETATION_sRGB, NULL)) {   /* RGBA, not 4 bands of anything */
         g_object_unref(wrapped);
         return NULL;
@@ -258,6 +266,7 @@ int main(int argc, char **argv)
     if (!flat) { fprintf(stderr, "vips_composite: libvips: %s\n", vips_error_buffer()); goto done; }
     doc->composite        = flat;    /* ... and minipsd writes them with that image */
     doc->composite_matted = 0;       /* straight alpha: the writer mattes it, as the format wants */
+    doc->composite_alpha  = 1;       /* RGBA: it has transparency */
 
     f = fopen(argv[1], "wb");
     if (!f) rc = MINIPSD_ERR_OPEN;

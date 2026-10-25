@@ -45,7 +45,7 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
     layers[1].name = "Layer";    layers[1].pixels = NULL; layers[1].opacity = 255; layers[1].hidden = 0;
     layers[1].blending_ranges = &blend_if; layers[1].blending_range_count = 1;
     memset(&doc, 0, sizeof doc);
-    doc.width = 3; doc.height = 2; doc.dpi = 300.0; doc.layers = layers; doc.layer_count = 2;
+    doc.width = 3; doc.height = 2; doc.dpi = 300.0; doc.layers = layers; doc.layer_count = 2; doc.composite_alpha = 1;
 
     /* Every function, so a static build has none unused. */
     if (!minipsd_error_string(MINIPSD_OK)[0] || minipsd_doc_check(&doc, NULL) != MINIPSD_OK)

@@ -232,6 +232,7 @@ minipsd_doc docOf(std::uint32_t w, std::uint32_t h, const minipsd_layer *layers,
 {
     minipsd_doc d{};
     d.width = w; d.height = h; d.dpi = 300.0; d.layers = layers; d.layer_count = n;
+    d.composite_alpha = n != 0;   // with layers: composed with their transparency, as most tests want
     return d;
 }
 

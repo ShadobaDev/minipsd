@@ -51,7 +51,7 @@
  *
  * \par What it writes
  * A document in any colour mode (minipsd_doc.color_mode) at the depths Photoshop has it, as a PSD
- * or (minipsd_doc.format) a PSB, with a transparency channel but in the flat modes (bitmap,
+ * or (minipsd_doc.format) a PSB, with or without transparency (none in the flat modes: bitmap,
  * indexed, multichannel, which have no layers); no colour is converted:
  * - one or more layers, bottom first, each a rectangle anywhere on or off the canvas (by default
  *   the full canvas) or empty, with a name, opacity, visibility, blend key, clipping and flags;
@@ -60,9 +60,11 @@
  * - the composite (merged) image, which is what a reader that ignores layers shows: the caller's
  *   own render (minipsd_doc.composite), the right way, since flattening layers is rendering; or,
  *   without one, a best effort with no guarantee: the visible layers blended with straight-alpha
- *   "over" at their rectangles, clipped to the canvas.  Its transparency rides as the first extra
- *   channel, flagged by a negative layer count, and its colour is matted against white
- *   (c * a + 255 * (1 - a)), as Photoshop stores it and readers expect to undo;
+ *   "over" at their rectangles, clipped to the canvas.  Its colour is matted against white
+ *   (c * a + 255 * (1 - a)), as Photoshop stores it and readers expect to undo; its transparency,
+ *   when it has one (minipsd_doc.composite_alpha), rides as the first extra channel, flagged by a
+ *   negative layer count.  Without layers and without transparency the file is flat, as
+ *   Photoshop saves an image without layers;
  * - the resolution, in pixels per inch (resource 1005);
  * - an optional ICC profile (resource 1039); without one, readers assume sRGB;
  * - resources and the global layer mask and blocks kept from a file, as they are.
@@ -374,8 +376,9 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
     const uint8_t *pixels;      /*!< (right - left) * (bottom - top) pixels, rows top down, each the
                                     mode's colour channels then transparency (RGB: R, G, B, A),
                                     straight (not premultiplied) alpha, as minipsd_target_interleaved
-                                    decodes them; NULL means an empty layer.  A sample is a byte, or
-                                    with depth 16 a uint16_t in host order (two bytes).            */
+                                    decodes them; without transparency (no_alpha) the colour
+                                    channels only.  NULL means an empty layer.  A sample is a byte,
+                                    or with depth 16 a uint16_t in host order (two bytes).         */
     uint8_t        opacity;     /*!< 255 is opaque, 0 is fully transparent.                            */
     uint8_t        hidden;      /*!< Non-zero: the layer starts hidden (and stays out of the composite). */
     int32_t        top, left, bottom, right; /*!< The layer's rectangle on the canvas, as in
@@ -418,6 +421,11 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
                                     file's names say, they are written as they are, this one and
                                     a kept 'luni'; once it changes, the writer's own.  Size 0 and
                                     no kept 'luni': the writer's own.                            */
+    uint8_t        no_alpha;    /*!< Non-zero: the layer has no transparency: pixels hold the
+                                    colour channels only, and it is written without a transparency
+                                    channel (composed as opaque).  A stored layer says it by its
+                                    transparency of size 0 instead.  minipsd_read sets it for a
+                                    layer whose file has none.                                     */
 } minipsd_layer;
 
 /**
@@ -438,8 +446,8 @@ typedef struct minipsd_doc {
     int                  compression;    /*!< MINIPSD_RLE, MINIPSD_RAW, or MINIPSD_ZIP(_PREDICTED)
                                               with minipsd_write_opts.deflate.                */
     const uint8_t       *composite;      /*!< The composite (merged) image: width * height
-                                              pixels laid out as a layer's (the mode's colour
-                                              channels then transparency), rows top down,
+                                              pixels, the mode's colour channels then, with
+                                              composite_alpha, transparency; rows top down,
                                               straight alpha, written
                                               whatever the layers hold.  NULL: composite_stored
                                               is copied; without it too, composed from the
@@ -491,13 +499,15 @@ typedef struct minipsd_doc {
                                               (composite_alpha) and alpha or spot channels, in
                                               the file's order.  Ignored without
                                               composite_stored.                               */
-    uint8_t              composite_alpha; /*!< Non-zero: composite_stored's fourth channel is
-                                              transparency, and the layer count is written
-                                              negative; zero: any fourth channel is an alpha
-                                              channel, the count positive.  Ignored without
-                                              composite_stored: a supplied or composed
-                                              composite always has transparency.  minipsd_read
-                                              sets the file's.                                 */
+    uint8_t              composite_alpha; /*!< Non-zero: the composite has transparency, and the
+                                              layer count is written negative: a supplied
+                                              composite's pixels end with it, a composed one
+                                              keeps the layers', composite_stored's channel
+                                              after the colour ones is it.  Zero: the colour
+                                              channels only, the count positive (a composed one
+                                              matted against white; a stored one's further
+                                              channels are alpha channels).  Not in the flat
+                                              modes.  minipsd_read sets the file's.            */
     uint16_t             color_mode;     /*!< MINIPSD_MODE_*: what the samples are; 0 is RGB
                                               (bitmap with depth 1).  minipsd_read sets the
                                               file's.                                         */
