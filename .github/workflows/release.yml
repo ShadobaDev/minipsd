@@ -1,6 +1,8 @@
 # Release: a pushed tag X.Y.Z (bare semver) checks that CI already passed on its commit on master,
 # checks the tag against the header version and the changelog, and publishes minipsd.h (include/ joined into one file by
-# tools/amalgamate.cmake) + minipsd.h.sha256 as a GitHub Release with a build-provenance attestation. "Run workflow" (workflow_dispatch) does everything except publish,
+# tools/amalgamate.cmake) + minipsd.h.sha256, and the libvips plugin as a CMake project that builds as it is
+# (minipsd-vips-X.Y.Z.zip, tools/package_vips.cmake, built and run here first) + its .sha256, as a GitHub Release
+# with build-provenance attestations. "Run workflow" (workflow_dispatch) does everything except publish,
 # so it is a dry run. See docs/GITHUB-RELEASE.md.
 name: Release
 
@@ -63,10 +65,29 @@ jobs:
           cmake -DOUTPUT=dist/minipsd.h -P tools/amalgamate.cmake
           cd dist && sha256sum minipsd.h > minipsd.h.sha256 && cat minipsd.h.sha256
 
-      # Verifiable with: gh attestation verify minipsd.h --repo ShadobaDev/minipsd
+      # The plugin's sources, the single-file header, how libvips is found and an example, one zip.
+      - name: Stage the libvips plugin and its checksum
+        run: |
+          cmake -DOUTPUT_DIR=dist -P tools/package_vips.cmake
+          cd dist && for zip in minipsd-vips-*.zip; do sha256sum "$zip" > "$zip.sha256" && cat "$zip.sha256"; done
+
+      # Built from the zip alone, outside the repository, against the system's libvips; its example
+      # saves a PSD through the plugin and reads it back.
+      - name: Check the plugin builds and runs as released
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libvips-dev ninja-build
+          mkdir "$RUNNER_TEMP/plugin" && cd "$RUNNER_TEMP/plugin"
+          cmake -E tar xf "$GITHUB_WORKSPACE"/dist/minipsd-vips-*.zip
+          cmake -S minipsd-vips-* -B build -G Ninja
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+
+      # Verifiable with: gh attestation verify minipsd.h --repo ShadobaDev/minipsd (the zip alike)
       - uses: actions/attest-build-provenance@v4
         with:
-          subject-path: dist/minipsd.h
+          subject-path: |
+            dist/minipsd.h
+            dist/minipsd-vips-*.zip
 
       - name: Publish the GitHub Release
         if: github.ref_type == 'tag'
@@ -78,3 +99,5 @@ jobs:
           files: |
             dist/minipsd.h
             dist/minipsd.h.sha256
+            dist/minipsd-vips-*.zip
+            dist/minipsd-vips-*.zip.sha256

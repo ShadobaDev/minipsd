@@ -1,6 +1,7 @@
 # ---------------------------------------------------------------------------
-# libvips for what uses it here: examples/vips_composite.c (MINIPSD_VIPS_EXAMPLE) and the plugin
-# in libvips-plugin/ (MINIPSD_VIPS_PLUGIN).  minipsd itself never depends on libvips.
+# libvips for what uses it: minipsd's libvips plugin (libvips-plugin/, MINIPSD_VIPS_PLUGIN; or the
+# plugin as released, minipsd-vips-<version>.zip) and examples/vips_composite.c
+# (MINIPSD_VIPS_EXAMPLE).  minipsd itself never depends on libvips.
 #
 # Windows fetches libvips' official prebuilt "web" build, pinned (the newest release when set);
 # elsewhere pkg-config finds the installed one.  Gives:

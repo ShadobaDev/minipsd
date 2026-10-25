@@ -82,6 +82,24 @@ jobs:
           cmake --build --preset ${{ matrix.preset }}
           ctest --preset ${{ matrix.preset }}
 
+      # The plugin as released (minipsd-vips-X.Y.Z.zip, tools/package_vips.cmake): built from the
+      # zip alone, outside the repository, its example run; libvips as fetched above. The release
+      # builds it again on Linux before publishing.
+      - name: Check the released plugin builds and runs
+        if: matrix.vips == 'ON'
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          cmake -DOUTPUT_DIR="$env:RUNNER_TEMP/dist" -P tools/package_vips.cmake
+          $zip  = Get-Item "$env:RUNNER_TEMP/dist/minipsd-vips-*.zip"
+          cmake -E chdir "$env:RUNNER_TEMP" cmake -E tar xf $zip.FullName
+          $deps = "$env:GITHUB_WORKSPACE/build/${{ matrix.preset }}/_deps"
+          cmake -S (Join-Path $env:RUNNER_TEMP $zip.BaseName) -B "$env:RUNNER_TEMP/plugin" `
+                "-DFETCHCONTENT_SOURCE_DIR_MINIPSD_VIPS=$deps/minipsd_vips-src" `
+                "-DFETCHCONTENT_SOURCE_DIR_MINIPSD_ZLIB_HEADERS=$deps/minipsd_zlib_headers-src"
+          cmake --build "$env:RUNNER_TEMP/plugin"
+          ctest --test-dir "$env:RUNNER_TEMP/plugin" -C Debug --output-on-failure
+
   # The same tests, instrumented, on Linux:
   #   linux-asan      AddressSanitizer + UBSan: out-of-bounds access, overflow, undefined shifts.
   #                   No round trip: Python would need the sanitizer runtime preloaded.
