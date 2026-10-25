@@ -72,12 +72,13 @@ jobs:
           cd dist && for zip in minipsd-vips-*.zip; do sha256sum "$zip" > "$zip.sha256" && cat "$zip.sha256"; done
 
       # Built from the zip alone, outside the repository, against the system's libvips; its example
-      # saves a PSD through the plugin and reads it back.
+      # saves a PSD through the plugin and reads it back. Its SBOM fragment checked against its files.
       - name: Check the plugin builds and runs as released
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends libvips-dev ninja-build
           mkdir "$RUNNER_TEMP/plugin" && cd "$RUNNER_TEMP/plugin"
           cmake -E tar xf "$GITHUB_WORKSPACE"/dist/minipsd-vips-*.zip
+          cmake -DSPDX="$(echo minipsd-vips-*)/minipsd-vips.spdx.json" -DBASE="$(echo minipsd-vips-*)" -DCOMPLETE=ON                 -P "$GITHUB_WORKSPACE"/tools/check_spdx.cmake
           cmake -S minipsd-vips-* -B build -G Ninja
           cmake --build build
           ctest --test-dir build --output-on-failure

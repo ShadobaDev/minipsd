@@ -8,6 +8,7 @@
 #                                          libvips carries libnsgif and qoi
 #   cmake/minipsd_libvips.cmake            as the repository finds libvips
 #   LICENSE.MIT
+#   minipsd-vips.spdx.json                 the SBOM fragment: every other file, with its checksums
 #
 #   cmake -DOUTPUT_DIR=<dir> -P tools/package_vips.cmake
 cmake_minimum_required(VERSION 3.21)
@@ -28,6 +29,11 @@ foreach(_part MAJOR MINOR PATCH)
     list(APPEND _version "${CMAKE_MATCH_1}")
 endforeach()
 list(JOIN _version "." _version)
+file(STRINGS "${_root}/CMakeLists.txt" _homepage REGEX "HOMEPAGE_URL +\"[^\"]+\"")
+if(NOT _homepage MATCHES "\"([^\"]+)\"")
+    message(FATAL_ERROR "CMakeLists.txt names no HOMEPAGE_URL")
+endif()
+set(_homepage "${CMAKE_MATCH_1}")
 
 set(_name "minipsd-vips-${_version}")
 set(_stage "${_out}/${_name}")
@@ -45,6 +51,16 @@ execute_process(COMMAND "${CMAKE_COMMAND}" "-DOUTPUT=${_stage}/foreign/minipsd/m
 if(_rc)
     message(FATAL_ERROR "tools/amalgamate.cmake failed")
 endif()
+
+# The SBOM fragment: the zip's every file, as minipsd's own fragment lists its headers.
+include("${_root}/cmake/minipsd_spdx.cmake")
+file(GLOB_RECURSE _files RELATIVE "${_stage}" "${_stage}/*")
+list(SORT _files)
+minipsd_spdx(OUTPUT "${_stage}/minipsd-vips.spdx.json" PACKAGE minipsd-vips VERSION "${_version}" HOMEPAGE "${_homepage}"
+             DOWNLOAD "${_homepage}/releases/download/${_version}/${_name}.zip"
+             SUMMARY "minipsd's libvips plugin: psdload, psdsave and psdsave_layers, as a CMake project"
+             COMMENT "The files below are the whole zip but this document; foreign/minipsd/minipsd.h is minipsd ${_version}, one file, compiled into the plugin."
+             BASE "${_stage}" FILES ${_files})
 
 execute_process(COMMAND "${CMAKE_COMMAND}" -E tar cf "${_name}.zip" --format=zip "${_name}"
                 WORKING_DIRECTORY "${_out}" RESULT_VARIABLE _rc)

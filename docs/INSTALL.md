@@ -111,6 +111,9 @@ target_link_libraries(my-app PRIVATE minipsd::vips)
 
 `add_subdirectory` of the unpacked zip does the same. On its own, the zip builds and tests its
 example (`cmake -S`, `cmake --build`, `ctest`); without CMake, its README says what to compile.
+The zip carries its own SBOM fragment, `minipsd-vips.spdx.json` (SPDX 2.3, every other file in the
+zip with its checksums, minipsd's single header among them), found as minipsd's is:
+`get_target_property(sbom minipsd::vips MINIPSD_SBOM_FILE)`.
 
 **From minipsd's source.** In any of the ways at the top, turn on `MINIPSD_VIPS_PLUGIN` before
 adding minipsd:
@@ -127,7 +130,9 @@ libvips itself ([cmake/minipsd_libvips.cmake](../cmake/minipsd_libvips.cmake)):
 - **Linux, macOS:** pkg-config, the system's libvips and zlib. Nothing is fetched.
 - **Windows:** libvips' official prebuilt build, `vips-dev-x64-web`, pinned, and zlib's headers
   (zlib 1.3.1, pinned, about 1.5 MB), which that build lacks; the plugin links the zlib the
-  build carries, `libz1`, for ZIP channels.
+  build carries, `libz1`, for ZIP channels. That one is zlib-ng built zlib-compatible, and
+  reports itself as zlib 1.3.1 (`1.3.1.zlib-ng`), so zlib 1.3.1's headers describe it; zlib-ng's
+  own are made when it is built, and no release carries them.
 
 A program that fetches libvips' Windows build itself points the plugin at it, before adding the
 plugin. Then one libvips is fetched, and the plugin is compiled against the headers of the DLLs

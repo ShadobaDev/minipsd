@@ -2,8 +2,8 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "minipsd-@PROJECT_VERSION@",
-  "documentNamespace": "@PROJECT_HOMEPAGE_URL@/spdx/minipsd-@PROJECT_VERSION@-@MINIPSD_SBOM_VERIFICATION@",
+  "name": "@S_PACKAGE@-@S_VERSION@",
+  "documentNamespace": "@S_HOMEPAGE@/spdx/@S_PACKAGE@-@S_VERSION@-@MINIPSD_SBOM_VERIFICATION@",
   "creationInfo": {
     "created": "@MINIPSD_SBOM_CREATED@",
     "creators": [
@@ -13,12 +13,12 @@
   },
   "packages": [
     {
-      "SPDXID": "SPDXRef-Package-minipsd",
-      "name": "minipsd",
-      "versionInfo": "@PROJECT_VERSION@",
+      "SPDXID": "SPDXRef-Package-@S_PACKAGE@",
+      "name": "@S_PACKAGE@",
+      "versionInfo": "@S_VERSION@",
       "supplier": "Person: Bartlomiej Mucha (shadobadev@gmail.com)",
-      "downloadLocation": "git+@PROJECT_HOMEPAGE_URL@.git@@PROJECT_VERSION@",
-      "homepage": "@PROJECT_HOMEPAGE_URL@",
+      "downloadLocation": "@S_DOWNLOAD@",
+      "homepage": "@S_HOMEPAGE@",
       "filesAnalyzed": true,
       "packageVerificationCode": {
         "packageVerificationCodeValue": "@MINIPSD_SBOM_VERIFICATION@"
@@ -27,13 +27,13 @@
       "licenseDeclared": "MIT",
       "licenseInfoFromFiles": [ "MIT" ],
       "copyrightText": "Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>",
-      "summary": "@PROJECT_DESCRIPTION@",
-      "comment": "Header-only: the files below, under include/, are the whole library.",
+      "summary": "@S_SUMMARY@",
+      "comment": "@S_COMMENT@",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:github/ShadobaDev/minipsd@@PROJECT_VERSION@"
+          "referenceLocator": "pkg:github/ShadobaDev/minipsd@@S_VERSION@"
         }
       ]
     }
@@ -44,7 +44,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-minipsd"
+      "relatedSpdxElement": "SPDXRef-Package-@S_PACKAGE@"
     },@MINIPSD_SBOM_CONTAINS@
   ]
 }

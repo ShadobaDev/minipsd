@@ -15,6 +15,7 @@ manual's "PSD in libvips: the plugin".
 | `cmake/minipsd_libvips.cmake` | how libvips is found: Windows fetches libvips' official prebuilt build (pinned), elsewhere pkg-config |
 | `CMakeLists.txt` | builds `minipsd::vips`, a static library |
 | `example.c` | an image saved and read back through the plugin: its test |
+| `minipsd-vips.spdx.json` | the SBOM fragment (SPDX 2.3): every other file here, with its checksums; `get_target_property(sbom minipsd::vips MINIPSD_SBOM_FILE)` |
 
 ## Build
 

@@ -43,6 +43,11 @@ if(WIN32)
     endif()
     target_include_directories(minipsd_libvips SYSTEM INTERFACE
         "${_vips}/include" "${_vips}/include/glib-2.0" "${_vips}/lib/glib-2.0/include")
+    # zlib's headers for the zlib-ng the zip links: built zlib-compatible, it is zlib 1.3.1's ABI
+    # (libz1.dll of 8.18.7, zlib-ng 2.3.3, reports zlibVersion() "1.3.1.zlib-ng"; deflateInit_
+    # checks the version's first digit and sizeof(z_stream)). zlib-ng's own headers are made when
+    # it is built (zlib.h.in, zconf.h.in), so no release has them to fetch; madler's 1.3.1 are
+    # the same API and layout. Bump them with libvips, to the zlib version its libz1 reports.
     FetchContent_Declare(minipsd_zlib_headers
         URL https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
         URL_HASH SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23

@@ -83,8 +83,8 @@ jobs:
           ctest --preset ${{ matrix.preset }}
 
       # The plugin as released (minipsd-vips-X.Y.Z.zip, tools/package_vips.cmake): built from the
-      # zip alone, outside the repository, its example run; libvips as fetched above. The release
-      # builds it again on Linux before publishing.
+      # zip alone, outside the repository, its example run, its SBOM fragment checked against its
+      # files; libvips as fetched above. The release builds it again on Linux before publishing.
       - name: Check the released plugin builds and runs
         if: matrix.vips == 'ON'
         shell: pwsh
@@ -93,6 +93,8 @@ jobs:
           cmake -DOUTPUT_DIR="$env:RUNNER_TEMP/dist" -P tools/package_vips.cmake
           $zip  = Get-Item "$env:RUNNER_TEMP/dist/minipsd-vips-*.zip"
           cmake -E chdir "$env:RUNNER_TEMP" cmake -E tar xf $zip.FullName
+          $unpacked = Join-Path $env:RUNNER_TEMP $zip.BaseName
+          cmake "-DSPDX=$unpacked/minipsd-vips.spdx.json" "-DBASE=$unpacked" -DCOMPLETE=ON -P tools/check_spdx.cmake
           $deps = "$env:GITHUB_WORKSPACE/build/${{ matrix.preset }}/_deps"
           cmake -S (Join-Path $env:RUNNER_TEMP $zip.BaseName) -B "$env:RUNNER_TEMP/plugin" `
                 "-DFETCHCONTENT_SOURCE_DIR_MINIPSD_LIBVIPS=$deps/minipsd_libvips-src" `

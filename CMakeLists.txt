@@ -52,8 +52,6 @@ target_include_directories(minipsd INTERFACE
 # add_subdirectory, FetchContent and find_package (a variable would not survive
 # FetchContent_MakeAvailable's function scope). Its timestamp honours SOURCE_DATE_EPOCH.
 # ---------------------------------------------------------------------------
-# Every header is listed with its checksums; SPDX requires SHA-1 per file and derives the package
-# verification code from those (sorted, concatenated, hashed again).
 file(GLOB_RECURSE _minipsd_headers RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/include"
      CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/include/*.h")
 list(SORT _minipsd_headers)
@@ -61,46 +59,11 @@ list(SORT _minipsd_headers)
 # edited header would refresh neither the checksums here nor tests/'s single-file header.
 list(TRANSFORM _minipsd_headers PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/include/" OUTPUT_VARIABLE _minipsd_header_paths)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_minipsd_header_paths}")
-set(_minipsd_sbom_file [=[
-
-    {
-      "SPDXID": "SPDXRef-File-@_minipsd_id@",
-      "fileName": "./include/@_minipsd_rel@",
-      "checksums": [
-        { "algorithm": "SHA1", "checksumValue": "@_minipsd_sha1@" },
-        { "algorithm": "SHA256", "checksumValue": "@_minipsd_sha256@" }
-      ],
-      "licenseConcluded": "MIT",
-      "licenseInfoInFiles": [ "MIT" ],
-      "copyrightText": "Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>"
-    }]=])
-set(_minipsd_sbom_contains [=[
-
-    {
-      "spdxElementId": "SPDXRef-Package-minipsd",
-      "relationshipType": "CONTAINS",
-      "relatedSpdxElement": "SPDXRef-File-@_minipsd_id@"
-    }]=])
-set(_minipsd_files "")
-set(_minipsd_contains "")
-set(_minipsd_sha1s "")
-foreach(_minipsd_rel IN LISTS _minipsd_headers)
-    string(REGEX REPLACE "[^A-Za-z0-9.-]" "-" _minipsd_id "${_minipsd_rel}")
-    file(SHA1   "${CMAKE_CURRENT_SOURCE_DIR}/include/${_minipsd_rel}" _minipsd_sha1)
-    file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/include/${_minipsd_rel}" _minipsd_sha256)
-    list(APPEND _minipsd_sha1s "${_minipsd_sha1}")
-    string(CONFIGURE "${_minipsd_sbom_file}" _minipsd_entry @ONLY)
-    list(APPEND _minipsd_files "${_minipsd_entry}")
-    string(CONFIGURE "${_minipsd_sbom_contains}" _minipsd_entry @ONLY)
-    list(APPEND _minipsd_contains "${_minipsd_entry}")
-endforeach()
-list(JOIN _minipsd_files "," MINIPSD_SBOM_FILES)
-list(JOIN _minipsd_contains "," MINIPSD_SBOM_CONTAINS)
-list(SORT _minipsd_sha1s)
-list(JOIN _minipsd_sha1s "" _minipsd_sha1s)
-string(SHA1 MINIPSD_SBOM_VERIFICATION "${_minipsd_sha1s}")
-string(TIMESTAMP MINIPSD_SBOM_CREATED "%Y-%m-%dT%H:%M:%SZ" UTC)
-configure_file(cmake/minipsd.spdx.json.in "${CMAKE_CURRENT_BINARY_DIR}/minipsd.spdx.json" @ONLY)
+include(cmake/minipsd_spdx.cmake)
+minipsd_spdx(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/minipsd.spdx.json" PACKAGE minipsd VERSION "${PROJECT_VERSION}"
+             HOMEPAGE "${PROJECT_HOMEPAGE_URL}" DOWNLOAD "git+${PROJECT_HOMEPAGE_URL}.git@${PROJECT_VERSION}"
+             SUMMARY "${PROJECT_DESCRIPTION}" COMMENT "Header-only: the files below, under include/, are the whole library."
+             BASE "${CMAKE_CURRENT_SOURCE_DIR}/include" PREFIX "include/" FILES ${_minipsd_headers})
 set_target_properties(minipsd PROPERTIES MINIPSD_SBOM_FILE "${CMAKE_CURRENT_BINARY_DIR}/minipsd.spdx.json")
 
 # ---------------------------------------------------------------------------
