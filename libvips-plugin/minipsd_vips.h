@@ -7,7 +7,7 @@
  * minipsd_vips_init() once, after VIPS_INIT().  vips_image_new_from_file("x.psd"),
  * vips_image_write_to_file(image, "x.psd") and the other ways libvips finds a loader or a saver
  * then find these.  A saver writes one image; a layered document is psdsave_layers, an
- * operation over an array of images, one a layer (vips_psdsave_layers below).
+ * operation over an array of images, one a layer (minipsd_vips_psdsave_layers below).
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
@@ -28,13 +28,13 @@ extern "C" {
  * From the command line or an option string, by its nick: `compression=zip`.
  */
 typedef enum {
-    VIPS_FOREIGN_PSD_COMPRESSION_RLE  = 0, /*!< PackBits, as Photoshop writes 8-bit layers: the default. */
-    VIPS_FOREIGN_PSD_COMPRESSION_ZIP  = 1, /*!< zlib, without prediction.                               */
-    VIPS_FOREIGN_PSD_COMPRESSION_NONE = 2, /*!< Raw: the largest file.                                   */
-    VIPS_FOREIGN_PSD_COMPRESSION_ZIP_PREDICTED = 3 /*!< zlib of each sample's difference from its left
+    MINIPSD_VIPS_COMPRESSION_RLE  = 0, /*!< PackBits, as Photoshop writes 8-bit layers: the default. */
+    MINIPSD_VIPS_COMPRESSION_ZIP  = 1, /*!< zlib, without prediction.                               */
+    MINIPSD_VIPS_COMPRESSION_NONE = 2, /*!< Raw: the largest file.                                   */
+    MINIPSD_VIPS_COMPRESSION_ZIP_PREDICTED = 3 /*!< zlib of each sample's difference from its left
                                                     neighbour, as Photoshop writes 16-bit layers:
                                                     the smaller file at 16 and 32 bits.          */
-} VipsForeignPsdCompression;
+} MinipsdVipsCompression;
 
 /**
  * \brief Registers minipsd's operations with libvips.  Safe to call more than once.
@@ -65,20 +65,20 @@ int minipsd_vips_init(void);
  * composite as given; else vips_composite of the visible layers, blend modes mapped as the spec's
  * table, masks and groups' visibility and opacity in the layers' alpha, flattened against white
  * when no layer has alpha; clipping, and a group's own mode and mask, are not drawn), "compression"
- * (VipsForeignPsdCompression, the layers'), "psb", "width" and "height" (the canvas; 0: the
+ * (MinipsdVipsCompression, the layers'), "psb", "width" and "height" (the canvas; 0: the
  * composite's size, else every layer's rectangle from (left, top)), "left" and "top" (where the
  * canvas lies in the layers' coordinates).  Each image is read once for its layer, and once more
  * by vips_composite unless the composite is given.
  *
  * \return 0, or -1 with libvips' error set.
  */
-int vips_psdsave_layers(VipsImage **in, int n, const char *filename, ...) G_GNUC_NULL_TERMINATED;
+int minipsd_vips_psdsave_layers(VipsImage **in, int n, const char *filename, ...) G_GNUC_NULL_TERMINATED;
 
-/** \brief vips_psdsave_layers into a target. */
-int vips_psdsave_layers_target(VipsImage **in, int n, VipsTarget *target, ...) G_GNUC_NULL_TERMINATED;
+/** \brief minipsd_vips_psdsave_layers into a target. */
+int minipsd_vips_psdsave_layers_target(VipsImage **in, int n, VipsTarget *target, ...) G_GNUC_NULL_TERMINATED;
 
-/** \brief vips_psdsave_layers into a new buffer, *buf (g_free it) of *len bytes. */
-int vips_psdsave_layers_buffer(VipsImage **in, int n, void **buf, size_t *len, ...) G_GNUC_NULL_TERMINATED;
+/** \brief minipsd_vips_psdsave_layers into a new buffer, *buf (g_free it) of *len bytes. */
+int minipsd_vips_psdsave_layers_buffer(VipsImage **in, int n, void **buf, size_t *len, ...) G_GNUC_NULL_TERMINATED;
 
 #ifdef __cplusplus
 }

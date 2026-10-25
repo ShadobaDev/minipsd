@@ -3,15 +3,14 @@
  * \brief Internal to the plugin: what the loader and the saver share.
  *
  * Constants, the PSD_ARGS_* pair, the few helpers both sides use (defined once in psd.c, prefixed
- * vips__foreign_psd_, as libvips prefixes what its parts share), and the operations' types, which
- * minipsd_vips_init registers.  As libvips keeps TIFF's shared code in foreign/tiff.c and tiff.h.
+ * minipsd_vips__), and the operations' types, which minipsd_vips_init registers.
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
  */
 
-#ifndef VIPS_FOREIGN_PSD_H
-#define VIPS_FOREIGN_PSD_H
+#ifndef MINIPSD_VIPS_PSD_H
+#define MINIPSD_VIPS_PSD_H
 
 #include <vips/vips.h>
 
@@ -35,36 +34,36 @@
 #endif
 
 /* The suffixes libvips matches files by: .psd and .psb. */
-extern const char *vips__foreign_psd_suffs[];
+extern const char *minipsd_vips__suffs[];
 
 /* A record's psd-layer-section, by its MINIPSD_SECTION_* type: NULL for a layer, then "open",
    "closed" (a group's top record, shown open or closed) and "end" (the divider below a group's
    layers).  psdload sets it, psdsave_layers reads it. */
 #define PSD_SECTIONS 4
-extern const char *const vips__foreign_psd_sections[PSD_SECTIONS];
+extern const char *const minipsd_vips__sections[PSD_SECTIONS];
 
 /* GObject resets set_property and get_property in every class (g_object_base_class_init), so
    each class with arguments of its own sets libvips' again. */
-void vips__foreign_psd_class_properties(void *class);
+void minipsd_vips__class_properties(void *class);
 
 /* CMYK the other way round, in place: PSD stores ink inverted (full: no ink), libvips holds it
    as TIFF does (0: no ink), as its own jpegload makes Adobe's inverted CMYK and ImageMagick
    makes PSD's.  The colour channels only, not transparency; both ways, loading and saving.
    count pixels of bands samples, each of depth bits (8, 16, or 32 as floats). */
-void vips__foreign_psd_invert_cmyk(void *pixels, size_t count, unsigned bands, int depth);
+void minipsd_vips__invert_cmyk(void *pixels, size_t count, unsigned bands, int depth);
 
 /* The operations: each abstract base, then the three made from it (psdload.c, psdsave.c). */
-GType vips_foreign_load_psd_get_type(void);
-GType vips_foreign_load_psd_source_get_type(void);
-GType vips_foreign_load_psd_file_get_type(void);
-GType vips_foreign_load_psd_buffer_get_type(void);
-GType vips_foreign_save_psd_get_type(void);
-GType vips_foreign_save_psd_target_get_type(void);
-GType vips_foreign_save_psd_file_get_type(void);
-GType vips_foreign_save_psd_buffer_get_type(void);
-GType vips_foreign_save_psd_layers_get_type(void);
-GType vips_foreign_save_psd_layers_target_get_type(void);
-GType vips_foreign_save_psd_layers_file_get_type(void);
-GType vips_foreign_save_psd_layers_buffer_get_type(void);
+GType minipsd_vips_load_get_type(void);
+GType minipsd_vips_load_source_get_type(void);
+GType minipsd_vips_load_file_get_type(void);
+GType minipsd_vips_load_buffer_get_type(void);
+GType minipsd_vips_save_get_type(void);
+GType minipsd_vips_save_target_get_type(void);
+GType minipsd_vips_save_file_get_type(void);
+GType minipsd_vips_save_buffer_get_type(void);
+GType minipsd_vips_save_layers_get_type(void);
+GType minipsd_vips_save_layers_target_get_type(void);
+GType minipsd_vips_save_layers_file_get_type(void);
+GType minipsd_vips_save_layers_buffer_get_type(void);
 
-#endif /* VIPS_FOREIGN_PSD_H */
+#endif /* MINIPSD_VIPS_PSD_H */

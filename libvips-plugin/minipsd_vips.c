@@ -16,14 +16,14 @@ int minipsd_vips_init(void)
 {
     /* Registering a type is enough: libvips finds loaders and savers among VipsForeignLoad's and
        VipsForeignSave's subclasses. */
-    (void)vips_foreign_load_psd_file_get_type();
-    (void)vips_foreign_load_psd_buffer_get_type();
-    (void)vips_foreign_load_psd_source_get_type();
-    (void)vips_foreign_save_psd_file_get_type();
-    (void)vips_foreign_save_psd_buffer_get_type();
-    (void)vips_foreign_save_psd_target_get_type();
-    (void)vips_foreign_save_psd_layers_file_get_type();
-    (void)vips_foreign_save_psd_layers_buffer_get_type();
-    (void)vips_foreign_save_psd_layers_target_get_type();
+    (void)minipsd_vips_load_file_get_type();
+    (void)minipsd_vips_load_buffer_get_type();
+    (void)minipsd_vips_load_source_get_type();
+    (void)minipsd_vips_save_file_get_type();
+    (void)minipsd_vips_save_buffer_get_type();
+    (void)minipsd_vips_save_target_get_type();
+    (void)minipsd_vips_save_layers_file_get_type();
+    (void)minipsd_vips_save_layers_buffer_get_type();
+    (void)minipsd_vips_save_layers_target_get_type();
     return 0;
 }

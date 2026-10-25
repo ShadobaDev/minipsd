@@ -35,7 +35,7 @@ int main(int argc, char **argv)
         || !(back = vips_image_new_from_file(argv[1], NULL)))
         vips_error_exit(NULL);
     loader = vips_foreign_find_load(argv[1]);
-    ok     = loader && strcmp(loader, "VipsForeignLoadPsdFile") == 0 && back->Xsize == SIDE && back->Ysize == SIDE
+    ok     = loader && strcmp(loader, "MinipsdVipsLoadFile") == 0 && back->Xsize == SIDE && back->Ysize == SIDE
          && back->Bands == BANDS;
     printf("%s: %dx%d, %d bands, read by %s: %s\n", argv[1], back->Xsize, back->Ysize, back->Bands, loader ? loader : "nothing",
            ok ? "ok" : "FAILED");

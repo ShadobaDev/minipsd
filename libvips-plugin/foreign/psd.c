@@ -11,18 +11,18 @@
 #include <limits.h>
 #include <stdint.h>
 
-const char *vips__foreign_psd_suffs[] = { ".psd", ".psb", NULL };
+const char *minipsd_vips__suffs[] = { ".psd", ".psb", NULL };
 
-const char *const vips__foreign_psd_sections[PSD_SECTIONS] = { NULL, "open", "closed", "end" };
+const char *const minipsd_vips__sections[PSD_SECTIONS] = { NULL, "open", "closed", "end" };
 
-void vips__foreign_psd_class_properties(void *class)
+void minipsd_vips__class_properties(void *class)
 {
     GObjectClass *gobject_class = G_OBJECT_CLASS(class);
     gobject_class->set_property = vips_object_set_property;
     gobject_class->get_property = vips_object_get_property;
 }
 
-void vips__foreign_psd_invert_cmyk(void *pixels, size_t count, unsigned bands, int depth)
+void minipsd_vips__invert_cmyk(void *pixels, size_t count, unsigned bands, int depth)
 {
     size_t   i;
     unsigned c;

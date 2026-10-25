@@ -385,7 +385,7 @@ static void check_document(const minipsd_doc *doc, const minipsd_write_opts *opt
     if (f) fclose(f);
 
     loader = vips_foreign_find_load(path);
-    check(loader && strcmp(loader, "VipsForeignLoadPsdFile") == 0, "found as psdload", e->name);
+    check(loader && strcmp(loader, "MinipsdVipsLoadFile") == 0, "found as psdload", e->name);
     vips_error_clear();
     check_image(vips_image_new_from_file(path, NULL), doc, e, "file", &b);
     check_image(vips_image_new_from_file(path, "access", VIPS_ACCESS_SEQUENTIAL, NULL), doc, e, "file, sequential", &b);
@@ -486,9 +486,9 @@ static int from_pixels(VipsImage *image, unsigned colors, int layered, const cha
     doc.composite       = pixels;
     doc.composite_alpha = (uint8_t)alpha;
     doc.compression     = !option || strcmp(option, "compression") != 0 ? MINIPSD_RLE
-                          : value == VIPS_FOREIGN_PSD_COMPRESSION_ZIP    ? MINIPSD_ZIP
-                          : value == VIPS_FOREIGN_PSD_COMPRESSION_NONE   ? MINIPSD_RAW
-                          : value == VIPS_FOREIGN_PSD_COMPRESSION_ZIP_PREDICTED ? MINIPSD_ZIP_PREDICTED
+                          : value == MINIPSD_VIPS_COMPRESSION_ZIP    ? MINIPSD_ZIP
+                          : value == MINIPSD_VIPS_COMPRESSION_NONE   ? MINIPSD_RAW
+                          : value == MINIPSD_VIPS_COMPRESSION_ZIP_PREDICTED ? MINIPSD_ZIP_PREDICTED
                                                                      : MINIPSD_RLE;
     doc.format          = file_size > PSD_VERSION_AT && file[PSD_VERSION_AT] == MINIPSD_PSB ? MINIPSD_PSB : MINIPSD_PSD;
     opts.deflate        = deflate_rows;
@@ -539,7 +539,7 @@ static void check_saved(VipsImage *image, const char *name, const char *dir, int
         return;
     }
     saver = vips_foreign_find_save(path);
-    check(saver && strcmp(saver, "VipsForeignSavePsdFile") == 0, "found as psdsave", name);
+    check(saver && strcmp(saver, "MinipsdVipsSaveFile") == 0, "found as psdsave", name);
 
     /* The same bytes three ways. */
     file   = read_all(path, &file_size);
@@ -827,7 +827,7 @@ static void check_layers_saved(const uint8_t *rgba, const char *dir)
 
     /* Platemaker's template, its composite given (the template itself: the layer above is empty). */
     snprintf(path, sizeof path, "%s/layers-template.psd", dir);
-    check(vips_psdsave_layers(pair, 2, path, "composite", template_image, NULL) == 0, "saved", path);
+    check(minipsd_vips_psdsave_layers(pair, 2, path, "composite", template_image, NULL) == 0, "saved", path);
     memset(layers, 0, sizeof layers);
     memset(&doc, 0, sizeof doc);
     layers[0].name    = "Template";
@@ -842,7 +842,7 @@ static void check_layers_saved(const uint8_t *rgba, const char *dir)
 
     /* Its composite made by libvips from the layers: the template's own pixels. */
     snprintf(again, sizeof again, "%s/layers-template-composed.psd", dir);
-    check(vips_psdsave_layers(pair, 2, again, NULL) == 0, "saved, composite composed", again);
+    check(minipsd_vips_psdsave_layers(pair, 2, again, NULL) == 0, "saved, composite composed", again);
     given = vips_image_new_from_file(path, NULL);
     made  = vips_image_new_from_file(again, NULL);
     a     = pixels_of(given, &given_bytes);
@@ -908,7 +908,7 @@ static void check_layers_saved(const uint8_t *rgba, const char *dir)
             for (k = 0; k < RECORDS; ++k) all &= (loaded[k] = vips_image_new_from_file(path, "layer", k, NULL)) != NULL;
             composite = vips_image_new_from_file(path, NULL);
             snprintf(again, sizeof again, "%s/layers-resaved.psd", dir);
-            check(all && composite && vips_psdsave_layers(loaded, RECORDS, again, "composite", composite, NULL) == 0,
+            check(all && composite && minipsd_vips_psdsave_layers(loaded, RECORDS, again, "composite", composite, NULL) == 0,
                   "every record loaded and saved", again);
             check(same_files(path, again),
                   "the same bytes back: names, position, opacity, blend mode, clipping, empty, mask, group", again);
@@ -945,7 +945,7 @@ static void check_layers_saved(const uint8_t *rgba, const char *dir)
             vips_image_set_int(group, "psd-layer-hidden", 1);
             records[0] = rgb, records[1] = divider, records[2] = red, records[3] = group;
             snprintf(path, sizeof path, "%s/layers-masked.psd", dir);
-            check(vips_psdsave_layers(records, 4, path, NULL) == 0 && composite_pixel(path, 0, 0, at_corner, PSD_RGB_BANDS)
+            check(minipsd_vips_psdsave_layers(records, 4, path, NULL) == 0 && composite_pixel(path, 0, 0, at_corner, PSD_RGB_BANDS)
                       && composite_pixel(path, INSIDE, INSIDE, in_hole, PSD_RGB_BANDS),
                   "saved, composite composed", path);
             check(near(at_corner[0], rgba[0]) && near(at_corner[1], rgba[1]) && near(at_corner[2], rgba[2]),
@@ -955,7 +955,7 @@ static void check_layers_saved(const uint8_t *rgba, const char *dir)
             vips_image_set_int(group, "psd-layer-hidden", 0);
             vips_image_set_int(group, "psd-layer-opacity", HALF_OPAQUE);
             snprintf(path, sizeof path, "%s/layers-grouped.psd", dir);
-            check(vips_psdsave_layers(records, 4, path, NULL) == 0 && composite_pixel(path, 0, 0, at_corner, PSD_RGB_BANDS)
+            check(minipsd_vips_psdsave_layers(records, 4, path, NULL) == 0 && composite_pixel(path, 0, 0, at_corner, PSD_RGB_BANDS)
                       && composite_pixel(path, INSIDE, INSIDE, in_hole, PSD_RGB_BANDS),
                   "saved, composite composed", path);
             check(near(at_corner[0], UCHAR_MAX * half + rgba[0] * (1.0 - half)) && near(at_corner[1], rgba[1] * (1.0 - half))
@@ -965,7 +965,7 @@ static void check_layers_saved(const uint8_t *rgba, const char *dir)
             vips_image_set_int(rgb, "psd-layer-mask-disabled", 1);
             snprintf(path, sizeof path, "%s/layers-unmasked.psd", dir);
             i = ((size_t)INSIDE * WIDTH + INSIDE) * RGBA;
-            check(vips_psdsave_layers(records, 4, path, NULL) == 0 && composite_pixel(path, INSIDE, INSIDE, in_hole, PSD_RGB_BANDS)
+            check(minipsd_vips_psdsave_layers(records, 4, path, NULL) == 0 && composite_pixel(path, INSIDE, INSIDE, in_hole, PSD_RGB_BANDS)
                       && near(in_hole[0], rgba[i]) && near(in_hole[1], rgba[i + 1]) && near(in_hole[2], rgba[i + 2]),
                   "a disabled mask hides nothing", path);
         }
@@ -992,7 +992,7 @@ static void check_layers_saved(const uint8_t *rgba, const char *dir)
         if (vips_copy(template_image, &moved, "xoffset", AT_X, "yoffset", AT_Y, NULL)) moved = NULL;
         one[0] = moved;
         snprintf(path, sizeof path, "%s/layers-canvas.psd", dir);
-        check(moved && vips_psdsave_layers(one, 1, path, "left", AT_X, "top", AT_Y, NULL) == 0, "saved, canvas placed", path);
+        check(moved && minipsd_vips_psdsave_layers(one, 1, path, "left", AT_X, "top", AT_Y, NULL) == 0, "saved, canvas placed", path);
         file = read_all(path, &size);
         check(file && minipsd_reader_init(&r, file, size, workspace, sizeof workspace, NULL, &info) == MINIPSD_OK
                   && info.width == WIDTH && info.height == HEIGHT && minipsd_reader_next_layer(r, &view) == MINIPSD_MORE
@@ -1000,7 +1000,7 @@ static void check_layers_saved(const uint8_t *rgba, const char *dir)
               "the canvas at (left, top): the layer at its corner", path);
         free(file);
         snprintf(path, sizeof path, "%s/layers-grown.psd", dir);
-        check(moved && vips_psdsave_layers(one, 1, path, NULL) == 0, "saved, canvas from the layers", path);
+        check(moved && minipsd_vips_psdsave_layers(one, 1, path, NULL) == 0, "saved, canvas from the layers", path);
         file = read_all(path, &size);
         check(file && minipsd_reader_init(&r, file, size, workspace, sizeof workspace, NULL, &info) == MINIPSD_OK
                   && info.width == WIDTH + AT_X && info.height == HEIGHT + AT_Y,
@@ -1013,13 +1013,13 @@ static void check_layers_saved(const uint8_t *rgba, const char *dir)
     {
         VipsImage *deep = NULL, *mixed[2];
         snprintf(path, sizeof path, "%s/layers-refused.psd", dir);
-        check(vips_psdsave_layers(pair, 0, path, NULL) != 0, "no layers refused", path);
+        check(minipsd_vips_psdsave_layers(pair, 0, path, NULL) != 0, "no layers refused", path);
         if (vips_cast(template_image, &deep, VIPS_FORMAT_USHORT, NULL)) deep = NULL;
         mixed[0] = template_image;
         mixed[1] = deep;
-        check(deep && vips_psdsave_layers(mixed, 2, path, NULL) != 0, "a layer of another depth refused", path);
+        check(deep && minipsd_vips_psdsave_layers(mixed, 2, path, NULL) != 0, "a layer of another depth refused", path);
         vips_image_set_string(template_image, "psd-layer-blend-mode", "mul");
-        check(vips_psdsave_layers(pair, 2, path, NULL) != 0, "a blend mode of three characters refused", path);
+        check(minipsd_vips_psdsave_layers(pair, 2, path, NULL) != 0, "a blend mode of three characters refused", path);
         vips_error_clear();
         VIPS_UNREF(deep);
     }
@@ -1198,11 +1198,11 @@ int main(int argc, char **argv)
         check_saved(make_image(rgbf, 3, VIPS_FORMAT_FLOAT, VIPS_INTERPRETATION_scRGB), "save-float.psd", argv[1], 1, NULL, 0);
         check_saved(make_image(rgb8, 3, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-layered.psd", argv[1], 1, "layered", TRUE);
         check_saved(make_image(rgba, RGBA, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-zip.psd", argv[1], 0, "compression",
-                    VIPS_FOREIGN_PSD_COMPRESSION_ZIP);
+                    MINIPSD_VIPS_COMPRESSION_ZIP);
         check_saved(make_image(rgba, RGBA, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-raw.psd", argv[1], 0, "compression",
-                    VIPS_FOREIGN_PSD_COMPRESSION_NONE);
+                    MINIPSD_VIPS_COMPRESSION_NONE);
         check_saved(make_image(grey16, 2, VIPS_FORMAT_USHORT, VIPS_INTERPRETATION_GREY16), "save-predicted.psd", argv[1], 0,
-                    "compression", VIPS_FOREIGN_PSD_COMPRESSION_ZIP_PREDICTED);
+                    "compression", MINIPSD_VIPS_COMPRESSION_ZIP_PREDICTED);
         snprintf(path, sizeof path, "%s/save-predicted.psd", argv[1]);
         check(first_layer_compression(path) == STORED_ZIP_PREDICTED, "ZIP with prediction by option", path);
         {   /* 32-bit noise, rows a PSD cannot count: a PSB, unasked */
@@ -1285,7 +1285,7 @@ int main(int argc, char **argv)
 
     /* Not a PSD: psdload does not claim it. */
     loader = vips_foreign_find_load_buffer(junk, sizeof junk);
-    check(!loader || strcmp(loader, "VipsForeignLoadPsdBuffer") != 0, "junk not claimed", "junk");
+    check(!loader || strcmp(loader, "MinipsdVipsLoadBuffer") != 0, "junk not claimed", "junk");
     vips_error_clear();
 
     if (argc == 3) check_list(argv[2]);

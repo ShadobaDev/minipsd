@@ -531,8 +531,9 @@ programs that render a composite with libvips and write the layers with minipsd.
 the loader and saver, built first as a plugin in this repository (`libvips-plugin/`): libvips
 foreign classes registered by the program that links them. libvips' prebuilt Windows builds load
 no modules (8.18.7: `enable modules: false`), so a loadable module waits for a Linux user who wants
-one. Platemaker uses it, which is the proof; whether a pull request to libvips follows is decided
-once Platemaker does.
+one. Platemaker uses it, which is the proof. It stays a plugin: libvips' CONTRIBUTING.md accepts no
+contribution made with generative AI, and minipsd is made with it, so no pull request to libvips
+follows.
 
 - [x] **S7.1** `examples/vips_composite.c`: a document's composite rendered with libvips
       (`vips_composite`, blend keys mapped as in the spec's
@@ -560,7 +561,7 @@ once Platemaker does.
       way round, bitmap `B_W`, indexed through its palette: libvips has no indexed image), the
       rest as stored, what libvips cannot hold `MULTIBAND`, nothing converted; minipsd compiled
       in privately; zlib libvips' own; libvips from `cmake/minipsd_libvips.cmake` or the program.
-      Pages as layers, and a meson wrap, wait for a pull request to libvips.
+      Pages as layers, and a meson wrap, wait for a user who asks.
 - [x] **S7.3** Loader: a PSD or PSB as a libvips image, the composite or a layer, decoded in
       strips; ZIP through zlib.
       *Done when:* psd-tools' files that minipsd decodes load with the samples psd-tools gives;
