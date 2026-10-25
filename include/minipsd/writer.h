@@ -119,6 +119,8 @@ MINIPSDDEF int minipsd_matte_row(int color_mode, int depth, void *pixels, uint32
     return MINIPSD_OK;
 }
 
+#define MPSD__MAX_COUNT_PSD 0xFFFFu   /* a PSD's RLE row count: two bytes */
+
 /* The compression marker a channel the writer encodes starts with. */
 static unsigned mpsd__marker(int compression) { return compression == MINIPSD_RAW ? MPSD__COMP_RAW : MPSD__COMP_RLE; }
 
@@ -468,7 +470,8 @@ static void mpsd__layer_extra(mpsd__sink *s, const minipsd_layer *l, unsigned fr
 
 /* What layer channel k's data takes in the out format: its compression, then (RLE) the row byte
    counts, two bytes each or four in a PSB, then the rows; or the stored channel, its count table
-   re-written when the formats differ. */
+   re-written when the formats differ.  0 (never a size: the marker alone is 2) when a row's count
+   does not fit a PSD's two bytes, as 32-bit rows wider than about 16 380 px may not. */
 static uint64_t mpsd__layer_channel_size(const minipsd_doc *d, const minipsd_layer *l, int k, unsigned out)
 {
     const mpsd__source src = mpsd__channel_source(d, l, k);
@@ -480,9 +483,11 @@ static uint64_t mpsd__layer_channel_size(const minipsd_doc *d, const minipsd_lay
     if (!src.samples) return size;
     MPSD__ENCODED(l);
     if (compression == MINIPSD_RAW) return size + ((uint64_t)src.width * src.height << mpsd__doc_shift(d));
-    for (y = 0; y < src.height; ++y)
-        size += mpsd__count_size(out)
-              + mpsd__row_size(d, compression, src.samples + (size_t)y * src.width * src.step, src.step, src.width);
+    for (y = 0; y < src.height; ++y) {
+        const uint64_t n = mpsd__row_size(d, compression, src.samples + (size_t)y * src.width * src.step, src.step, src.width);
+        if (!out && n > MPSD__MAX_COUNT_PSD) return 0;
+        size += mpsd__count_size(out) + n;
+    }
     return size;
 }
 
@@ -866,7 +871,7 @@ static int mpsd__table_ok(const mpsd__source *src, unsigned from, unsigned out)
     if (!mpsd__stored_ok(*src->stored, 0, src->height, MPSD__CH_8BIT, from))
         return MINIPSD_ERR_ARG;                                   /* a real mask's table: mpsd__mask_ok knew no rows */
     for (y = 0; !out && y < src->height; ++y)                     /* a PSD's counts: two bytes */
-        if (mpsd__count(src->stored->data + MPSD__MARKER_SIZE, y, 1) > 0xFFFFu) return MINIPSD_ERR_SIZE;
+        if (mpsd__count(src->stored->data + MPSD__MARKER_SIZE, y, 1) > MPSD__MAX_COUNT_PSD) return MINIPSD_ERR_SIZE;
     return MINIPSD_OK;
 }
 
@@ -974,7 +979,7 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *d, const minipsd_write_opts 
     if (mpsd__zip_plane(d) > ((size_t)-1 >> 2)) return MINIPSD_ERR_SIZE;   /* the workspace holds it twice */
     rc = mpsd__composite_ok(d, out);
     if (rc != MINIPSD_OK) return rc;
-    for (i = 0; i < d->layer_count; ++i) {    /* a side within the format's: so is any RLE row count */
+    for (i = 0; i < d->layer_count; ++i) {    /* a side within the format's; RLE row counts are checked as measured */
         const minipsd_layer *l = &d->layers[i];
         const int64_t w = (int64_t)l->right - l->left, h = (int64_t)l->bottom - l->top;
         int k;
@@ -1193,6 +1198,7 @@ static int mpsd__measure_layers(minipsd_writer *w)
                 sizes[i * MPSD__CHANNELS + (size_t)k] = MPSD__MARKER_SIZE + (uint64_t)w->zip_size;
             } else {
                 sizes[i * MPSD__CHANNELS + (size_t)k] = mpsd__layer_channel_size(d, &d->layers[i], k, psb);
+                if (!sizes[i * MPSD__CHANNELS + (size_t)k]) return MINIPSD_ERR_SIZE;   /* a row too long for its count */
             }
             w->content += sizes[i * MPSD__CHANNELS + (size_t)k];
         }
@@ -1252,6 +1258,7 @@ MINIPSDDEF int minipsd_writer_init(minipsd_writer **out, const minipsd_doc *d, c
             const uint8_t *row = mpsd__composite_row(&comp, y);
             for (k = 0; k < (int)mpsd__composite_channels(d); ++k) {
                 const uint64_t n = mpsd__row_size(d, MINIPSD_RLE, row + ((size_t)k << wide), (size_t)mpsd__composite_step(d) << wide, d->width);
+                if (!w->out && n > MPSD__MAX_COUNT_PSD) return MINIPSD_ERR_SIZE;   /* a row too long for its count */
                 w->composite_sizes[(size_t)k * d->height + y] = (uint32_t)n;
                 total += mpsd__count_size(w->out) + n;
             }
@@ -1462,23 +1469,43 @@ MINIPSDDEF int minipsd_writer_fill(minipsd_writer *w, void *buf, size_t cap, siz
 
 /* --- the push writer: the pull writer driven to the end on an allocated workspace --- */
 
-#define MPSD__CHUNK 4096   /* bytes per callback; on the stack */
+#define MPSD__CHUNK 4096   /* bytes per callback, at least; more when the widest row needs it */
+
+/* The widest row the writer encodes: the canvas's, a layer's or a mask's.  fill encodes a row cut
+   by the buffer's end again from its start, so a chunk that holds the widest row cuts each row at
+   most once; a smaller one cuts a long row many times. */
+static uint32_t mpsd__widest(const minipsd_doc *d)
+{
+    uint32_t widest = d->width;
+    size_t   i;
+    for (i = 0; i < d->layer_count; ++i) {
+        const minipsd_layer *l = &d->layers[i];
+        const uint32_t       w = (uint32_t)((int64_t)l->right - l->left);   /* checked: within a side */
+        if (w > widest) widest = w;
+        if (l->mask && (uint32_t)((int64_t)l->mask->right - l->mask->left) > widest)
+            widest = (uint32_t)((int64_t)l->mask->right - l->mask->left);
+    }
+    return widest;
+}
 
 MINIPSDDEF int minipsd_write(const minipsd_doc *d, const minipsd_write_opts *opts, minipsd_write_fn fn, void *user)
 {
     minipsd_writer *w;
     void           *workspace;
-    uint8_t         chunk[MPSD__CHUNK];
-    size_t          size = 0, n;
+    uint8_t        *chunk;
+    size_t          size = 0, cap, n;
     int             rc = d ? minipsd_writer_workspace_size(d, opts, &size) : MINIPSD_ERR_ARG;   /* d spelled out for static analysers */
     if (rc != MINIPSD_OK) return rc;
     if (!fn) return MINIPSD_ERR_ARG;
-    workspace = MINIPSD_MALLOC(size);
+    cap = (size_t)MINIPSD_ROW_BOUND(mpsd__widest(d), mpsd__doc_depth(d));   /* the sides checked: it fits */
+    if (cap < MPSD__CHUNK) cap = MPSD__CHUNK;
+    workspace = MINIPSD_MALLOC(size + cap);                   /* the chunk after the workspace */
     if (!workspace) return MINIPSD_ERR_ALLOC;
+    chunk = (uint8_t *)workspace + size;
     rc = minipsd_writer_init(&w, d, opts, workspace, size);
     if (rc == MINIPSD_OK) {
         do {   /* never n == 0: the call that produces the last byte already returns MINIPSD_OK */
-            rc = minipsd_writer_fill(w, chunk, sizeof chunk, &n);
+            rc = minipsd_writer_fill(w, chunk, cap, &n);
             if (!fn(user, chunk, n)) rc = MINIPSD_ERR_WRITE;
         } while (rc == MINIPSD_MORE);
     }

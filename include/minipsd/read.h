@@ -218,6 +218,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
             kept.stored.data = NULL;
             kept.stored.size = 0;
             if (copy) kept.stored = mpsd__copy(a, v.mask.stored);
+            if (mw > side || mh > side) return MINIPSD_ERR_UNSUPPORTED;   /* the writer's limit, as a layer's */
             if (!copy && mw && mh) {
                 mask_pixels = (uint8_t *)mpsd__take(a, mw * mh << wide, (int)wide);   /* NULL while measuring */
                 decoded    += mw * mh << wide;

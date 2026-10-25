@@ -1164,6 +1164,32 @@ TEST(MinipsdWriterTest, RefusesBeforeWritingAnything)
     EXPECT_EQ(minipsd_writer_init(&w, &d, nullptr, workspace.data(), size), MINIPSD_ERR_SIZE) << "init sizes it too";
     EXPECT_EQ(w, nullptr) << "no writer for a refused document";
 
+    // A PSD counts an RLE row's bytes in 16 bits: a 32-bit row of noise wider than about 16 380 px
+    // does not fit, the layer's or the composite's.  A PSB counts in 32.
+    {
+        constexpr std::uint32_t wide = 16400, samples = wide * 4;
+        std::vector<float> noise(samples), zeros(samples);   // zeros: a composite that packs, every byte 0
+        std::uint32_t seed = 1;
+        for (float &f : noise) f = float((seed = seed * 1664525u + 1013904223u) >> 8) / float(1u << 24);
+        minipsd_layer l{"N", reinterpret_cast<const std::uint8_t *>(noise.data()), 255, 0};
+        l.right = wide; l.bottom = 1;
+        minipsd_doc deep = docOf(wide, 1, &l, 1);
+        deep.depth     = 32;
+        deep.composite       = reinterpret_cast<const std::uint8_t *>(zeros.data());   // at 32 bits supplied, never composed
+        deep.composite_alpha = 0;   // with it, matted 1.0f: 3F 80 00 00 again and again, which PackBits cannot pack
+        EXPECT_EQ(minipsd_write(&deep, nullptr, collect, &out), MINIPSD_ERR_SIZE) << "the layer's rows";
+        minipsd_layer raw = l;
+        raw.compression = MINIPSD_RAW;
+        deep.layers    = &raw;
+        deep.composite = l.pixels;
+        EXPECT_EQ(minipsd_write(&deep, nullptr, collect, &out), MINIPSD_ERR_SIZE) << "the composite's rows";
+        minipsd_write_opts psb{};
+        psb.format = MINIPSD_PSB;
+        Bytes big;
+        deep.layers = &l;
+        EXPECT_EQ(minipsd_write(&deep, &psb, collect, &big), MINIPSD_OK) << "a PSB holds them";
+    }
+
     EXPECT_TRUE(out.empty()) << "nothing is written for a refused document";
 }
 

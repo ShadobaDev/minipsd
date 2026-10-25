@@ -2423,11 +2423,19 @@ TEST(MinipsdReadTest, ItRefusesWhatTheReaderRefusesAndWhatItCannotHold)
     s.count = 1;
     readDoc(build(s).bytes, &lost, MINIPSD_ERR_UNSUPPORTED);
 
-    // A layer the writer could not take back: a side above MINIPSD_MAX_SIDE, wide or tall.
-    for (const bool wide : {true, false}) {
+    // A layer or a mask the writer could not take back: a side above MINIPSD_MAX_SIDE, wide or tall.
+    for (const bool wide : {true, false})
+    for (const bool masked : {false, true}) {
+        SCOPED_TRACE(testing::Message() << "wide " << wide << ", masked " << masked);
         Spec big;
         Rec r = simpleRec();
-        (wide ? r.right : r.bottom) = MINIPSD_MAX_SIDE + 1;
+        if (masked) {
+            const std::uint32_t right = wide ? MINIPSD_MAX_SIDE + 1 : 1, bottom = wide ? 1 : MINIPSD_MAX_SIDE + 1;
+            r.mask = Out().u32(0).u32(0).u32(bottom).u32(right).u8(0).u8(0).zeros(2).b;
+            r.channels.push_back(chan(-2, 6, 0));
+        } else {
+            (wide ? r.right : r.bottom) = MINIPSD_MAX_SIDE + 1;
+        }
         big.layers = {r};
         big.count = -1;
         big.image = rawImage(4, 2, 2, 0);
@@ -2934,6 +2942,17 @@ TEST(MinipsdReaderTest, MaskAndKindAtTheEdges)
     Bytes plane(4);
     const minipsd_plane p{plane.data(), 1, 2};
     EXPECT_EQ(minipsd_decode_mask(b.o.r, &b.v, &p, nullptr), MINIPSD_ERR_FORMAT);
+
+    // A mask's rectangle is the file's: a side above either format's is refused before its plane
+    // is sized.  2^31 x 2^31 at 32 bits is a plane of 2^64 bytes, which wrapped to 0 and passed.
+    constexpr std::int32_t half = std::int32_t(1) << 30;
+    Rec wrapping = simpleRec();
+    wrapping.mask = maskData(-half, -half, half, half);
+    wrapping.channels.push_back(chan(-2, 6, 0));
+    OneLayer c(wrapping, 32);
+    minipsd_decode_opts deep{};
+    deep.depth = 32;
+    EXPECT_EQ(minipsd_decode_mask(c.o.r, &c.v, &p, &deep), MINIPSD_ERR_UNSUPPORTED);
 
     auto lsct = [](std::uint32_t type) { return block("lsct", Out().u32(type).b); };
     Rec unknown = simpleRec();

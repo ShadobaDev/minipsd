@@ -732,6 +732,8 @@ static int mpsd__chan_open(const minipsd_reader *r, minipsd_bytes c, uint32_t wi
     const uint64_t plane  = mpsd__row_bytes(width, r->depth) * height;     /* the raw rows'     */
     uint64_t       left, sum = 0;
     uint32_t       y;
+    if (width > MINIPSD_MAX_SIDE_PSB || height > MINIPSD_MAX_SIDE_PSB)   /* above either format's: plane could wrap */
+        return MINIPSD_ERR_UNSUPPORTED;
     left = c.size - MPSD__MARKER_SIZE;                         /* next_layer saw the marker */
     mpsd__chan_init(r, ch);
     switch (mpsd__get16(c.data)) {
