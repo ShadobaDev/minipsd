@@ -116,11 +116,12 @@ examples/                      the I/O implementations; built and run in CI, nev
   read_file.c                  whole file into memory, described, every layer and the composite decoded
   resave.c                     minipsd_read with stored, one layer changed, written back: the round trip
 libvips-plugin/                minipsd as libvips' loader and saver (psdload, psdsave), registered by the program
-  minipsd_vips.h               the one public call, minipsd_vips_init
+  minipsd_vips.h               the public header: minipsd_vips_init, VipsForeignPsdCompression
   minipsd_vips.c               minipsd_vips_init: registers both sides with libvips
-  minipsd_vips_psdload.c/.h    psdload, _buffer, _source; minipsd's reader compiled in, private
-  minipsd_vips_psdsave.c/.h    psdsave, _buffer, _target; minipsd's writer compiled in, private
-  minipsd_vips_util.c/.h       internal: constants and helpers both sides share
+  foreign/                     as libvips/foreign/ would hold it, named as libvips names its own
+    psdload.c                  psdload, _buffer, _source; minipsd's reader compiled in, private
+    psdsave.c                  psdsave, _buffer, _target; minipsd's writer compiled in, private
+    psd.c, psd.h               internal: constants, helpers and the types both sides share
   test_vips.c                  documents and files loaded and saved through libvips, against minipsd's decode
 cmake/
   minipsd_libvips.cmake        libvips and its zlib for the example and the plugin: fetched on Windows, else pkg-config

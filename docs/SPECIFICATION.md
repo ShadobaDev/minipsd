@@ -779,7 +779,7 @@ libvips' loader and saver, laid out as libvips' own (a base class over a `VipsSo
   to PSD's inverted ink. Kept: the resolution, the ICC profile, EXIF, XMP, IPTC and
   `psd-pixel-aspect-ratio`. Options: `compression` (the layer's channels: `rle`, the default,
   `zip`, `zip-predicted`, or `none`, which writes the composite raw too; otherwise the composite
-  is RLE; `MinipsdVipsCompression` in `minipsd_vips.h`), `psb`, `layer_name` ("Layer 1"),
+  is RLE; `VipsForeignPsdCompression` in `minipsd_vips.h`), `psb`, `layer_name` ("Layer 1"),
   `layered`.
 
   The image is read once, top to bottom, in the bands libvips hands a saver

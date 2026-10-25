@@ -8,8 +8,7 @@
 
 #include "minipsd_vips.h"
 
-#include "minipsd_vips_psdload.h"
-#include "minipsd_vips_psdsave.h"
+#include "foreign/psd.h"
 
 /* --- Registration -------------------------------------------------------------------------- */
 
@@ -17,11 +16,11 @@ int minipsd_vips_init(void)
 {
     /* Registering a type is enough: libvips finds loaders and savers among VipsForeignLoad's and
        VipsForeignSave's subclasses. */
-    (void)minipsd_vips_psdload_file_get_type();
-    (void)minipsd_vips_psdload_buffer_get_type();
-    (void)minipsd_vips_psdload_source_get_type();
-    (void)minipsd_vips_psdsave_file_get_type();
-    (void)minipsd_vips_psdsave_buffer_get_type();
-    (void)minipsd_vips_psdsave_target_get_type();
+    (void)vips_foreign_load_psd_file_get_type();
+    (void)vips_foreign_load_psd_buffer_get_type();
+    (void)vips_foreign_load_psd_source_get_type();
+    (void)vips_foreign_save_psd_file_get_type();
+    (void)vips_foreign_save_psd_buffer_get_type();
+    (void)vips_foreign_save_psd_target_get_type();
     return 0;
 }

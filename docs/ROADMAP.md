@@ -38,7 +38,7 @@ The order of work from 0.1.0 to the design in [CODE-ARCH.md](CODE-ARCH.md). Case
 | [4. Reader](#4-reader) | buffer to structure, for minipsd's own subset | 0.3.0, at S4.10 |
 | [5. Round trip and conveniences](#5-round-trip-and-conveniences) | layer rectangles, full import, cheap re-save, kept unknown content | batched, when decided |
 | [6. Format features](#6-format-features) | blend modes, groups, masks, 16-bit, PSB | batched, when decided |
-| [7. Interoperability](#7-interoperability) | libvips | 0.3.0 (S7.1), 0.4.0 (S7.2 to S7.5, at S4.12) |
+| [7. Interoperability](#7-interoperability) | libvips | 0.3.0 (S7.1), 0.4.0 (S7.2 to S7.6, at S4.12) |
 | [8. Test quality](#8-test-quality) | branch coverage of compound conditions | with any release |
 | [Not scheduled](#not-scheduled) | large cases, only on real demand | — |
 
@@ -197,8 +197,8 @@ Additive. See [Reader](CODE-ARCH.md#reader).
       and CI green on `master`.
 - [ ] **S4.12** Release **0.4.0** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md): breaking, so a
       MINOR (`composite_alpha` for every composite, the compression constants renumbered,
-      `minipsd_read` giving transparency as the file has it). The libvips plugin (S7.2 to S7.5)
-      and its zip; layers without transparency, a layer's own compression, the row functions;
+      `minipsd_read` giving transparency as the file has it). The libvips plugin (S7.2 to S7.6),
+      layered documents written through libvips included, and its zip; layers without transparency, a layer's own compression, the row functions;
       the fixes the pre-release review found (a mask's unbounded rectangle, an RLE count a PSD
       cannot hold, `minipsd_write`'s cut rows). Prepared as 0.3.2, never tagged, then broken.
       Before it: [COMPATIBILITY.md](COMPATIBILITY.md) regenerated with the version, the PR merged
@@ -598,6 +598,15 @@ once Platemaker does.
       PSD cannot hold the file; the plugin released as a zip. psdsave is now as fast as
       ImageMagick's `magicksave` or faster, its files 4 to 6 times smaller, with the right
       pixels where magicksave's are wrong (alpha) or it fails (20000 x 20000).
+- [ ] **S7.6** A layered document saved through libvips: several images, each a layer with its
+      name, position, opacity, visibility and blend mode, and the composite, in one call, so
+      that a program uses minipsd's writer through libvips as it reads through it (`psdload`
+      gives every layer, with `layer`, and its `psd-layer-*` fields). A saver takes one image,
+      so this is an operation over an array of images, as `vips_composite` is. The plan, with
+      its questions: `temp/S7.6-PLAN.md` while it is worked on.
+      *Done when:* Platemaker's template (a "Template" layer and an empty "Layer" above it) is
+      written through it, the bytes those of `minipsd_write` from the same layers; a file's
+      layers loaded with `psdload` and saved with it come back with their pixels and fields.
 
 ## 8. Test quality
 

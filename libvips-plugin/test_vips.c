@@ -380,7 +380,7 @@ static void check_document(const minipsd_doc *doc, const minipsd_write_opts *opt
     if (f) fclose(f);
 
     loader = vips_foreign_find_load(path);
-    check(loader && strcmp(loader, "MinipsdVipsPsdloadFile") == 0, "found as psdload", e->name);
+    check(loader && strcmp(loader, "VipsForeignLoadPsdFile") == 0, "found as psdload", e->name);
     vips_error_clear();
     check_image(vips_image_new_from_file(path, NULL), doc, e, "file", &b);
     check_image(vips_image_new_from_file(path, "access", VIPS_ACCESS_SEQUENTIAL, NULL), doc, e, "file, sequential", &b);
@@ -481,9 +481,9 @@ static int from_pixels(VipsImage *image, unsigned colors, int layered, const cha
     doc.composite       = pixels;
     doc.composite_alpha = (uint8_t)alpha;
     doc.compression     = !option || strcmp(option, "compression") != 0 ? MINIPSD_RLE
-                          : value == MINIPSD_VIPS_COMPRESSION_ZIP    ? MINIPSD_ZIP
-                          : value == MINIPSD_VIPS_COMPRESSION_NONE   ? MINIPSD_RAW
-                          : value == MINIPSD_VIPS_COMPRESSION_ZIP_PREDICTED ? MINIPSD_ZIP_PREDICTED
+                          : value == VIPS_FOREIGN_PSD_COMPRESSION_ZIP    ? MINIPSD_ZIP
+                          : value == VIPS_FOREIGN_PSD_COMPRESSION_NONE   ? MINIPSD_RAW
+                          : value == VIPS_FOREIGN_PSD_COMPRESSION_ZIP_PREDICTED ? MINIPSD_ZIP_PREDICTED
                                                                      : MINIPSD_RLE;
     doc.format          = file_size > PSD_VERSION_AT && file[PSD_VERSION_AT] == MINIPSD_PSB ? MINIPSD_PSB : MINIPSD_PSD;
     opts.deflate        = deflate_rows;
@@ -534,7 +534,7 @@ static void check_saved(VipsImage *image, const char *name, const char *dir, int
         return;
     }
     saver = vips_foreign_find_save(path);
-    check(saver && strcmp(saver, "MinipsdVipsPsdsaveFile") == 0, "found as psdsave", name);
+    check(saver && strcmp(saver, "VipsForeignSavePsdFile") == 0, "found as psdsave", name);
 
     /* The same bytes three ways. */
     file   = read_all(path, &file_size);
@@ -905,11 +905,11 @@ int main(int argc, char **argv)
         check_saved(make_image(rgbf, 3, VIPS_FORMAT_FLOAT, VIPS_INTERPRETATION_scRGB), "save-float.psd", argv[1], 1, NULL, 0);
         check_saved(make_image(rgb8, 3, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-layered.psd", argv[1], 1, "layered", TRUE);
         check_saved(make_image(rgba, RGBA, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-zip.psd", argv[1], 0, "compression",
-                    MINIPSD_VIPS_COMPRESSION_ZIP);
+                    VIPS_FOREIGN_PSD_COMPRESSION_ZIP);
         check_saved(make_image(rgba, RGBA, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-raw.psd", argv[1], 0, "compression",
-                    MINIPSD_VIPS_COMPRESSION_NONE);
+                    VIPS_FOREIGN_PSD_COMPRESSION_NONE);
         check_saved(make_image(grey16, 2, VIPS_FORMAT_USHORT, VIPS_INTERPRETATION_GREY16), "save-predicted.psd", argv[1], 0,
-                    "compression", MINIPSD_VIPS_COMPRESSION_ZIP_PREDICTED);
+                    "compression", VIPS_FOREIGN_PSD_COMPRESSION_ZIP_PREDICTED);
         snprintf(path, sizeof path, "%s/save-predicted.psd", argv[1]);
         check(first_layer_compression(path) == STORED_ZIP_PREDICTED, "ZIP with prediction by option", path);
         {   /* 32-bit noise, rows a PSD cannot count: a PSB, unasked */
@@ -990,7 +990,7 @@ int main(int argc, char **argv)
 
     /* Not a PSD: psdload does not claim it. */
     loader = vips_foreign_find_load_buffer(junk, sizeof junk);
-    check(!loader || strcmp(loader, "MinipsdVipsPsdloadBuffer") != 0, "junk not claimed", "junk");
+    check(!loader || strcmp(loader, "VipsForeignLoadPsdBuffer") != 0, "junk not claimed", "junk");
     vips_error_clear();
 
     if (argc == 3) check_list(argv[2]);

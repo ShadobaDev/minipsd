@@ -3,8 +3,9 @@
  * \brief psdload, psdload_buffer, psdload_source: a PSD or PSB as a libvips image.
  *
  * Laid out as libvips' own loaders are (a base class over a VipsSource; the file and buffer
- * variants make one), so the code can move into libvips/foreign/ (as psdload.c, the minipsd_vips_
- * names back to vips_foreign_).  The file is mapped (vips_source_map) and read in place by
+ * variants make one), named as libvips names its own, in foreign/ as libvips keeps its formats:
+ * the directory moves into libvips/foreign/ as it is (minipsd.h into its own foreign/minipsd/,
+ * as libvips keeps the libraries it carries, libnsgif and qoi).  The file is mapped (vips_source_map) and read in place by
  * minipsd's reader; nothing is copied.
  * Pixels are decoded in bands of rows as libvips asks for them, from its threads at once.
  *
@@ -29,8 +30,7 @@
 #define MINIPSD_IMPLEMENTATION
 #include "minipsd.h"
 
-#include "minipsd_vips_psdload.h"
-#include "minipsd_vips_util.h"
+#include "psd.h"
 
 #include <zlib.h>
 
@@ -48,7 +48,7 @@
 
 /* --- The base class: a PSD read from a source --------------------------------------------- */
 
-typedef struct _MinipsdVipsPsdload {
+typedef struct _VipsForeignLoadPsd {
     VipsForeignLoad    parent_object;
     int                layer;          /* the option: -1 the composite, else a layer, bottom first */
     VipsSource        *source;         /* set by the subclass's build */
@@ -63,51 +63,51 @@ typedef struct _MinipsdVipsPsdload {
     int                transparent;    /* indexed: the transparent index (resource 1047), or -1 */
     size_t             scratch_size;   /* a ZIP layer's channels inflated whole; 0 without ZIP */
     double             xres, yres;     /* pixels per mm */
-} MinipsdVipsPsdload;
+} VipsForeignLoadPsd;
 
-typedef VipsForeignLoadClass MinipsdVipsPsdloadClass;
+typedef VipsForeignLoadClass VipsForeignLoadPsdClass;
 
-G_DEFINE_ABSTRACT_TYPE(MinipsdVipsPsdload, minipsd_vips_psdload, VIPS_TYPE_FOREIGN_LOAD)
+G_DEFINE_ABSTRACT_TYPE(VipsForeignLoadPsd, vips_foreign_load_psd, VIPS_TYPE_FOREIGN_LOAD)
 
 /* Do these bytes start a PSD or a PSB? */
-static int minipsd_vips_psdload_is_a_bytes(const unsigned char *data, size_t size)
+static int vips_foreign_load_psd_is_a_bytes(const unsigned char *data, size_t size)
 {
     return size >= PSD_SNIFF_SIZE && memcmp(data, PSD_SIGNATURE, PSD_SIGNATURE_SIZE) == 0 && data[4] == 0
         && (data[5] == MINIPSD_PSD || data[5] == MINIPSD_PSB);
 }
 
-static gboolean minipsd_vips_psdload_is_a_source(VipsSource *source)
+static gboolean vips_foreign_load_psd_is_a_source(VipsSource *source)
 {
     const unsigned char *data = vips_source_sniff(source, PSD_SNIFF_SIZE);
-    return data && minipsd_vips_psdload_is_a_bytes(data, PSD_SNIFF_SIZE);
+    return data && vips_foreign_load_psd_is_a_bytes(data, PSD_SNIFF_SIZE);
 }
 
-static void minipsd_vips_psdload_dispose(GObject *gobject)
+static void vips_foreign_load_psd_dispose(GObject *gobject)
 {
-    MinipsdVipsPsdload *psd = (MinipsdVipsPsdload *)gobject;
+    VipsForeignLoadPsd *psd = (VipsForeignLoadPsd *)gobject;
     VIPS_UNREF(psd->source);
-    G_OBJECT_CLASS(minipsd_vips_psdload_parent_class)->dispose(gobject);
+    G_OBJECT_CLASS(vips_foreign_load_psd_parent_class)->dispose(gobject);
 }
 
-static VipsForeignFlags minipsd_vips_psdload_get_flags(VipsForeignLoad *load)
+static VipsForeignFlags vips_foreign_load_psd_get_flags(VipsForeignLoad *load)
 {
     (void)load;
     return VIPS_FOREIGN_SEQUENTIAL;   /* bands of rows; libvips keeps the image for random access */
 }
 
-static void minipsd_vips_psdload_error(MinipsdVipsPsdload *psd, const char *message)
+static void vips_foreign_load_psd_error(VipsForeignLoadPsd *psd, const char *message)
 {
     vips_error(VIPS_OBJECT_GET_CLASS(psd)->nickname, "%s", message);
 }
 
 /* The bands' format: a sample of depth bits.  Bitmap's 1-bit samples come as bytes. */
-static VipsBandFormat minipsd_vips_psdload_format(const minipsd_info *info)
+static VipsBandFormat vips_foreign_load_psd_format(const minipsd_info *info)
 {
     return info->depth == 32 ? VIPS_FORMAT_FLOAT : info->depth == 16 ? VIPS_FORMAT_USHORT : VIPS_FORMAT_UCHAR;
 }
 
 /* What the samples are, as libvips names it; MULTIBAND where it has no name for the mode. */
-static VipsInterpretation minipsd_vips_psdload_interpretation(const minipsd_info *info)
+static VipsInterpretation vips_foreign_load_psd_interpretation(const minipsd_info *info)
 {
     switch (info->color_mode) {
     case MINIPSD_MODE_RGB:
@@ -127,11 +127,11 @@ static VipsInterpretation minipsd_vips_psdload_interpretation(const minipsd_info
 }
 
 /* The image's fields: on out, and on the image load() generates. */
-static int minipsd_vips_psdload_fields(MinipsdVipsPsdload *psd, VipsImage *image)
+static int vips_foreign_load_psd_fields(VipsForeignLoadPsd *psd, VipsImage *image)
 {
     vips_image_init_fields(image, (int)psd->width, (int)psd->height, (int)psd->bands,
-                           minipsd_vips_psdload_format(&psd->info), VIPS_CODING_NONE,
-                           minipsd_vips_psdload_interpretation(&psd->info), psd->xres, psd->yres);
+                           vips_foreign_load_psd_format(&psd->info), VIPS_CODING_NONE,
+                           vips_foreign_load_psd_interpretation(&psd->info), psd->xres, psd->yres);
     if (psd->layer >= 0) {
         image->Xoffset = psd->view.left;
         image->Yoffset = psd->view.top;
@@ -140,7 +140,7 @@ static int minipsd_vips_psdload_fields(MinipsdVipsPsdload *psd, VipsImage *image
 }
 
 /* A resource's bytes as a blob of the image, when the file has it. */
-static void minipsd_vips_psdload_set_blob(MinipsdVipsPsdload *psd, uint16_t id, const char *name)
+static void vips_foreign_load_psd_set_blob(VipsForeignLoadPsd *psd, uint16_t id, const char *name)
 {
     minipsd_resource res;
     if (minipsd_reader_find_resource(psd->reader, id, &res) == MINIPSD_OK && res.data.size)
@@ -149,7 +149,7 @@ static void minipsd_vips_psdload_set_blob(MinipsdVipsPsdload *psd, uint16_t id, 
 
 /* Bytes to inflate the layer's ZIP channels whole, each in its own part (scratch_kept); 0 when
    none of the planes is ZIP. */
-static size_t minipsd_vips_psdload_scratch_size(const MinipsdVipsPsdload *psd)
+static size_t vips_foreign_load_psd_scratch_size(const VipsForeignLoadPsd *psd)
 {
     const size_t row = ((size_t)psd->width * psd->info.depth + 7) / 8;
     unsigned     i;
@@ -162,7 +162,7 @@ static size_t minipsd_vips_psdload_scratch_size(const MinipsdVipsPsdload *psd)
 }
 
 /* The layer the option names: its record, its size, its name and look as metadata. */
-static int minipsd_vips_psdload_find_layer(MinipsdVipsPsdload *psd)
+static int vips_foreign_load_psd_find_layer(VipsForeignLoadPsd *psd)
 {
     VipsImage *out = ((VipsForeignLoad *)psd)->out;
     char      *name;
@@ -170,11 +170,11 @@ static int minipsd_vips_psdload_find_layer(MinipsdVipsPsdload *psd)
     int        rc, i;
     for (i = 0; i <= psd->layer; ++i)
         if ((rc = minipsd_reader_next_layer(psd->reader, &psd->view)) != MINIPSD_MORE) {
-            minipsd_vips_psdload_error(psd, rc == MINIPSD_OK ? "no such layer" : minipsd_error_string(rc));
+            vips_foreign_load_psd_error(psd, rc == MINIPSD_OK ? "no such layer" : minipsd_error_string(rc));
             return -1;
         }
     if (psd->view.right <= psd->view.left || psd->view.bottom <= psd->view.top) {
-        minipsd_vips_psdload_error(psd, "the layer is empty");
+        vips_foreign_load_psd_error(psd, "the layer is empty");
         return -1;
     }
     psd->width  = (uint32_t)(psd->view.right - psd->view.left);
@@ -194,9 +194,9 @@ static int minipsd_vips_psdload_find_layer(MinipsdVipsPsdload *psd)
     return 0;
 }
 
-static int minipsd_vips_psdload_header(VipsForeignLoad *load)
+static int vips_foreign_load_psd_header(VipsForeignLoad *load)
 {
-    MinipsdVipsPsdload     *psd = (MinipsdVipsPsdload *)load;
+    VipsForeignLoadPsd     *psd = (VipsForeignLoadPsd *)load;
     minipsd_resource        res;
     minipsd_resolution_info resolution;
     minipsd_version_info    version;
@@ -214,7 +214,7 @@ static int minipsd_vips_psdload_header(VipsForeignLoad *load)
         return -1;
     rc = minipsd_reader_init(&psd->reader, data, size, workspace, workspace_size, NULL, &psd->info);
     if (rc != MINIPSD_OK) {
-        minipsd_vips_psdload_error(psd, minipsd_error_string(rc));
+        vips_foreign_load_psd_error(psd, minipsd_error_string(rc));
         return -1;
     }
 
@@ -222,8 +222,8 @@ static int minipsd_vips_psdload_header(VipsForeignLoad *load)
     psd->height = psd->info.height;
     /* Channels past MINIPSD_PLANES (a multichannel file's sixth on) are not decoded. */
     psd->planes = VIPS_MIN(psd->info.color_channels + (psd->info.composite_has_alpha ? 1u : 0u), MINIPSD_PLANES);
-    if (psd->layer >= 0 && minipsd_vips_psdload_find_layer(psd)) return -1;
-    psd->scratch_size = psd->layer >= 0 ? minipsd_vips_psdload_scratch_size(psd) : 0;
+    if (psd->layer >= 0 && vips_foreign_load_psd_find_layer(psd)) return -1;
+    psd->scratch_size = psd->layer >= 0 ? vips_foreign_load_psd_scratch_size(psd) : 0;
 
     /* Indexed: the palette's RGB, and transparency where resource 1047 names an index. */
     psd->bands       = psd->planes;
@@ -231,7 +231,7 @@ static int minipsd_vips_psdload_header(VipsForeignLoad *load)
     psd->indexed     = psd->info.color_mode == MINIPSD_MODE_INDEXED;
     if (psd->indexed) {
         if (psd->info.color_mode_data.size < PSD_RGB * PSD_PALETTE_ENTRIES || !psd->info.color_mode_data.data) {
-            minipsd_vips_psdload_error(psd, "an indexed file without its palette");
+            vips_foreign_load_psd_error(psd, "an indexed file without its palette");
             return -1;
         }
         if (minipsd_reader_find_resource(psd->reader, MINIPSD_RES_TRANSPARENCY_INDEX, &res) == MINIPSD_OK
@@ -250,15 +250,15 @@ static int minipsd_vips_psdload_header(VipsForeignLoad *load)
     }
     psd->xres = xres > 0.0 ? xres / MM_PER_INCH : 1.0;
     psd->yres = yres > 0.0 ? yres / MM_PER_INCH : 1.0;
-    if (minipsd_vips_psdload_fields(psd, load->out)) return -1;
+    if (vips_foreign_load_psd_fields(psd, load->out)) return -1;
     if (xres > 0.0) vips_image_set_string(load->out, VIPS_META_RESOLUTION_UNIT, unit);
 
     vips_image_set_int(load->out, VIPS_META_BITS_PER_SAMPLE, psd->info.depth);
     if (psd->info.icc.size)
         vips_image_set_blob_copy(load->out, VIPS_META_ICC_NAME, psd->info.icc.data, psd->info.icc.size);
-    minipsd_vips_psdload_set_blob(psd, MINIPSD_RES_EXIF_DATA_1, VIPS_META_EXIF_NAME);
-    minipsd_vips_psdload_set_blob(psd, MINIPSD_RES_XMP_METADATA, VIPS_META_XMP_NAME);
-    minipsd_vips_psdload_set_blob(psd, MINIPSD_RES_IPTC_NAA, VIPS_META_IPTC_NAME);
+    vips_foreign_load_psd_set_blob(psd, MINIPSD_RES_EXIF_DATA_1, VIPS_META_EXIF_NAME);
+    vips_foreign_load_psd_set_blob(psd, MINIPSD_RES_XMP_METADATA, VIPS_META_XMP_NAME);
+    vips_foreign_load_psd_set_blob(psd, MINIPSD_RES_IPTC_NAA, VIPS_META_IPTC_NAME);
     if (psd->info.color_mode_data.size)
         vips_image_set_blob_copy(load->out, "psd-color-mode-data", psd->info.color_mode_data.data,
                                  psd->info.color_mode_data.size);
@@ -273,7 +273,7 @@ static int minipsd_vips_psdload_header(VipsForeignLoad *load)
 }
 
 /* zlib's uncompress, as minipsd_inflate_fn: the stream must fill dst exactly. */
-static int minipsd_vips_psdload_inflate(void *user, const uint8_t *src, size_t src_size, uint8_t *dst, size_t dst_size)
+static int vips_foreign_load_psd_inflate(void *user, const uint8_t *src, size_t src_size, uint8_t *dst, size_t dst_size)
 {
     uLongf n = (uLongf)dst_size;
     (void)user;
@@ -282,15 +282,15 @@ static int minipsd_vips_psdload_inflate(void *user, const uint8_t *src, size_t s
 }
 
 /* A thread's sequence: the scratch a ZIP layer's channels stay inflated in, between its bands. */
-typedef struct minipsd_vips_psdload_sequence {
+typedef struct vips_foreign_load_psd_sequence {
     uint8_t *scratch;
     int      kept;
-} minipsd_vips_psdload_sequence;
+} vips_foreign_load_psd_sequence;
 
-static void *minipsd_vips_psdload_start(VipsImage *out, void *a, void *b)
+static void *vips_foreign_load_psd_start(VipsImage *out, void *a, void *b)
 {
-    MinipsdVipsPsdload            *psd = (MinipsdVipsPsdload *)a;
-    minipsd_vips_psdload_sequence *seq = g_new0(minipsd_vips_psdload_sequence, 1);
+    VipsForeignLoadPsd            *psd = (VipsForeignLoadPsd *)a;
+    vips_foreign_load_psd_sequence *seq = g_new0(vips_foreign_load_psd_sequence, 1);
     (void)out, (void)b;
     /* ponytail: every thread inflates a ZIP layer whole into its own scratch; one shared scratch
        under a lock would bound memory at one copy, if layers that large turn up. */
@@ -301,17 +301,17 @@ static void *minipsd_vips_psdload_start(VipsImage *out, void *a, void *b)
     return seq;
 }
 
-static int minipsd_vips_psdload_stop(void *seq, void *a, void *b)
+static int vips_foreign_load_psd_stop(void *seq, void *a, void *b)
 {
     (void)a, (void)b;
-    g_free(((minipsd_vips_psdload_sequence *)seq)->scratch);
+    g_free(((vips_foreign_load_psd_sequence *)seq)->scratch);
     g_free(seq);
     return 0;
 }
 
 /* Indexed, in place: each pixel's index (in its first band) becomes the palette's RGB, and alpha
    0 at the transparent index. */
-static void minipsd_vips_psdload_expand_palette(const MinipsdVipsPsdload *psd, VipsPel *row, int width)
+static void vips_foreign_load_psd_expand_palette(const VipsForeignLoadPsd *psd, VipsPel *row, int width)
 {
     const uint8_t *palette = psd->info.color_mode_data.data;
     int            x;
@@ -326,10 +326,10 @@ static void minipsd_vips_psdload_expand_palette(const MinipsdVipsPsdload *psd, V
 
 /* One band of rows, decoded straight into the region.  vips_sequential asks for whole rows; calls
    run at once from libvips' threads on the one reader, which minipsd allows on a whole file. */
-static int minipsd_vips_psdload_generate(VipsRegion *region, void *seq, void *a, void *b, gboolean *stop)
+static int vips_foreign_load_psd_generate(VipsRegion *region, void *seq, void *a, void *b, gboolean *stop)
 {
-    MinipsdVipsPsdload            *psd      = (MinipsdVipsPsdload *)a;
-    minipsd_vips_psdload_sequence *sequence = (minipsd_vips_psdload_sequence *)seq;
+    VipsForeignLoadPsd            *psd      = (VipsForeignLoadPsd *)a;
+    vips_foreign_load_psd_sequence *sequence = (vips_foreign_load_psd_sequence *)seq;
     const VipsRect                *rect     = &region->valid;
     minipsd_decode_opts            opts;
     minipsd_target                 target;
@@ -339,7 +339,7 @@ static int minipsd_vips_psdload_generate(VipsRegion *region, void *seq, void *a,
     (void)b, (void)stop;
 
     if (rect->left != 0 || rect->width != region->im->Xsize) {
-        minipsd_vips_psdload_error(psd, "only whole rows are decoded");
+        vips_foreign_load_psd_error(psd, "only whole rows are decoded");
         return -1;
     }
     memset(&opts, 0, sizeof opts);
@@ -351,7 +351,7 @@ static int minipsd_vips_psdload_generate(VipsRegion *region, void *seq, void *a,
     if (psd->layer < 0) {
         rc = minipsd_decode_composite(psd->reader, &target, &opts);
     } else {
-        opts.inflate      = minipsd_vips_psdload_inflate;
+        opts.inflate      = vips_foreign_load_psd_inflate;
         opts.scratch      = sequence->scratch;
         opts.scratch_size = psd->scratch_size;
         opts.scratch_kept = sequence->kept;
@@ -359,16 +359,16 @@ static int minipsd_vips_psdload_generate(VipsRegion *region, void *seq, void *a,
         sequence->kept = rc == MINIPSD_OK && sequence->scratch;
     }
     if (rc != MINIPSD_OK) {
-        minipsd_vips_psdload_error(psd, minipsd_error_string(rc));
+        vips_foreign_load_psd_error(psd, minipsd_error_string(rc));
         return -1;
     }
 
     for (y = 0; y < rect->height; ++y) {
         row = top + (size_t)y * skip;
         if (psd->indexed) {
-            minipsd_vips_psdload_expand_palette(psd, row, rect->width);
+            vips_foreign_load_psd_expand_palette(psd, row, rect->width);
         } else if (psd->info.color_mode == MINIPSD_MODE_CMYK) {
-            minipsd_vips__invert_cmyk(row, (size_t)rect->width, psd->bands, psd->info.depth);
+            vips__foreign_psd_invert_cmyk(row, (size_t)rect->width, psd->bands, psd->info.depth);
         } else if (psd->info.color_mode == MINIPSD_MODE_BITMAP) {
             /* Bitmap decodes to 1 for black, 0 for white; libvips' B_W is 0 black, 255 white. */
             for (x = 0; x < rect->width; ++x) row[x] = row[x] ? 0 : UCHAR_MAX;
@@ -377,188 +377,188 @@ static int minipsd_vips_psdload_generate(VipsRegion *region, void *seq, void *a,
     return 0;
 }
 
-static int minipsd_vips_psdload_load(VipsForeignLoad *load)
+static int vips_foreign_load_psd_load(VipsForeignLoad *load)
 {
-    MinipsdVipsPsdload *psd = (MinipsdVipsPsdload *)load;
+    VipsForeignLoadPsd *psd = (VipsForeignLoadPsd *)load;
     VipsImage         **t   = (VipsImage **)vips_object_local_array(VIPS_OBJECT(load), 2);
     t[0] = vips_image_new();
-    if (minipsd_vips_psdload_fields(psd, t[0])
-        || vips_image_generate(t[0], minipsd_vips_psdload_start, minipsd_vips_psdload_generate,
-                               minipsd_vips_psdload_stop, psd, NULL)
+    if (vips_foreign_load_psd_fields(psd, t[0])
+        || vips_image_generate(t[0], vips_foreign_load_psd_start, vips_foreign_load_psd_generate,
+                               vips_foreign_load_psd_stop, psd, NULL)
         || vips_sequential(t[0], &t[1], NULL) || vips_image_write(t[1], load->real))
         return -1;
     return 0;
 }
 
-static void minipsd_vips_psdload_class_init(MinipsdVipsPsdloadClass *class)
+static void vips_foreign_load_psd_class_init(VipsForeignLoadPsdClass *class)
 {
     GObjectClass         *gobject_class = G_OBJECT_CLASS(class);
     VipsObjectClass      *object_class  = (VipsObjectClass *)class;
     VipsForeignLoadClass *load_class    = (VipsForeignLoadClass *)class;
 
-    gobject_class->dispose = minipsd_vips_psdload_dispose;
-    minipsd_vips__class_properties(class);
+    gobject_class->dispose = vips_foreign_load_psd_dispose;
+    vips__foreign_psd_class_properties(class);
 
     object_class->nickname    = "psdload_base";
     object_class->description = "load PSD and PSB with minipsd";
 
-    load_class->get_flags = minipsd_vips_psdload_get_flags;
-    load_class->header    = minipsd_vips_psdload_header;
-    load_class->load      = minipsd_vips_psdload_load;
+    load_class->get_flags = vips_foreign_load_psd_get_flags;
+    load_class->header    = vips_foreign_load_psd_header;
+    load_class->load      = vips_foreign_load_psd_load;
 
     PSD_ARGS_BEGIN
     VIPS_ARG_INT(class, "layer", 20, "Layer", "Load this layer (bottom first), -1 the composite",
-                 VIPS_ARGUMENT_OPTIONAL_INPUT, G_STRUCT_OFFSET(MinipsdVipsPsdload, layer), PSD_COMPOSITE, INT_MAX,
+                 VIPS_ARGUMENT_OPTIONAL_INPUT, G_STRUCT_OFFSET(VipsForeignLoadPsd, layer), PSD_COMPOSITE, INT_MAX,
                  PSD_COMPOSITE);
     PSD_ARGS_END
 }
 
-static void minipsd_vips_psdload_init(MinipsdVipsPsdload *psd)
+static void vips_foreign_load_psd_init(VipsForeignLoadPsd *psd)
 {
     psd->layer = PSD_COMPOSITE;
 }
 
 /* --- psdload_source ----------------------------------------------------------------------- */
 
-typedef struct _MinipsdVipsPsdloadSource {
-    MinipsdVipsPsdload parent_object;
+typedef struct _VipsForeignLoadPsdSource {
+    VipsForeignLoadPsd parent_object;
     VipsSource        *source;
-} MinipsdVipsPsdloadSource;
+} VipsForeignLoadPsdSource;
 
-typedef MinipsdVipsPsdloadClass MinipsdVipsPsdloadSourceClass;
+typedef VipsForeignLoadPsdClass VipsForeignLoadPsdSourceClass;
 
-G_DEFINE_TYPE(MinipsdVipsPsdloadSource, minipsd_vips_psdload_source, minipsd_vips_psdload_get_type())
+G_DEFINE_TYPE(VipsForeignLoadPsdSource, vips_foreign_load_psd_source, vips_foreign_load_psd_get_type())
 
-static int minipsd_vips_psdload_source_build(VipsObject *object)
+static int vips_foreign_load_psd_source_build(VipsObject *object)
 {
-    MinipsdVipsPsdload       *psd    = (MinipsdVipsPsdload *)object;
-    MinipsdVipsPsdloadSource *source = (MinipsdVipsPsdloadSource *)object;
+    VipsForeignLoadPsd       *psd    = (VipsForeignLoadPsd *)object;
+    VipsForeignLoadPsdSource *source = (VipsForeignLoadPsdSource *)object;
     if (source->source) {
         psd->source = source->source;
         g_object_ref(psd->source);
     }
-    return VIPS_OBJECT_CLASS(minipsd_vips_psdload_source_parent_class)->build(object);
+    return VIPS_OBJECT_CLASS(vips_foreign_load_psd_source_parent_class)->build(object);
 }
 
-static void minipsd_vips_psdload_source_class_init(MinipsdVipsPsdloadSourceClass *class)
+static void vips_foreign_load_psd_source_class_init(VipsForeignLoadPsdSourceClass *class)
 {
     VipsObjectClass      *object_class    = (VipsObjectClass *)class;
     VipsOperationClass   *operation_class = VIPS_OPERATION_CLASS(class);
     VipsForeignLoadClass *load_class      = (VipsForeignLoadClass *)class;
 
-    minipsd_vips__class_properties(class);
+    vips__foreign_psd_class_properties(class);
     object_class->nickname    = "psdload_source";
     object_class->description = "load PSD and PSB from a source with minipsd";
-    object_class->build       = minipsd_vips_psdload_source_build;
+    object_class->build       = vips_foreign_load_psd_source_build;
     operation_class->flags |= VIPS_OPERATION_NOCACHE;
-    load_class->is_a_source = minipsd_vips_psdload_is_a_source;
+    load_class->is_a_source = vips_foreign_load_psd_is_a_source;
 
     PSD_ARGS_BEGIN
     VIPS_ARG_OBJECT(class, "source", 1, "Source", "Source to load from", VIPS_ARGUMENT_REQUIRED_INPUT,
-                    G_STRUCT_OFFSET(MinipsdVipsPsdloadSource, source), VIPS_TYPE_SOURCE);
+                    G_STRUCT_OFFSET(VipsForeignLoadPsdSource, source), VIPS_TYPE_SOURCE);
     PSD_ARGS_END
 }
 
-static void minipsd_vips_psdload_source_init(MinipsdVipsPsdloadSource *source)
+static void vips_foreign_load_psd_source_init(VipsForeignLoadPsdSource *source)
 {
     (void)source;
 }
 
 /* --- psdload (a file) ---------------------------------------------------------------------- */
 
-typedef struct _MinipsdVipsPsdloadFile {
-    MinipsdVipsPsdload parent_object;
+typedef struct _VipsForeignLoadPsdFile {
+    VipsForeignLoadPsd parent_object;
     char              *filename;
-} MinipsdVipsPsdloadFile;
+} VipsForeignLoadPsdFile;
 
-typedef MinipsdVipsPsdloadClass MinipsdVipsPsdloadFileClass;
+typedef VipsForeignLoadPsdClass VipsForeignLoadPsdFileClass;
 
-G_DEFINE_TYPE(MinipsdVipsPsdloadFile, minipsd_vips_psdload_file, minipsd_vips_psdload_get_type())
+G_DEFINE_TYPE(VipsForeignLoadPsdFile, vips_foreign_load_psd_file, vips_foreign_load_psd_get_type())
 
-static gboolean minipsd_vips_psdload_is_a_file(const char *filename)
+static gboolean vips_foreign_load_psd_is_a_file(const char *filename)
 {
     VipsSource *source = vips_source_new_from_file(filename);
     gboolean    is_a;
     if (!source) return FALSE;
-    is_a = minipsd_vips_psdload_is_a_source(source);
+    is_a = vips_foreign_load_psd_is_a_source(source);
     g_object_unref(source);
     return is_a;
 }
 
-static int minipsd_vips_psdload_file_build(VipsObject *object)
+static int vips_foreign_load_psd_file_build(VipsObject *object)
 {
-    MinipsdVipsPsdload     *psd  = (MinipsdVipsPsdload *)object;
-    MinipsdVipsPsdloadFile *file = (MinipsdVipsPsdloadFile *)object;
+    VipsForeignLoadPsd     *psd  = (VipsForeignLoadPsd *)object;
+    VipsForeignLoadPsdFile *file = (VipsForeignLoadPsdFile *)object;
     if (file->filename && !(psd->source = vips_source_new_from_file(file->filename))) return -1;
-    return VIPS_OBJECT_CLASS(minipsd_vips_psdload_file_parent_class)->build(object);
+    return VIPS_OBJECT_CLASS(vips_foreign_load_psd_file_parent_class)->build(object);
 }
 
-static void minipsd_vips_psdload_file_class_init(MinipsdVipsPsdloadFileClass *class)
+static void vips_foreign_load_psd_file_class_init(VipsForeignLoadPsdFileClass *class)
 {
     VipsObjectClass      *object_class  = (VipsObjectClass *)class;
     VipsForeignClass     *foreign_class = (VipsForeignClass *)class;
     VipsForeignLoadClass *load_class    = (VipsForeignLoadClass *)class;
 
-    minipsd_vips__class_properties(class);
+    vips__foreign_psd_class_properties(class);
     object_class->nickname    = "psdload";
     object_class->description = "load PSD and PSB with minipsd";
-    object_class->build       = minipsd_vips_psdload_file_build;
-    foreign_class->suffs      = minipsd_vips__suffs;
-    load_class->is_a          = minipsd_vips_psdload_is_a_file;
+    object_class->build       = vips_foreign_load_psd_file_build;
+    foreign_class->suffs      = vips__foreign_psd_suffs;
+    load_class->is_a          = vips_foreign_load_psd_is_a_file;
 
     PSD_ARGS_BEGIN
     VIPS_ARG_STRING(class, "filename", 1, "Filename", "Filename to load from", VIPS_ARGUMENT_REQUIRED_INPUT,
-                    G_STRUCT_OFFSET(MinipsdVipsPsdloadFile, filename), NULL);
+                    G_STRUCT_OFFSET(VipsForeignLoadPsdFile, filename), NULL);
     PSD_ARGS_END
 }
 
-static void minipsd_vips_psdload_file_init(MinipsdVipsPsdloadFile *file)
+static void vips_foreign_load_psd_file_init(VipsForeignLoadPsdFile *file)
 {
     (void)file;
 }
 
 /* --- psdload_buffer ------------------------------------------------------------------------ */
 
-typedef struct _MinipsdVipsPsdloadBuffer {
-    MinipsdVipsPsdload parent_object;
+typedef struct _VipsForeignLoadPsdBuffer {
+    VipsForeignLoadPsd parent_object;
     VipsBlob          *blob;
-} MinipsdVipsPsdloadBuffer;
+} VipsForeignLoadPsdBuffer;
 
-typedef MinipsdVipsPsdloadClass MinipsdVipsPsdloadBufferClass;
+typedef VipsForeignLoadPsdClass VipsForeignLoadPsdBufferClass;
 
-G_DEFINE_TYPE(MinipsdVipsPsdloadBuffer, minipsd_vips_psdload_buffer, minipsd_vips_psdload_get_type())
+G_DEFINE_TYPE(VipsForeignLoadPsdBuffer, vips_foreign_load_psd_buffer, vips_foreign_load_psd_get_type())
 
-static gboolean minipsd_vips_psdload_is_a_buffer(const void *data, size_t size)
+static gboolean vips_foreign_load_psd_is_a_buffer(const void *data, size_t size)
 {
-    return minipsd_vips_psdload_is_a_bytes((const unsigned char *)data, size);
+    return vips_foreign_load_psd_is_a_bytes((const unsigned char *)data, size);
 }
 
-static int minipsd_vips_psdload_buffer_build(VipsObject *object)
+static int vips_foreign_load_psd_buffer_build(VipsObject *object)
 {
-    MinipsdVipsPsdload       *psd    = (MinipsdVipsPsdload *)object;
-    MinipsdVipsPsdloadBuffer *buffer = (MinipsdVipsPsdloadBuffer *)object;
+    VipsForeignLoadPsd       *psd    = (VipsForeignLoadPsd *)object;
+    VipsForeignLoadPsdBuffer *buffer = (VipsForeignLoadPsdBuffer *)object;
     if (buffer->blob && !(psd->source = vips_source_new_from_blob(buffer->blob))) return -1;
-    return VIPS_OBJECT_CLASS(minipsd_vips_psdload_buffer_parent_class)->build(object);
+    return VIPS_OBJECT_CLASS(vips_foreign_load_psd_buffer_parent_class)->build(object);
 }
 
-static void minipsd_vips_psdload_buffer_class_init(MinipsdVipsPsdloadBufferClass *class)
+static void vips_foreign_load_psd_buffer_class_init(VipsForeignLoadPsdBufferClass *class)
 {
     VipsObjectClass      *object_class = (VipsObjectClass *)class;
     VipsForeignLoadClass *load_class   = (VipsForeignLoadClass *)class;
 
-    minipsd_vips__class_properties(class);
+    vips__foreign_psd_class_properties(class);
     object_class->nickname    = "psdload_buffer";
     object_class->description = "load PSD and PSB from a buffer with minipsd";
-    object_class->build       = minipsd_vips_psdload_buffer_build;
-    load_class->is_a_buffer   = minipsd_vips_psdload_is_a_buffer;
+    object_class->build       = vips_foreign_load_psd_buffer_build;
+    load_class->is_a_buffer   = vips_foreign_load_psd_is_a_buffer;
 
     PSD_ARGS_BEGIN
     VIPS_ARG_BOXED(class, "buffer", 1, "Buffer", "Buffer to load from", VIPS_ARGUMENT_REQUIRED_INPUT,
-                   G_STRUCT_OFFSET(MinipsdVipsPsdloadBuffer, blob), VIPS_TYPE_BLOB);
+                   G_STRUCT_OFFSET(VipsForeignLoadPsdBuffer, blob), VIPS_TYPE_BLOB);
     PSD_ARGS_END
 }
 
-static void minipsd_vips_psdload_buffer_init(MinipsdVipsPsdloadBuffer *buffer)
+static void vips_foreign_load_psd_buffer_init(VipsForeignLoadPsdBuffer *buffer)
 {
     (void)buffer;
 }

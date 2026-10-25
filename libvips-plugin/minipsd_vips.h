@@ -25,13 +25,13 @@ extern "C" {
  * From the command line or an option string, by its nick: `compression=zip`.
  */
 typedef enum {
-    MINIPSD_VIPS_COMPRESSION_RLE  = 0, /*!< PackBits, as Photoshop writes 8-bit layers: the default. */
-    MINIPSD_VIPS_COMPRESSION_ZIP  = 1, /*!< zlib, without prediction.                               */
-    MINIPSD_VIPS_COMPRESSION_NONE = 2, /*!< Raw: the largest file.                                   */
-    MINIPSD_VIPS_COMPRESSION_ZIP_PREDICTED = 3 /*!< zlib of each sample's difference from its left
+    VIPS_FOREIGN_PSD_COMPRESSION_RLE  = 0, /*!< PackBits, as Photoshop writes 8-bit layers: the default. */
+    VIPS_FOREIGN_PSD_COMPRESSION_ZIP  = 1, /*!< zlib, without prediction.                               */
+    VIPS_FOREIGN_PSD_COMPRESSION_NONE = 2, /*!< Raw: the largest file.                                   */
+    VIPS_FOREIGN_PSD_COMPRESSION_ZIP_PREDICTED = 3 /*!< zlib of each sample's difference from its left
                                                     neighbour, as Photoshop writes 16-bit layers:
                                                     the smaller file at 16 and 32 bits.          */
-} MinipsdVipsCompression;
+} VipsForeignPsdCompression;
 
 /**
  * \brief Registers minipsd's operations with libvips.  Safe to call more than once.

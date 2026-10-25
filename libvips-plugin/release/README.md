@@ -9,8 +9,9 @@ manual's "PSD in libvips: the plugin".
 
 | | |
 |---|---|
-| `src/` | the plugin; `minipsd_vips.h` is its API |
-| `include/minipsd.h` | minipsd, one file, compiled into the plugin and private to it |
+| `minipsd_vips.h`, `minipsd_vips.c` | the plugin's API (what a program includes) and its registration |
+| `foreign/` | the loader and the saver, laid out as `libvips/foreign/` |
+| `foreign/minipsd/minipsd.h` | minipsd, one file, compiled into the plugin and private to it |
 | `cmake/minipsd_libvips.cmake` | how libvips is found: Windows fetches libvips' official prebuilt build (pinned), elsewhere pkg-config |
 | `CMakeLists.txt` | builds `minipsd::vips`, a static library |
 | `example.c` | an image saved and read back through the plugin: its test |
@@ -58,8 +59,9 @@ cmake --build build
 ctest --test-dir build        # Windows: add -C Debug (or the configuration built)
 ```
 
-Without CMake, compile `src/*.c` with `include/` on the include path and libvips' and zlib's
-flags (`pkg-config --cflags vips zlib`), and link the objects into your program.
+Without CMake, compile `minipsd_vips.c` and `foreign/*.c` with the zip's root and
+`foreign/minipsd/` on the include path and libvips' and zlib's flags
+(`pkg-config --cflags vips zlib`), and link the objects into your program.
 
 ## Use
 

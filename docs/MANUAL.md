@@ -465,7 +465,7 @@ size (two bytes in a PSD, four in a PSB), then the rows; for ZIP, the zlib strea
 The composite's is one block: one marker, every channel's row sizes, then every channel's rows. A
 PSD's row sizes are 16-bit, so a row longer than 65 535 bytes needs a PSB. The libvips plugin's
 `psdsave` saves this way, one top-to-bottom pass in bands:
-[libvips-plugin/minipsd_vips_psdsave.c](../libvips-plugin/minipsd_vips_psdsave.c).
+[libvips-plugin/foreign/psdsave.c](../libvips-plugin/foreign/psdsave.c).
 
 ## Reading
 

@@ -2,8 +2,10 @@
 # that builds as it is (libvips-plugin/release/README.md).  Its tree:
 #
 #   CMakeLists.txt, README.md, example.c   libvips-plugin/release/
-#   src/                                   libvips-plugin/minipsd_vips*.c and .h (not its test)
-#   include/minipsd.h                      include/ joined by tools/amalgamate.cmake
+#   minipsd_vips.h, minipsd_vips.c         the plugin's own: its API, its registration
+#   foreign/                               libvips-plugin/foreign/: what libvips/foreign/ would hold
+#   foreign/minipsd/minipsd.h              include/ joined by tools/amalgamate.cmake, carried as
+#                                          libvips carries libnsgif and qoi
 #   cmake/minipsd_libvips.cmake            as the repository finds libvips
 #   LICENSE.MIT
 #
@@ -32,12 +34,13 @@ set(_stage "${_out}/${_name}")
 file(REMOVE_RECURSE "${_stage}")
 file(REMOVE "${_out}/${_name}.zip")
 
-file(GLOB _sources "${_root}/libvips-plugin/minipsd_vips*.c" "${_root}/libvips-plugin/minipsd_vips*.h")
-file(COPY ${_sources} DESTINATION "${_stage}/src")
+file(GLOB _foreign "${_root}/libvips-plugin/foreign/*.c" "${_root}/libvips-plugin/foreign/*.h")
+file(COPY ${_foreign} DESTINATION "${_stage}/foreign")
+file(COPY "${_root}/libvips-plugin/minipsd_vips.c" "${_root}/libvips-plugin/minipsd_vips.h" DESTINATION "${_stage}")
 file(COPY "${_root}/libvips-plugin/release/CMakeLists.txt" "${_root}/libvips-plugin/release/README.md"
           "${_root}/libvips-plugin/release/example.c" "${_root}/LICENSE.MIT" DESTINATION "${_stage}")
 file(COPY "${_root}/cmake/minipsd_libvips.cmake" DESTINATION "${_stage}/cmake")
-execute_process(COMMAND "${CMAKE_COMMAND}" "-DOUTPUT=${_stage}/include/minipsd.h" -P "${_root}/tools/amalgamate.cmake"
+execute_process(COMMAND "${CMAKE_COMMAND}" "-DOUTPUT=${_stage}/foreign/minipsd/minipsd.h" -P "${_root}/tools/amalgamate.cmake"
                 RESULT_VARIABLE _rc)
 if(_rc)
     message(FATAL_ERROR "tools/amalgamate.cmake failed")
