@@ -20,6 +20,7 @@
 #include "minipsd_vips.h"
 
 #include <vips/vips.h>
+#define ZLIB_CONST   /* next_in const */
 #include <zlib.h>
 
 #include <limits.h>
@@ -54,6 +55,11 @@
 #define STORED_RAW     0      /* a channel's stored compression markers */
 #define STORED_RLE     1
 #define STORED_ZIP     2
+#define STORED_ZIP_PREDICTED 3
+#define WIDE_W         16400  /* 32-bit noise rows longer than a PSD's two-byte counts hold */
+#define WIDE_H         2
+#define PSD_RGB_BANDS  3
+#define PSD_VERSION_AT 5      /* the header's version, 1 PSD or 2 PSB: its low byte */
 
 /* The ZIP document's two layers: one reaching past the canvas's left edge, one inside. */
 #define ZIP_W          200
@@ -99,6 +105,29 @@ static int deflate_zlib(void *user, const uint8_t *src, size_t src_size, uint8_t
     rc        = compress2(dst, &n, src, (uLong)src_size, ZIP_LEVEL);
     *dst_size = n;
     return rc != Z_OK;
+}
+
+/* zlib fed one row at a time (user: the row's bytes), as psdsave deflates rows as they come: the
+   stream zlib makes depends on how its input is cut. */
+static int deflate_rows(void *user, const uint8_t *src, size_t src_size, uint8_t *dst, size_t *dst_size)
+{
+    const size_t row = *(const size_t *)user;
+    z_stream     z;
+    size_t       at;
+    int          rc = Z_OK;
+    memset(&z, 0, sizeof z);
+    if (deflateInit(&z, ZIP_LEVEL) != Z_OK) return 1;
+    z.next_out  = dst;
+    z.avail_out = (uInt)*dst_size;
+    for (at = 0; rc == Z_OK && at < src_size; at += row) {
+        z.next_in  = src + at;
+        z.avail_in = (uInt)(src_size - at < row ? src_size - at : row);
+        rc         = deflate(&z, Z_NO_FLUSH);
+    }
+    if (rc == Z_OK) rc = deflate(&z, Z_FINISH);
+    *dst_size = (size_t)z.total_out;
+    (void)deflateEnd(&z);
+    return rc != Z_STREAM_END;
 }
 
 static int inflate_zlib(void *user, const uint8_t *src, size_t src_size, uint8_t *dst, size_t dst_size)
@@ -412,8 +441,9 @@ static VipsImage *make_image(const void *data, int bands, VipsBandFormat format,
 /* What minipsd_write makes of the image from its pixels, as psdsave wrote it before it encoded the
    channels itself: one layer when layered (without transparency when the image has no alpha),
    the composite, CMYK as PSD's inverted ink (8-bit, as the tests' images are), the image's
-   resolution, the EXIF, XMP and IPTC libvips gave psdsave (taken from its file); an option ("compression",
-   "psb") as psdsave takes it. */
+   resolution, the EXIF, XMP and IPTC libvips gave psdsave (taken from its file), its format as
+   psdsave chose it (the file's); a "compression" option as psdsave takes it, ZIP deflated a row at
+   a time as psdsave deflates it. */
 static int from_pixels(VipsImage *image, unsigned colors, int layered, const char *option, int value, const uint8_t *file,
                        size_t file_size, out_buffer *b)
 {
@@ -428,6 +458,7 @@ static int from_pixels(VipsImage *image, unsigned colors, int layered, const cha
     size_t             bytes = 0, i, count = 0;
     uint8_t           *pixels = (uint8_t *)vips_image_write_to_memory(image, &bytes);
     const int          alpha  = (unsigned)image->Bands > colors;
+    size_t             row    = (size_t)image->Xsize * vips_format_sizeof(image->BandFmt);   /* a channel's row */
     int                rc;
     if (!pixels) return MINIPSD_ERR_ALLOC;
     if (image->Type == VIPS_INTERPRETATION_CMYK && image->BandFmt == VIPS_FORMAT_UCHAR)
@@ -452,9 +483,11 @@ static int from_pixels(VipsImage *image, unsigned colors, int layered, const cha
     doc.compression     = !option || strcmp(option, "compression") != 0 ? MINIPSD_RLE
                           : value == MINIPSD_VIPS_COMPRESSION_ZIP    ? MINIPSD_ZIP
                           : value == MINIPSD_VIPS_COMPRESSION_NONE   ? MINIPSD_RAW
+                          : value == MINIPSD_VIPS_COMPRESSION_ZIP_PREDICTED ? MINIPSD_ZIP_PREDICTED
                                                                      : MINIPSD_RLE;
-    doc.format          = option && strcmp(option, "psb") == 0 && value ? MINIPSD_PSB : MINIPSD_PSD;
-    opts.deflate        = deflate_zlib;
+    doc.format          = file_size > PSD_VERSION_AT && file[PSD_VERSION_AT] == MINIPSD_PSB ? MINIPSD_PSB : MINIPSD_PSD;
+    opts.deflate        = deflate_rows;
+    opts.deflate_user   = &row;
     if (minipsd_reader_init(&r, file, file_size, workspace, sizeof workspace, NULL, &info) == MINIPSD_OK)
         for (i = 0; i < sizeof kept / sizeof kept[0]; ++i)   /* in psdsave's order */
             if (minipsd_reader_find_resource(r, kept[i], &resources[count]) == MINIPSD_OK) {
@@ -875,6 +908,31 @@ int main(int argc, char **argv)
                     MINIPSD_VIPS_COMPRESSION_ZIP);
         check_saved(make_image(rgba, RGBA, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-raw.psd", argv[1], 0, "compression",
                     MINIPSD_VIPS_COMPRESSION_NONE);
+        check_saved(make_image(grey16, 2, VIPS_FORMAT_USHORT, VIPS_INTERPRETATION_GREY16), "save-predicted.psd", argv[1], 0,
+                    "compression", MINIPSD_VIPS_COMPRESSION_ZIP_PREDICTED);
+        snprintf(path, sizeof path, "%s/save-predicted.psd", argv[1]);
+        check(first_layer_compression(path) == STORED_ZIP_PREDICTED, "ZIP with prediction by option", path);
+        {   /* 32-bit noise, rows a PSD cannot count: a PSB, unasked */
+            const size_t samples = (size_t)WIDE_W * WIDE_H * PSD_RGB_BANDS;
+            float       *noise   = g_new(float, samples);
+            guint32      seed    = 1;
+            VipsImage   *memory;
+            size_t       s;
+            for (s = 0; s < samples; ++s) noise[s] = (float)((seed = seed * 1664525u + 1013904223u) >> CHAR_BIT) / (float)(1u << 24);
+            memory = vips_image_new_from_memory_copy(noise, samples * sizeof *noise, WIDE_W, WIDE_H, PSD_RGB_BANDS, VIPS_FORMAT_FLOAT);
+            g_free(noise);
+            image = NULL;
+            if (memory) {
+                vips_copy(memory, &image, "interpretation", VIPS_INTERPRETATION_scRGB, "xres", DPI / MM_PER_INCH, "yres",
+                          DPI / MM_PER_INCH, NULL);
+                g_object_unref(memory);
+            }
+            check_saved(image, "save-wide.psd", argv[1], 1, NULL, 0);
+            snprintf(path, sizeof path, "%s/save-wide.psd", argv[1]);
+            file = read_all(path, &size);
+            check(file && size > PSD_VERSION_AT && file[PSD_VERSION_AT] == MINIPSD_PSB, "PSB when a PSD cannot count its rows", path);
+            free(file);
+        }
         snprintf(path, sizeof path, "%s/save-raw.psd", argv[1]);
         check(first_layer_compression(path) == STORED_RAW, "raw by option", path);
         image = make_image(rgba, RGBA, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB);   /* by its nick, in an option string */
@@ -890,7 +948,7 @@ int main(int argc, char **argv)
         check_saved(make_image(rgb8, 3, VIPS_FORMAT_UCHAR, VIPS_INTERPRETATION_sRGB), "save-psb.psd", argv[1], 1, "psb", TRUE);
         snprintf(path, sizeof path, "%s/save-psb.psd", argv[1]);
         file = read_all(path, &size);
-        check(file && size > 5 && file[5] == MINIPSD_PSB, "PSB by option", path);
+        check(file && size > PSD_VERSION_AT && file[PSD_VERSION_AT] == MINIPSD_PSB, "PSB by option", path);
         free(file);
         /* A file named .psb is a PSB; a buffer or a target in memory has no name: psb says it. */
         snprintf(path, sizeof path, "%s/save-suffix.psb", argv[1]);
@@ -901,7 +959,7 @@ int main(int argc, char **argv)
         check(back != NULL, "read back", path);
         if (back) g_object_unref(back);
         file = read_all(path, &size);
-        check(file && size > 5 && file[5] == MINIPSD_PSB, "PSB by suffix", path);
+        check(file && size > PSD_VERSION_AT && file[PSD_VERSION_AT] == MINIPSD_PSB, "PSB by suffix", path);
         free(file);
 
         snprintf(path, sizeof path, "%s/save-named.psd", argv[1]);

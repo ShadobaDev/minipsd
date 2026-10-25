@@ -111,6 +111,26 @@ MINIPSDDEF int minipsd_encode_row(int compression, int depth, const void *sample
     return s.failed ? MINIPSD_ERR_SIZE : MINIPSD_OK;
 }
 
+/* A row of samples, step bytes apart, as a ZIP channel's raw row: the file's bytes (big-endian),
+   shuffled at 32 bits and made differences when predicted. */
+static void mpsd__zip_row(uint8_t *out, const uint8_t *row, size_t step, uint32_t width, unsigned depth, int predicted)
+{
+    const unsigned wide  = mpsd__shift(depth);
+    const size_t   bytes = (size_t)width << wide;
+    size_t         x;
+    for (x = 0; x < bytes; ++x)                   /* at 32 bits predicted: shuffled, as the format wants */
+        out[predicted && wide == MPSD__SHIFT_32 ? mpsd__shuffled(x, width) : x] = row[mpsd__at(x, (ptrdiff_t)step, wide)];
+    if (predicted) mpsd__predict(out, width, depth);
+}
+
+MINIPSDDEF int minipsd_predict_row(int depth, const void *samples, size_t step, uint32_t width, uint8_t *out, size_t cap)
+{
+    if (!samples || !out || depth == MPSD__CH_1BIT || !mpsd__depth_ok((uint32_t)depth)) return MINIPSD_ERR_ARG;
+    if (cap < mpsd__row_bytes(width, (unsigned)depth)) return MINIPSD_ERR_SIZE;
+    mpsd__zip_row(out, (const uint8_t *)samples, step, width, (unsigned)depth, 1);
+    return MINIPSD_OK;
+}
+
 MINIPSDDEF int minipsd_matte_row(int color_mode, int depth, void *pixels, uint32_t width)
 {
     if (!pixels || depth == MPSD__CH_1BIT || !mpsd__depth_ok((uint32_t)depth)) return MINIPSD_ERR_ARG;
@@ -1152,20 +1172,14 @@ static int mpsd__zip_channel(minipsd_writer *w, size_t i, int k)
 {
     const minipsd_doc *d    = w->doc;
     const mpsd__source src  = mpsd__channel_source(d, &d->layers[i], k);
-    const unsigned     wide = mpsd__doc_shift(d);
-    const size_t       bytes = (size_t)src.width << wide;
+    const size_t       bytes = (size_t)src.width << mpsd__doc_shift(d);
     const int          predicted = mpsd__layer_compression(d, &d->layers[i]) == MINIPSD_ZIP_PREDICTED;
-    size_t             x, y, size = w->zip_room;
+    size_t             y, size = w->zip_room;
     if (w->zip_layer == i && w->zip_channel == k) return MINIPSD_OK;
     w->zip_layer = (size_t)-1;
-    for (y = 0; y < src.height; ++y) {
-        const uint8_t *row = src.samples + y * src.width * src.step;
-        uint8_t       *out = w->zip_plane + y * bytes;
-        for (x = 0; x < bytes; ++x)               /* at 32 bits predicted: shuffled, as the format wants */
-            out[predicted && wide == MPSD__SHIFT_32 ? mpsd__shuffled(x, src.width) : x]
-                = row[mpsd__at(x, (ptrdiff_t)src.step, wide)];
-        if (predicted) mpsd__predict(out, src.width, mpsd__doc_depth(d));
-    }
+    for (y = 0; y < src.height; ++y)
+        mpsd__zip_row(w->zip_plane + y * bytes, src.samples + y * src.width * src.step, src.step, src.width, mpsd__doc_depth(d),
+                      predicted);
     if (!w->deflate   /* never: minipsd_doc_check asks for one; spelled out for static analysers */
         || w->deflate(w->deflate_user, w->zip_plane, bytes * src.height, w->zip_out, &size) || size > w->zip_room)
         return MINIPSD_ERR_WRITE;

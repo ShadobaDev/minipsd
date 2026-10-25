@@ -28,6 +28,7 @@ static std::set<std::string> encodedLayers;
 
 #include <algorithm>
 #include <cstddef>
+#include <cstring>
 
 extern "C" int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size);   // minipsd_c_smoke.c
 
@@ -1386,6 +1387,51 @@ TEST(MinipsdWriterTest, ZipChannelsGoThroughTheCallersDeflate)
         EXPECT_EQ(r2.layers[0].compression, (std::vector<int>(4, RLE_MARKER))) << "the layer's own, in a ZIP document";
         EXPECT_EQ(r2.layers[0].pixels, px);
         EXPECT_EQ(r2.compositeCompression, RLE_MARKER) << "the composite: RLE in a ZIP document";
+    }
+
+    // minipsd_predict_row: the rows the writer deflates for ZIP_PREDICTED, at each depth (shuffled
+    // at 32); after the marker, deflated, the channel as the file has it.
+    for (const int depth : {8, 16, 32}) {
+        SCOPED_TRACE(depth);
+        const std::size_t sample = std::size_t(depth) / 8, pixel = 4 * sample, row = std::size_t(w) * sample;
+        Bytes pixels(std::size_t(w) * h * pixel);
+        for (std::size_t i = 0; i < std::size_t(w) * h * 4; ++i) {   // a sample each, as its depth holds it
+            const std::uint16_t s16 = std::uint16_t(i * 997);
+            const float         s32 = float(i % 101) / 100.0f;
+            std::memcpy(pixels.data() + i * sample, depth == 8 ? static_cast<const void *>(&px[i % px.size()])
+                                                    : depth == 16 ? static_cast<const void *>(&s16) : static_cast<const void *>(&s32),
+                        sample);
+        }
+        minipsd_layer l{"P", pixels.data(), 255, 0};
+        minipsd_doc   pd = docOf(w, h, &l, 1);
+        pd.depth       = std::uint16_t(depth);
+        pd.composite   = pixels.data();   // at 32 bits supplied, never composed
+        pd.compression = MINIPSD_ZIP_PREDICTED;
+        const minipsd_write_opts stored{0, zlib_stored_compress, nullptr};
+        const Bytes pf = write(pd, MINIPSD_OK, &stored);
+        Bytes pws(256);
+        minipsd_reader *pr = nullptr;
+        minipsd_info pi{};
+        ASSERT_EQ(minipsd_reader_init(&pr, pf.data(), pf.size(), pws.data(), pws.size(), nullptr, &pi), MINIPSD_OK);
+        minipsd_layer_view pv;
+        ASSERT_EQ(minipsd_reader_next_layer(pr, &pv), MINIPSD_MORE);
+        Bytes rows(row * h), stream(rows.size() * 2 + 64);
+        for (std::uint32_t y = 0; y < h; ++y)   // red: the pixel's first sample
+            ASSERT_EQ(minipsd_predict_row(depth, pixels.data() + y * w * pixel, pixel, w, rows.data() + y * row, row), MINIPSD_OK);
+        std::size_t n = stream.size();
+        ASSERT_EQ(zlib_stored_compress(nullptr, rows.data(), rows.size(), stream.data(), &n), 0);
+        Bytes want{0, ZIP_PREDICTED_MARKER};
+        want.insert(want.end(), stream.begin(), stream.begin() + std::ptrdiff_t(n));
+        EXPECT_EQ(Bytes(pv.channel[MINIPSD_CH_R].data, pv.channel[MINIPSD_CH_R].data + pv.channel[MINIPSD_CH_R].size), want);
+    }
+    {
+        std::uint8_t one[4] = {};
+        EXPECT_EQ(minipsd_predict_row(8, px.data(), 4, 4, one, sizeof one), MINIPSD_OK);
+        EXPECT_EQ(minipsd_predict_row(8, px.data(), 4, 4, one, sizeof one - 1), MINIPSD_ERR_SIZE) << "a byte short";
+        EXPECT_EQ(minipsd_predict_row(1, px.data(), 1, 8, one, sizeof one), MINIPSD_ERR_ARG) << "bits are never predicted";
+        EXPECT_EQ(minipsd_predict_row(12, px.data(), 4, 4, one, sizeof one), MINIPSD_ERR_ARG);
+        EXPECT_EQ(minipsd_predict_row(8, nullptr, 4, 4, one, sizeof one), MINIPSD_ERR_ARG);
+        EXPECT_EQ(minipsd_predict_row(8, px.data(), 4, 4, nullptr, sizeof one), MINIPSD_ERR_ARG);
     }
 
     // Refused: no deflate, a compression that is none of the four, the document's or a layer's.

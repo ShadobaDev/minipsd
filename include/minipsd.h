@@ -877,6 +877,31 @@ MINIPSDDEF int minipsd_encode_row(int compression, int depth, const void *sample
  * \return MINIPSD_OK, or MINIPSD_ERR_ARG when pixels is NULL or the depth not 8, 16 or 32.
  */
 MINIPSDDEF int minipsd_matte_row(int color_mode, int depth, void *pixels, uint32_t width);
+
+/**
+ * \brief A row of one channel as minipsd_write hands it to the deflate for MINIPSD_ZIP_PREDICTED:
+ *        its samples big-endian, each the difference from its left neighbour.
+ *
+ * At 8 bits the differences are the bytes'; at 16 the samples'; at 32 the row is first shuffled
+ * (every sample's first byte, then every second byte, and so on) and the differences are the
+ * shuffled bytes'.  Every row of a channel so, deflated as one zlib stream after the compression
+ * marker (two bytes, big-endian: 3), is the channel as a file stores it, for
+ * minipsd_layer.stored.  For MINIPSD_ZIP, without prediction, the rows are minipsd_encode_row's
+ * raw ones.  A program that deflates as rows come (zlib's deflate, fed row by row) holds no raw
+ * channel.
+ *
+ * \param depth   Bits a sample: 8, 16 (a uint16_t in host order) or 32 (a float).
+ * \param samples The row's first sample.
+ * \param step    Bytes from a sample to the next, as minipsd_encode_row's.
+ * \param width   Samples in the row.
+ * \param out     Receives the row: MINIPSD_ROW_BYTES(width, depth) bytes.
+ * \param cap     The size of out.
+ * \return MINIPSD_OK or an error code.
+ *
+ * \retval MINIPSD_ERR_ARG  samples or out is NULL, or the depth not 8, 16 or 32.
+ * \retval MINIPSD_ERR_SIZE cap is less than MINIPSD_ROW_BYTES(width, depth).
+ */
+MINIPSDDEF int minipsd_predict_row(int depth, const void *samples, size_t step, uint32_t width, uint8_t *out, size_t cap);
 #endif /* MINIPSD_NO_WRITER */
 
 #ifndef MINIPSD_NO_READER

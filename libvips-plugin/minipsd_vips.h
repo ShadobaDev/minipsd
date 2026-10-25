@@ -27,7 +27,10 @@ extern "C" {
 typedef enum {
     MINIPSD_VIPS_COMPRESSION_RLE  = 0, /*!< PackBits, as Photoshop writes 8-bit layers: the default. */
     MINIPSD_VIPS_COMPRESSION_ZIP  = 1, /*!< zlib, without prediction.                               */
-    MINIPSD_VIPS_COMPRESSION_NONE = 2  /*!< Raw: the largest file, the least work.                  */
+    MINIPSD_VIPS_COMPRESSION_NONE = 2, /*!< Raw: the largest file.                                   */
+    MINIPSD_VIPS_COMPRESSION_ZIP_PREDICTED = 3 /*!< zlib of each sample's difference from its left
+                                                    neighbour, as Photoshop writes 16-bit layers:
+                                                    the smaller file at 16 and 32 bits.          */
 } MinipsdVipsCompression;
 
 /**
