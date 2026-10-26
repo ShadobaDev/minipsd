@@ -195,7 +195,7 @@ Additive. See [Reader](CODE-ARCH.md#reader).
       workflow checks CI's run on the tagged commit instead of running it again. Before it:
       [COMPATIBILITY.md](COMPATIBILITY.md) regenerated with the version (done), the PR merged
       and CI green on `master`.
-- [ ] **S4.12** Release **0.4.0** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md): breaking, so a
+- [x] **S4.12** Release **0.4.0** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md): breaking, so a
       MINOR (`composite_alpha` for every composite, the compression constants renumbered,
       `minipsd_read` giving transparency as the file has it). The libvips plugin (S7.2 to S7.6),
       layered documents written through libvips included, and its zip; layers without transparency, a layer's own compression, the row functions;

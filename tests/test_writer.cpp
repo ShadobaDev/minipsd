@@ -1309,18 +1309,32 @@ TEST(MinipsdWriterTest, WriteFailureIsReported)
     const Bytes px = testImage(128, 64);   // several 4 KiB callbacks
     const minipsd_layer layer{"L", px.data(), 255, 0};
     const minipsd_doc d = docOf(128, 64, &layer, 1);
-    struct Calls { int made, failAt; };
-    const auto failing = [](void *user, const void *, size_t) -> int {
+    struct Calls { int made, failAt; size_t largest; };
+    const auto failing = [](void *user, const void *, size_t size) -> int {
         auto *c = static_cast<Calls *>(user);
+        c->largest = std::max(c->largest, size);
         return ++c->made != c->failAt;
     };
-    Calls all{0, 0};   // never fails
+    Calls all{0, 0, 0};   // never fails
     ASSERT_EQ(minipsd_write(&d, nullptr, failing, &all), MINIPSD_OK);
     ASSERT_GE(all.made, 3);
+    EXPECT_LE(all.largest, size_t(MPSD__CHUNK)) << "pieces of 4 KiB: no row is wider";
+
+    // A mask wider than the canvas and every layer: the pieces grow to hold its row.
+    constexpr uint32_t kWide = 5000;
+    const Bytes wide(kWide, 0x80);
+    const minipsd_mask mask{.bottom = 1, .right = static_cast<int32_t>(kWide), .default_color = 255, .pixels = wide.data()};
+    minipsd_layer masked = layer;
+    masked.mask = &mask;
+    const minipsd_doc withMask = docOf(128, 64, &masked, 1);
+    Calls widest{0, 0, 0};
+    ASSERT_EQ(minipsd_write(&withMask, nullptr, failing, &widest), MINIPSD_OK);
+    EXPECT_GT(widest.largest, size_t(MPSD__CHUNK)) << "the mask's row";
+    EXPECT_LE(widest.largest, size_t(MINIPSD_ROW_BOUND(kWide, mpsd__doc_depth(&withMask))));
 
     // The first piece, one in the middle, and the last.
     for (int failAt : {1, 2, all.made}) {
-        Calls c{0, failAt};
+        Calls c{0, failAt, 0};
         EXPECT_EQ(minipsd_write(&d, nullptr, failing, &c), MINIPSD_ERR_WRITE) << "failing call " << failAt;
         EXPECT_EQ(c.made, failAt) << "the writer stops calling back after the first failure";
     }
