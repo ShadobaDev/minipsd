@@ -840,6 +840,23 @@ static void check_layers_saved(const uint8_t *rgba, const char *dir)
     snprintf(again, sizeof again, "%s/layers-template-minipsd.psd", dir);
     check(write_file(&doc, again) && same_files(path, again), "the bytes minipsd_write makes from the same layers", path);
 
+    /* compression: the layer's channels ZIP, as Platemaker asks. */
+    {
+        uint8_t            workspace[WORKSPACE_SIZE], *file;
+        size_t             size = 0;
+        minipsd_reader    *r;
+        minipsd_info       info;
+        minipsd_layer_view view;
+        snprintf(again, sizeof again, "%s/layers-template-zip.psd", dir);
+        file = minipsd_vips_psdsave_layers(pair, 2, again, "composite", template_image, "compression", MINIPSD_VIPS_COMPRESSION_ZIP,
+                                           NULL) == 0 ? read_all(again, &size) : NULL;
+        check(file && minipsd_reader_init(&r, file, size, workspace, sizeof workspace, NULL, &info) == MINIPSD_OK
+                  && minipsd_reader_next_layer(r, &view) == MINIPSD_MORE && view.channel[0].size >= 2 && view.channel[0].data
+                  && view.channel[0].data[1] == STORED_ZIP,
+              "the layer's channels ZIP", again);
+        free(file);
+    }
+
     /* Its composite made by libvips from the layers: the template's own pixels. */
     snprintf(again, sizeof again, "%s/layers-template-composed.psd", dir);
     check(minipsd_vips_psdsave_layers(pair, 2, again, NULL) == 0, "saved, composite composed", again);
