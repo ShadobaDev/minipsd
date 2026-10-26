@@ -3,6 +3,77 @@
 Changes between releases, for users of minipsd. Versioning follows the pre-1.0 rules in
 [TODO.md](TODO.md): breaking changes bump the MINOR, additions and fixes the PATCH.
 
+## [0.4.0] — 2026-10-26
+
+**Breaking:** `minipsd_doc.composite_alpha` now says, for every composite (given, composed from
+the layers, or stored), whether it has transparency; before, a given or composed composite always
+had it. 0, the default, is a composite of the colour channels only, a composed one matted against
+white. To migrate, a document whose composite has transparency (most layered ones, and every
+`composite` given as RGBA) sets `composite_alpha = 1`; nothing else changes.
+
+**Breaking:** the compression constants move up one, so that zero means the default everywhere:
+`MINIPSD_COMPRESSION_DEFAULT` 0 (a document's RLE, a layer's the document's), `MINIPSD_RLE` 1,
+`MINIPSD_RAW` 2, `MINIPSD_ZIP` 3, `MINIPSD_ZIP_PREDICTED` 4. Code that names them compiles as it
+was; numbers written out (a binding, a stored setting) move. They are not the markers a file
+stores (0 raw, 1 RLE, 2 ZIP, 3 ZIP with prediction).
+
+**Breaking:** `minipsd_read` gives transparency as the file has it: a layer without a
+transparency channel has `no_alpha` set and its pixels are the colour channels only, and the
+composite has the channels the file stores, `composite_alpha` saying whether one is transparency
+(before, both came as RGBA, transparency made opaque). A file without layers gets its
+"Background" layer the same way. To migrate, read a layer's pixels by `no_alpha`, the
+composite's by `composite_alpha`.
+
+### Added
+- Images without transparency: `minipsd_layer.no_alpha`, a layer whose pixels are its colour
+  channels only, written without a transparency channel and composed as opaque; with
+  `composite_alpha` 0, a document without layers is a flat file, as Photoshop saves an image that
+  has neither layers nor transparency.
+- `minipsd_layer.compression`: a layer's channels, its mask's too, in a compression of their own
+  (0: the document's); the deflate is asked for whenever any layer deflates.
+- Channels encoded by the program, row by row, for `stored` and `composite_stored`:
+  `minipsd_encode_row` (PackBits or raw, as the writer encodes a row), `minipsd_predict_row` (the
+  row `MINIPSD_ZIP_PREDICTED` deflates), `minipsd_matte_row` (a composite's row matted as the
+  writer mattes it), and `MINIPSD_ROW_BYTES`, `MINIPSD_ROW_BOUND` for their buffers.
+- The libvips plugin (`libvips-plugin/`, `MINIPSD_VIPS_PLUGIN`, the static library
+  `minipsd::vips`): minipsd as libvips' loader and saver of PSD and PSB, registered with
+  `minipsd_vips_init()` after `VIPS_INIT`. `psdload` gives the composite or, with `layer`, one
+  layer placed by its offset, decoded in bands of rows from libvips' threads; grey, RGB, CMYK,
+  bitmap, indexed (through its palette), Lab and multichannel at every depth, with the
+  resolution, ICC profile, EXIF, XMP, IPTC and `psd-*` fields: a layer's name, opacity,
+  visibility, blend mode and clipping, its mask (an image in `psd-layer-mask`), a group's
+  records (`psd-layer-section`), and a record without pixels as one transparent pixel with
+  `psd-layer-empty`, so every record loads. `psdsave` writes an image with
+  alpha as one layer and its composite, one without as a flat file (with `layered`, a layer
+  without transparency too), reading the image once, in bands, each channel encoded as its rows
+  come: memory about the file's size. Options: `compression` (`rle`, `zip`, `zip-predicted`,
+  `none`), `psb`, `layer_name`, `layered`; a PSB by itself when a PSD cannot hold the file.
+- `psdsave_layers` (`_buffer`, `_target`; `minipsd_vips_psdsave_layers` in C): several images as
+  the layers of one document, bottom first, each record's look from the same `psd-layer-*`
+  fields, masks and groups included, so a file's records loaded with `psdload` and saved come
+  back. The composite is given, or composed by `vips_composite` (blend modes, opacity, masks,
+  groups' visibility and opacity); the canvas by `width`, `height`, `left`, `top`.
+- The plugin released as `minipsd-vips-X.Y.Z.zip`: a CMake project that builds as it is, with
+  minipsd's single header private to it, an example that is its test, and its SBOM fragment
+  (`minipsd-vips.spdx.json`, `MINIPSD_SBOM_FILE` on `minipsd::vips`).
+
+### Fixed
+- A crafted file could make `minipsd_read` and the decode calls write past their buffers: a
+  mask's rectangle was not bounded, so the size of its plane could wrap around 64 bits. A
+  channel with a side above 300 000 is now `MINIPSD_ERR_UNSUPPORTED`, and `minipsd_read` bounds a
+  mask's sides as a layer's.
+- An RLE row that packs to more than 65 535 bytes (32-bit samples that do not pack, wider than
+  about 16 380 px) went into a PSD with a wrong row count, and no error: now
+  `MINIPSD_ERR_SIZE`, the layer's or the composite's. A PSB takes it.
+- `minipsd_write` encoded a long row again for each 4 KiB it was cut into: its buffer now holds
+  the widest row, so each row is cut at most once (30 000 x 400 RGBA noise: 1406 ms to 796 ms,
+  the same bytes).
+- A composite's transparency is now named where the layer count cannot say it (a 32-bit
+  document, whose layers go in `Lr32` with a positive count, and a document with no layers): 1006,
+  1045 and 1053 "Transparency", as Photoshop writes them, unless the document keeps names of its
+  own. GIMP showed it as an extra channel. A document with no layers also gets an empty `Mtrn`
+  (`Mt16`, `Mt32`): its transparency was lost before.
+
 ## [0.3.1] — 2026-10-24
 
 ### Added

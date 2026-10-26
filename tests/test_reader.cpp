@@ -2423,24 +2423,33 @@ TEST(MinipsdReadTest, ItRefusesWhatTheReaderRefusesAndWhatItCannotHold)
     s.count = 1;
     readDoc(build(s).bytes, &lost, MINIPSD_ERR_UNSUPPORTED);
 
-    // A layer the writer could not take back: a side above MINIPSD_MAX_SIDE, wide or tall.
-    for (const bool wide : {true, false}) {
+    // A layer or a mask the writer could not take back: a side above MINIPSD_MAX_SIDE, wide or tall.
+    for (const bool wide : {true, false})
+    for (const bool masked : {false, true}) {
+        SCOPED_TRACE(testing::Message() << "wide " << wide << ", masked " << masked);
         Spec big;
         Rec r = simpleRec();
-        (wide ? r.right : r.bottom) = MINIPSD_MAX_SIDE + 1;
+        if (masked) {
+            const std::uint32_t right = wide ? MINIPSD_MAX_SIDE + 1 : 1, bottom = wide ? 1 : MINIPSD_MAX_SIDE + 1;
+            r.mask = Out().u32(0).u32(0).u32(bottom).u32(right).u8(0).u8(0).zeros(2).b;
+            r.channels.push_back(chan(-2, 6, 0));
+        } else {
+            (wide ? r.right : r.bottom) = MINIPSD_MAX_SIDE + 1;
+        }
         big.layers = {r};
         big.count = -1;
         big.image = rawImage(4, 2, 2, 0);
         readDoc(build(big).bytes, &lost, MINIPSD_ERR_UNSUPPORTED);
     }
 
-    // A flat file over the limit: its image counts once as the composite, once as its layer.
+    // A flat file over the limit: its image counts once as the composite, once as its layer, each
+    // R, G, B: it has no transparency.
     Spec flat;
     flat.channels = 3;
     flat.count = 0;
     flat.image = rawImage(3, 2, 2, 0);
     minipsd_limits small{};
-    small.max_decoded_bytes = 2 * 2 * 4 * 2 - 1;
+    small.max_decoded_bytes = 2 * 2 * 3 * 2 - 1;
     readDoc(build(flat).bytes, &lost, MINIPSD_ERR_LIMIT, &small);
 
     // A file cut inside its layer tail: everything before it is read, then the composite is short.
@@ -2636,9 +2645,17 @@ TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
     EXPECT_DOUBLE_EQ(d->dpi, 72.0) << "no resolution stored";
     ASSERT_EQ(d->layer_count, 1u);
     EXPECT_STREQ(d->layers[0].name, "Background");
-    EXPECT_EQ(Bytes(d->layers[0].pixels, d->layers[0].pixels + 16), (Bytes{0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255,
-                                                                     0x40, 0x40, 0x40, 255, 0x40, 0x40, 0x40, 255}));
+    EXPECT_EQ(d->layers[0].no_alpha, 1) << "the file has no transparency, nor has its layer";
+    EXPECT_EQ(Bytes(d->layers[0].pixels, d->layers[0].pixels + 12), Bytes(12, 0x40)) << "R, G, B";
+    EXPECT_EQ(d->composite_alpha, 0);
     EXPECT_EQ(minipsd_doc_check(d.get(), nullptr), MINIPSD_OK) << "the writer takes it as it is";
+    {   // written back: still without transparency, the layer and the composite R, G, B
+        const Psd p = read(write(*d));
+        EXPECT_EQ(p.channels, 3) << "the composite";
+        EXPECT_EQ(p.rawLayerCount, 1) << "positive: no transparency";
+        ASSERT_EQ(p.layers.size(), 1u);
+        EXPECT_EQ(p.layers[0].channelIds, (std::vector<int>{0, 1, 2})) << "no channel -1";
+    }
 
     // Stored: flat as the file is, no layer, its image the composite, copied.  With a layer and
     // mask section or without one (its length 0), it is written with minipsd's empty one.
@@ -2664,8 +2681,8 @@ TEST(MinipsdReadTest, AFlatFileBecomesOneBackgroundLayer)
     }
 }
 
-// A flat 16-bit file: its one layer decoded at 16 bits, opaque as 65535.
-TEST(MinipsdReadTest, AFlat16BitFileIsOpaqueAt65535)
+// A flat 16-bit file: its one layer decoded at 16 bits, R, G, B without transparency.
+TEST(MinipsdReadTest, AFlat16BitFileDecodesAt16BitsWithoutTransparency)
 {
     Spec s;
     s.channels = 3;
@@ -2675,10 +2692,10 @@ TEST(MinipsdReadTest, AFlat16BitFileIsOpaqueAt65535)
     const Doc d = readDoc(build(s).bytes, nullptr);
     ASSERT_TRUE(d);
     EXPECT_EQ(d->depth, 16);
-    std::uint16_t px[4];
+    EXPECT_EQ(d->layers[0].no_alpha, 1);
+    std::uint16_t px[3 * 4];   // four pixels of R, G, B
     std::memcpy(px, d->layers[0].pixels, sizeof px);
-    EXPECT_EQ(px[0], 0x4040);
-    EXPECT_EQ(px[3], 65535);
+    for (const std::uint16_t v : px) EXPECT_EQ(v, 0x4040);
 }
 
 // Modes beyond 8- and 16-bit RGB come back as written: a 32-bit document's layers in 'Lr32', its
@@ -2706,6 +2723,104 @@ TEST(MinipsdReadTest, EveryModeComesBackAsWritten)
     const Doc g = readDoc(again, nullptr);
     ASSERT_TRUE(g);
     EXPECT_EQ(write(*g), again) << "a second pass changes no byte";
+
+    // Where the layer count cannot say the composite has transparency ('Lr32' holds a positive one;
+    // a document with no layers has 0), the writer names the channel as Photoshop does, which GIMP
+    // reads it by: 1006, 1045 and 1053, once, kept as they are on the next pass; a document with no
+    // layers also gets an empty 'Mtrn' ('Mt16', 'Mt32') after its tail, which the reader honours.
+    const Bytes pascal = {12, 'T', 'r', 'a', 'n', 's', 'p', 'a', 'r', 'e', 'n', 'c', 'y'};
+    const auto names = [&](const Bytes &file) {
+        Open o(file);
+        EXPECT_EQ(o.rc, MINIPSD_OK);
+        std::vector<int> ids;
+        minipsd_resource res{};
+        for (std::size_t at = 0; minipsd_reader_next_resource(o.r, &at, &res) == MINIPSD_MORE;)
+            if (res.id == MINIPSD_RES_ALPHA_NAMES || res.id == MINIPSD_RES_UNICODE_ALPHA_NAMES || res.id == MINIPSD_RES_ALPHA_IDENTIFIERS) {
+                ids.push_back(res.id);
+                if (res.id == MINIPSD_RES_ALPHA_NAMES) { EXPECT_EQ(Bytes(res.data.data, res.data.data + res.data.size), pascal); }
+            }
+        EXPECT_NE(o.info.composite_has_alpha, 0);
+        return ids;
+    };
+    const std::vector<int> photoshops = {MINIPSD_RES_ALPHA_NAMES, MINIPSD_RES_UNICODE_ALPHA_NAMES, MINIPSD_RES_ALPHA_IDENTIFIERS};
+    EXPECT_EQ(names(floats), photoshops) << "'Lr32'";
+    EXPECT_EQ(names(again), photoshops) << "kept, not written twice";
+    const std::vector<std::uint8_t> greyAlpha = {10, 255, 20, 128};   // 2 x 1, grey and transparency
+    minipsd_doc flat = docOf(2, 1, nullptr, 0);
+    flat.color_mode      = MINIPSD_MODE_GREY;
+    flat.composite       = greyAlpha.data();
+    flat.composite_alpha = 1;
+    const Bytes noLayers = write(flat);
+    EXPECT_EQ(names(noLayers), photoshops) << "no layers";
+    const Bytes mtrn = {'8', 'B', 'I', 'M', 'M', 't', 'r', 'n', 0, 0, 0, 0};
+    const auto block = std::search(noLayers.begin(), noLayers.end(), mtrn.begin(), mtrn.end());
+    ASSERT_NE(block, noLayers.end()) << "an empty 'Mtrn'";
+    EXPECT_EQ(std::search(block + 1, noLayers.end(), mtrn.begin(), mtrn.end()), noLayers.end()) << "one";
+    const Doc h = readDoc(noLayers, nullptr);
+    ASSERT_TRUE(h);
+    const Bytes once = write(*h);
+    const Doc k = readDoc(once, nullptr);
+    ASSERT_TRUE(k);
+    EXPECT_EQ(write(*k), once) << "a second pass changes no byte";
+    EXPECT_EQ(names(once), photoshops) << "read and written: kept, not written twice";
+    const Bytes other = {7, 'O', 'u', 'r', ' ', 'o', 'w', 'n'};
+    const minipsd_resource own{MINIPSD_RES_ALPHA_NAMES, {other.data(), other.size()}, {}};
+    flat.resources = &own; flat.resource_count = 1;
+    {
+        Open o(write(flat));
+        minipsd_resource res{};
+        ASSERT_EQ(minipsd_reader_find_resource(o.r, MINIPSD_RES_ALPHA_NAMES, &res), MINIPSD_OK);
+        EXPECT_EQ(Bytes(res.data.data, res.data.data + res.data.size), other) << "the document's own names win";
+        EXPECT_EQ(minipsd_reader_find_resource(o.r, MINIPSD_RES_ALPHA_IDENTIFIERS, &res), MINIPSD_ERR_NOT_FOUND) << "none of the writer's";
+    }
+
+    // Without transparency (composite_alpha 0): the mode's channels only, nothing named, no 'Mtrn',
+    // as Photoshop saves an image without layers.  Read, its one layer has none either; stored, it
+    // is written back the same bytes.
+    const std::vector<std::uint8_t> grey = {10, 20};   // 2 x 1, grey only
+    minipsd_doc plain = docOf(2, 1, nullptr, 0);
+    plain.color_mode = MINIPSD_MODE_GREY;
+    plain.composite  = grey.data();
+    const Bytes noAlpha = write(plain);
+    {
+        Open o(noAlpha);
+        ASSERT_EQ(o.rc, MINIPSD_OK);
+        EXPECT_EQ(o.info.channels, 1);
+        EXPECT_EQ(o.info.composite_has_alpha, 0);
+        minipsd_resource res{};
+        EXPECT_EQ(minipsd_reader_find_resource(o.r, MINIPSD_RES_ALPHA_NAMES, &res), MINIPSD_ERR_NOT_FOUND) << "nothing to name";
+    }
+    EXPECT_EQ(std::search(noAlpha.begin(), noAlpha.end(), mtrn.begin(), mtrn.end()), noAlpha.end()) << "no 'Mtrn'";
+    const Doc pd = readDoc(noAlpha, nullptr);
+    ASSERT_TRUE(pd);
+    EXPECT_EQ(pd->composite_alpha, 0);
+    ASSERT_EQ(pd->layer_count, 1u);
+    EXPECT_EQ(pd->layers[0].no_alpha, 1);
+    EXPECT_EQ(Bytes(pd->layers[0].pixels, pd->layers[0].pixels + grey.size()), Bytes(grey.begin(), grey.end()));
+    const minipsd_read_opts keep{1};
+    const Doc ps = readDoc(noAlpha, nullptr, MINIPSD_OK, nullptr, &keep);
+    ASSERT_TRUE(ps);
+    EXPECT_EQ(write(*ps), noAlpha) << "stored: the same bytes";
+
+    // A layer without transparency (no_alpha), the composite composed without it: R, G, B in both,
+    // the count positive; read back without it, and a second pass the same bytes.
+    const Bytes rgb = {200, 100, 50, 10, 20, 30};   // 2 x 1
+    const minipsd_layer bg{.name = "Background", .pixels = rgb.data(), .opacity = 255, .no_alpha = 1};
+    minipsd_doc layered = docOf(2, 1, &bg, 1);
+    layered.composite_alpha = 0;
+    const Bytes opaqueLayer = write(layered);
+    const Psd q = read(opaqueLayer);
+    EXPECT_EQ(q.channels, 3);
+    EXPECT_EQ(q.rawLayerCount, 1);
+    ASSERT_EQ(q.layers.size(), 1u);
+    EXPECT_EQ(q.layers[0].channelIds, (std::vector<int>{0, 1, 2})) << "no channel -1";
+    for (std::size_t i = 0; i < 2; ++i)
+        for (std::size_t c = 0; c < 3; ++c) EXPECT_EQ(q.composite[i * 4 + c], rgb[i * 3 + c]) << "opaque: composed as given";
+    const Doc lb = readDoc(opaqueLayer, nullptr);
+    ASSERT_TRUE(lb);
+    EXPECT_EQ(lb->layers[0].no_alpha, 1);
+    EXPECT_EQ(Bytes(lb->layers[0].pixels, lb->layers[0].pixels + rgb.size()), rgb);
+    EXPECT_EQ(write(*lb), opaqueLayer) << "read and written: the same bytes";
 
     const Bytes bits = {0, 1, 0, 0, 7, 0, 0, 0, 255, 1};   // 10 x 1: 0 white, any other black
     minipsd_doc b = docOf(10, 1, nullptr, 0);
@@ -2827,6 +2942,17 @@ TEST(MinipsdReaderTest, MaskAndKindAtTheEdges)
     Bytes plane(4);
     const minipsd_plane p{plane.data(), 1, 2};
     EXPECT_EQ(minipsd_decode_mask(b.o.r, &b.v, &p, nullptr), MINIPSD_ERR_FORMAT);
+
+    // A mask's rectangle is the file's: a side above either format's is refused before its plane
+    // is sized.  2^31 x 2^31 at 32 bits is a plane of 2^64 bytes, which wrapped to 0 and passed.
+    constexpr std::int32_t half = std::int32_t(1) << 30;
+    Rec wrapping = simpleRec();
+    wrapping.mask = maskData(-half, -half, half, half);
+    wrapping.channels.push_back(chan(-2, 6, 0));
+    OneLayer c(wrapping, 32);
+    minipsd_decode_opts deep{};
+    deep.depth = 32;
+    EXPECT_EQ(minipsd_decode_mask(c.o.r, &c.v, &p, &deep), MINIPSD_ERR_UNSUPPORTED);
 
     auto lsct = [](std::uint32_t type) { return block("lsct", Out().u32(type).b); };
     Rec unknown = simpleRec();
@@ -3171,9 +3297,31 @@ void expectConvertsBack(const minipsd_doc &d)
     EXPECT_EQ(write(*c, MINIPSD_OK, &back), as) << "into the other format and back: the same bytes";
 }
 
+// A document's pixels of `planes` samples, `bytes` each, as RGBA: opaque where they have no
+// transparency, as the reader's RGBA targets decode a file without it.
+Bytes asRgba(const std::uint8_t *p, std::size_t count, unsigned planes, std::size_t bytes)
+{
+    Bytes out(count * 4 * bytes, 0xFF);
+    for (std::size_t i = 0; i < count; ++i)
+        std::copy(p + i * planes * bytes, p + (i + 1) * planes * bytes, out.begin() + static_cast<std::ptrdiff_t>(i * 4 * bytes));
+    return out;
+}
+
+// A document's composite as RGBA: its colour, and its transparency when it has one.
+Bytes compositeOf(const minipsd_doc &d, std::size_t bytes)
+{
+    return asRgba(d.composite, std::size_t(d.width) * d.height, 3u + d.composite_alpha, bytes);
+}
+
+// A layer's pixels as RGBA.
+Bytes pixelsOf(const minipsd_layer &l, std::size_t bytes)
+{
+    return asRgba(l.pixels, std::size_t(l.right - l.left) * std::size_t(l.bottom - l.top), 3u + !l.no_alpha, bytes);
+}
+
 // A document read with stored: its composite copied as the file ends with it, not decoded, when
 // it is R, G, B and at most transparency; otherwise decoded, as stored (matted).
-void expectStoredComposite(const minipsd_doc &s, const Bytes &file, std::size_t size, const Bytes &stored)
+void expectStoredComposite(const minipsd_doc &s, const Bytes &file, std::size_t bytes, const Bytes &stored)
 {
     if (s.composite_stored.size) {
         EXPECT_EQ(s.composite, nullptr) << "copied, not decoded";
@@ -3181,7 +3329,7 @@ void expectStoredComposite(const minipsd_doc &s, const Bytes &file, std::size_t 
         EXPECT_EQ(Bytes(s.composite_stored.data, s.composite_stored.data + s.composite_stored.size),
                   Bytes(file.end() - static_cast<std::ptrdiff_t>(s.composite_stored.size), file.end()));
     } else {
-        EXPECT_EQ(Bytes(s.composite, s.composite + size), stored);
+        EXPECT_EQ(compositeOf(s, bytes), stored);
     }
 }
 
@@ -3262,7 +3410,7 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
                 ASSERT_TRUE(s);
                 expectConvertsBack(*s);
                 EXPECT_EQ(s->depth, depth);
-                expectStoredComposite(*s, file, composite.size(), stored);
+                expectStoredComposite(*s, file, bytes, stored);
                 const Bytes again = write(*s);
                 expectKeptAlike(file, again);
                 const Doc f = readDoc(again, &lostAgain, MINIPSD_OK, nullptr, &keep);
@@ -3288,7 +3436,7 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
             const Doc d = readDoc(file, &lost);
             ASSERT_TRUE(d);
             if (otherChannels) { EXPECT_NE(lost & MINIPSD_LOST_CHANNELS, 0u) << "lost " << lost; }
-            EXPECT_EQ(Bytes(d->composite, d->composite + composite.size()), stored);
+            EXPECT_EQ(compositeOf(*d, bytes), stored);
             EXPECT_EQ(d->depth, depth);
             const Bytes again = write(*d);
             std::uint32_t lostAgain = 99;
@@ -3302,11 +3450,12 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
                 EXPECT_STREQ(a.name, b.name);
                 EXPECT_EQ(std::tie(a.opacity, a.hidden, a.top, a.left, a.bottom, a.right),
                           std::tie(b.opacity, b.hidden, b.top, b.left, b.bottom, b.right));
-                const std::size_t n = std::size_t(a.right - a.left) * std::size_t(a.bottom - a.top) * 4 * bytes;
                 EXPECT_EQ(a.pixels == nullptr, b.pixels == nullptr);
-                if (a.pixels && b.pixels) { EXPECT_TRUE(std::equal(a.pixels, a.pixels + n, b.pixels)); }
+                EXPECT_EQ(a.no_alpha, b.no_alpha) << "without transparency, written and read back without";
+                if (a.pixels && b.pixels) { EXPECT_EQ(pixelsOf(a, bytes), pixelsOf(b, bytes)); }
             }
-            EXPECT_TRUE(std::equal(d->composite, d->composite + composite.size(), e->composite));
+            EXPECT_EQ(d->composite_alpha, e->composite_alpha);
+            EXPECT_EQ(compositeOf(*d, bytes), compositeOf(*e, bytes));
             expectKeptAlike(file, again);
 
             // Stored: no layer decoded, yet the file written from it decodes to the same pixels.
@@ -3314,17 +3463,16 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
             const Doc s = readDoc(file, &lost, MINIPSD_OK, nullptr, &keep);
             ASSERT_TRUE(s);
             expectConvertsBack(*s);
-            expectStoredComposite(*s, file, composite.size(), stored);
+            expectStoredComposite(*s, file, bytes, stored);
             const Doc f = readDoc(write(*s), &lostAgain);
             ASSERT_TRUE(f);
-            EXPECT_EQ(Bytes(f->composite, f->composite + composite.size()), stored) << "written back, the same composite";
+            EXPECT_EQ(compositeOf(*f, bytes), stored) << "written back, the same composite";
             ASSERT_EQ(f->layer_count, d->layer_count);
             for (std::size_t i = 0; i < d->layer_count; ++i) {
                 const minipsd_layer &a = d->layers[i], &b = f->layers[i];
                 SCOPED_TRACE(i);
-                const std::size_t n = std::size_t(a.right - a.left) * std::size_t(a.bottom - a.top) * 4 * bytes;
                 EXPECT_EQ(a.pixels == nullptr, b.pixels == nullptr);
-                if (a.pixels && b.pixels) { EXPECT_TRUE(std::equal(a.pixels, a.pixels + n, b.pixels)); }
+                if (a.pixels && b.pixels) { EXPECT_EQ(pixelsOf(a, bytes), pixelsOf(b, bytes)); }
             }
         }
 

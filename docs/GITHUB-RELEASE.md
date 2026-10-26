@@ -12,12 +12,17 @@ Pushing the tag starts the [`Release`](../.github/workflows/release.yml) workflo
 2. a check that the tag equals the `MINIPSD_VERSION_*` macros in `include/minipsd.h` and that
    `docs/CHANGELOG.md` has a section for that version;
 3. `minipsd.h` as a single file: `include/` joined by `tools/amalgamate.cmake`;
-4. a build-provenance attestation for that file;
-5. a GitHub Release with `minipsd.h` and `minipsd.h.sha256`, its notes taken from the changelog
-   section.
+4. the libvips plugin as `minipsd-vips-X.Y.Z.zip`, a CMake project that builds as it is
+   (`tools/package_vips.cmake`), with its SBOM fragment, then checked against that fragment
+   (`tools/check_spdx.cmake`) and built from the zip alone against Ubuntu's libvips, its
+   example run: a zip that does not build is not published;
+5. a build-provenance attestation for `minipsd.h` and the zip;
+6. a GitHub Release with `minipsd.h`, the zip and a `.sha256` for each, its notes taken from the
+   changelog section.
 
-There is nothing to build for consumers: the source tree at the tag *is* the release. The two
-assets are for users who prefer one file to copying `include/`.
+There is nothing to build for consumers: the source tree at the tag *is* the release. `minipsd.h`
+is for users who prefer one file to copying `include/`; the zip, for those who want the plugin
+without the repository. CI packs and builds the zip on every push too, so it fails there first.
 
 ## 0. Pre-flight
 
@@ -47,8 +52,10 @@ notes come from `docs/CHANGELOG.md`, not from the tag.
 ## 3. Verify
 
 - **Actions** → the Release run is green.
-- **Releases** → `0.1.0` has `minipsd.h`, `minipsd.h.sha256` and the changelog notes.
-- Provenance: `gh attestation verify minipsd.h --repo ShadobaDev/minipsd`.
+- **Releases** → `0.1.0` has `minipsd.h`, `minipsd-vips-0.1.0.zip`, a `.sha256` for each, and
+  the changelog notes.
+- Provenance: `gh attestation verify minipsd.h --repo ShadobaDev/minipsd`, and the same for the
+  zip.
 - A FetchContent consumer pinned to `GIT_TAG 0.1.0` configures and builds.
 
 ## 4. Then the consumers

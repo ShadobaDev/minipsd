@@ -35,10 +35,10 @@ The order of work from 0.1.0 to the design in [CODE-ARCH.md](CODE-ARCH.md). Case
 | [1. Module split](#1-module-split) | the API stays in `minipsd.h`, the implementation becomes modules | 0.2.0, at S3.4 |
 | [2. Pull writer](#2-pull-writer) | non-blocking, heap-free writing | 0.2.0, at S3.4 |
 | [3. I/O out of the core](#3-io-out-of-the-core) | stdio leaves the library; examples instead | **0.2.0**, at S3.4 (breaking) |
-| [4. Reader](#4-reader) | buffer to structure, for minipsd's own subset | the next release, at S4.10 |
+| [4. Reader](#4-reader) | buffer to structure, for minipsd's own subset | 0.3.0, at S4.10 |
 | [5. Round trip and conveniences](#5-round-trip-and-conveniences) | layer rectangles, full import, cheap re-save, kept unknown content | batched, when decided |
 | [6. Format features](#6-format-features) | blend modes, groups, masks, 16-bit, PSB | batched, when decided |
-| [7. Interoperability](#7-interoperability) | libvips | batched, when decided |
+| [7. Interoperability](#7-interoperability) | libvips | 0.3.0 (S7.1), 0.4.0 (S7.2 to S7.6, at S4.12) |
 | [8. Test quality](#8-test-quality) | branch coverage of compound conditions | with any release |
 | [Not scheduled](#not-scheduled) | large cases, only on real demand | — |
 
@@ -189,12 +189,20 @@ Additive. See [Reader](CODE-ARCH.md#reader).
       the pre-1.0 rules. Before it: regenerate [COMPATIBILITY.md](COMPATIBILITY.md) with the new
       version, and have one CI job fetch psd-tools' files (`MINIPSD_PSD_TOOLS_FILES`; done: `linux-gcc`), so that
       Photoshop's ZIP files are checked through zlib there too, not only locally.
-- [ ] **S4.11** Release **0.3.1** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md): additions and a fix,
+- [x] **S4.11** Release **0.3.1** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md): additions and a fix,
       so a PATCH. `MINIPSD_STATIC` without unused-function warnings, `MINIPSD_NO_READER` and
       `MINIPSD_NO_WRITER`, the typed setters (S6.20), the pixel aspect ratio (S6.21); the release
       workflow checks CI's run on the tagged commit instead of running it again. Before it:
       [COMPATIBILITY.md](COMPATIBILITY.md) regenerated with the version (done), the PR merged
       and CI green on `master`.
+- [x] **S4.12** Release **0.4.0** per [GITHUB-RELEASE.md](GITHUB-RELEASE.md): breaking, so a
+      MINOR (`composite_alpha` for every composite, the compression constants renumbered,
+      `minipsd_read` giving transparency as the file has it). The libvips plugin (S7.2 to S7.6),
+      layered documents written through libvips included, and its zip; layers without transparency, a layer's own compression, the row functions;
+      the fixes the pre-release review found (a mask's unbounded rectangle, an RLE count a PSD
+      cannot hold, `minipsd_write`'s cut rows). Prepared as 0.3.2, never tagged, then broken.
+      Before it: [COMPATIBILITY.md](COMPATIBILITY.md) regenerated with the version, the PR merged
+      and CI green on `master`; Platemaker sets `composite_alpha = 1` when it moves to 0.4.0.
 
 ## 5. Round trip and conveniences
 
@@ -521,9 +529,11 @@ feature; a supplied composite needs nothing. See
 libvips is where minipsd is meant to be used: as a loader and saver of PSD and PSB, and in
 programs that render a composite with libvips and write the layers with minipsd. Steps 7.2 on are
 the loader and saver, built first as a plugin in this repository (`libvips-plugin/`): libvips
-foreign classes registered by the program that links them, then, if libvips' prebuilt builds
-load modules, a loadable module. Platemaker uses it, which is the proof; a pull request to libvips
-comes at the end of stage 7, or of 8, with the same files.
+foreign classes registered by the program that links them. libvips' prebuilt Windows builds load
+no modules (8.18.7: `enable modules: false`), so a loadable module waits for a Linux user who wants
+one. Platemaker uses it, which is the proof. It stays a plugin: libvips' CONTRIBUTING.md accepts no
+contribution made with generative AI, and minipsd is made with it, so no pull request to libvips
+follows.
 
 - [x] **S7.1** `examples/vips_composite.c`: a document's composite rendered with libvips
       (`vips_composite`, blend keys mapped as in the spec's
@@ -537,7 +547,7 @@ comes at the end of stage 7, or of 8, with the same files.
       is read back and its composite must be the render, which is the test. CI's `msvc` job
       runs it; locally it also runs on `tests/fixtures/Test-g-example.psd`. Tracking libvips'
       master is left for later.
-- [ ] **S7.2** *design.* minipsd as a libvips loader and saver:
+- [x] **S7.2** *design.* minipsd as a libvips loader and saver:
       - **Loading.** What the image is: the composite by default, one layer by an option, its
         offset in the metadata. Metadata: ICC profile, resolution, interpretation, sample
         format.
@@ -546,18 +556,68 @@ comes at the end of stage 7, or of 8, with the same files.
       - **What minipsd still needs.** The row provider (S7.5);
         the metadata ImageMagick gives (S6.17, P1).
       - **Building.** The build dependency: pkg-config, a meson wrap.
-- [ ] **S7.3** Loader: a PSD or PSB as a libvips image, the composite or a layer, decoded in
+      As done: registered by the program (`minipsd_vips_init`), no module; the composite by
+      default, `layer=N` with its offset; the samples as libvips holds them (CMYK's ink the other
+      way round, bitmap `B_W`, indexed through its palette: libvips has no indexed image), the
+      rest as stored, what libvips cannot hold `MULTIBAND`, nothing converted; minipsd compiled
+      in privately; zlib libvips' own; libvips from `cmake/minipsd_libvips.cmake` or the program.
+      Pages as layers, and a meson wrap, wait for a user who asks.
+- [x] **S7.3** Loader: a PSD or PSB as a libvips image, the composite or a layer, decoded in
       strips; ZIP through zlib.
       *Done when:* psd-tools' files that minipsd decodes load with the samples psd-tools gives;
       a large PSB loads with memory bounded by strips, not by the image.
-- [ ] **S7.4** Saver: an image as a one-layer PSD or PSB with its composite, the image whole in
-      memory; RLE, or ZIP through zlib.
+      As done: `vips.plugin` compares every composite and layer of psd-tools' set (and
+      `tests/fixtures`) with minipsd's decode, which `psd-tools-roundtrip` holds to psd-tools'
+      (318 of 319 composites, 1330 of 2280 layers; the rest refused by both: a truncated file and
+      950 empty layers); a 1024 x 30000 PSD read with `access=sequential` leaves libvips holding
+      under 2 MB of its 60 MB (all of it when the loader is not sequential). A PSD, not a PSB: the same bands.
+- [x] **S7.4** Saver: an image as a one-layer PSD or PSB with its composite, the image whole in
+      memory; RLE, or ZIP through zlib. (S7.5 changed what it writes and how; see there.)
       *Done when:* psd-tools and GIMP open what it writes, and the loader reads it back the same.
-- [ ] **S7.5** Row provider (`W6`): a layer's or the composite's rows asked from a callback instead
+      As done: `psdsave`, `_buffer`, `_target`; options `psb`, `zip`, `layer_name`. psd-tools
+      opens every file the test writes, its composite the layer (but where alpha is partial, by
+      the matte's rounding), full cyan as (255, 0, 0, 0); GIMP opens them, by hand. GIMP showed a
+      32-bit file's transparency as an extra channel: the writer now names it as Photoshop does
+      where the layer count cannot (see the changelog).
+- [x] **S7.5** Row provider (`W6`): a layer's or the composite's rows asked from a callback instead
       of an `pixels` pointer, twice with RLE or ZIP (sizing, then writing), so it must be
       deterministic, as libvips pipelines are. The saver then streams.
       *Done when:* the saver writes an image larger than the memory it is given, the bytes the
       same as from memory.
+      As done: not a row provider. libvips hands a saver an image it may read once, top to
+      bottom, and a provider would be asked for every channel's rows twice, so the saver encodes
+      each channel once, as its rows come, and gives minipsd the channels as stored: the row
+      functions made public for it (`minipsd_encode_row`, `minipsd_predict_row`,
+      `minipsd_matte_row`), ZIP through a zlib stream a channel. Memory is about the file's size,
+      not the image's: 20000 x 20000 RGB, an 813 MB file, 1994 MB to 1215 MB, 2.1 s to 1.5 s;
+      not below the file, so a file larger than memory still fails (temporary files were
+      declined). Found on the way, and done with it: an image without alpha is written flat (no
+      layer, no transparency, as Photoshop does; `layered` keeps a layer without it), so
+      `composite_alpha` now governs every composite and a layer may be `no_alpha` (breaking);
+      `compression` (`rle`, `zip`, `zip-predicted`, `none`) in place of `zip`, and a layer's own
+      compression in minipsd (the constants renumbered, breaking); a PSB chosen by itself when a
+      PSD cannot hold the file; the plugin released as a zip. psdsave is now as fast as
+      ImageMagick's `magicksave` or faster, its files 4 to 6 times smaller, with the right
+      pixels where magicksave's are wrong (alpha) or it fails (20000 x 20000).
+- [x] **S7.6** A layered document saved through libvips: several images, each a layer with its
+      name, position, opacity, visibility and blend mode, and the composite, in one call, so
+      that a program uses minipsd's writer through libvips as it reads through it (`psdload`
+      gives every layer, with `layer`, and its `psd-layer-*` fields). A saver takes one image,
+      so this is an operation over an array of images, as `vips_composite` is.
+      *Done when:* Platemaker's template (a "Template" layer and an empty "Layer" above it) is
+      written through it, the bytes those of `minipsd_write` from the same layers; a file's
+      layers loaded with `psdload` and saved with it come back with their pixels and fields.
+      As done: `psdsave_layers` (`_buffer`, `_target`; `minipsd_vips_psdsave_layers` in C), each
+      record's look from the `psd-layer-*` fields psdload sets, masks (`psd-layer-mask`) and
+      groups (records with `psd-layer-section`) too, Blend If left out; the composite given or
+      composed by `vips_composite` (masks, groups' visibility and opacity in the alpha); the
+      canvas by `width`, `height`, `left`, `top`. psdload now loads every record (one without
+      pixels as one transparent pixel with `psd-layer-empty`): psd-tools' set, 2280 of 2280
+      layers. Platemaker's template is byte for byte `minipsd_write`'s, and a document with a
+      placed, half-opaque, multiplied, clipped layer, a disabled mask and a group comes back the
+      same bytes; Platemaker writes its template through it. The plugin's names became its own
+      (`MinipsdVips*`, `minipsd_vips_*`): libvips' CONTRIBUTING.md accepts no contribution made
+      with generative AI, so it never moves into libvips. The zip carries its SBOM fragment.
 
 ## 8. Test quality
 
@@ -583,7 +643,11 @@ Large cases. Each would start with a *design* step, and only when a real consume
 
 - The composed composite learning blend modes, masks, clipping or groups: a supplied composite
   is the way to get them right.
-- Layer-at-a-time producer (`W8`); the row provider (`W6`) is S7.5.
+- Layer-at-a-time producer (`W8`); the row provider (`W6`), which S7.5 did without.
+- A streaming deflate (init, feed, finish) beside `minipsd_deflate_fn`, so the writer holds no
+  ZIP channel whole; and the writer keeping each layer row's size, so RLE encodes a row twice,
+  not three times. Both only when a program writing with minipsd itself needs them: the plugin
+  encodes its channels itself.
 - Parallel encoding split API (`W9`).
 - Segment output for zero-copy saves (`E3`).
 - In-place patching of fixed-size fields.

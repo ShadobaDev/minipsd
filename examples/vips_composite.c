@@ -31,7 +31,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define RGBA 4     /* bands: 8-bit red, green, blue, alpha */
+#define RGB  3     /* bands: 8-bit red, green, blue */
+#define RGBA 4     /* ... and alpha */
 #define FULL 255   /* an 8-bit sample's full value */
 
 /* The whole file in a new buffer; NULL when it cannot be read. */
@@ -83,10 +84,17 @@ static VipsBlendMode blend_mode(const char key[4], int *mapped)
 /* A layer's pixels as a libvips image, wrapped without a copy, its opacity in its alpha. */
 static VipsImage *layer_image(const minipsd_layer *l)
 {
-    const int  w = (int)(l->right - l->left), h = (int)(l->bottom - l->top);
+    const int  w = (int)(l->right - l->left), h = (int)(l->bottom - l->top), bands = l->no_alpha ? RGB : RGBA;
     VipsImage *wrapped, *srgb, *out;
-    wrapped = vips_image_new_from_memory(l->pixels, (size_t)w * (size_t)h * RGBA, w, h, RGBA, VIPS_FORMAT_UCHAR);
+    wrapped = vips_image_new_from_memory(l->pixels, (size_t)w * (size_t)h * (size_t)bands, w, h, bands, VIPS_FORMAT_UCHAR);
     if (!wrapped) return NULL;
+    if (l->no_alpha) {   /* a layer without transparency: opaque, so that every layer is RGBA */
+        VipsImage *opaque;
+        const int  rc = vips_bandjoin_const1(wrapped, &opaque, FULL, NULL);
+        g_object_unref(wrapped);
+        if (rc) return NULL;
+        wrapped = opaque;
+    }
     if (vips_copy(wrapped, &srgb, "interpretation", VIPS_INTERPRETATION_sRGB, NULL)) {   /* RGBA, not 4 bands of anything */
         g_object_unref(wrapped);
         return NULL;
@@ -127,7 +135,7 @@ static uint8_t *render(const minipsd_doc *d, size_t *unmapped)
             || l->right <= l->left || l->bottom <= l->top)
             continue;
         if (!(in[n] = layer_image(l))) goto done;
-        modes[n - 1] = blend_mode(l->blend_mode, &mapped);
+        modes[n - 1] = (int)blend_mode(l->blend_mode, &mapped);
         *unmapped   += !mapped;
         x[n - 1]     = (int)l->left;   /* where the layer goes; it may reach past the canvas */
         y[n - 1]     = (int)l->top;
@@ -199,12 +207,12 @@ static void make_layers(minipsd_layer layers[4])
     int x, y;
     for (y = 0; y < H; ++y)
         for (x = 0; x < W; ++x) {   /* a gradient: red across, green down, opaque */
-            uint8_t *p = background + ((size_t)y * W + x) * RGBA;
+            uint8_t *p = background + ((size_t)y * W + (size_t)x) * RGBA;
             p[0] = (uint8_t)(x * FULL / (W - 1)); p[1] = (uint8_t)(y * FULL / (H - 1)); p[2] = 160; p[3] = FULL;
         }
     for (y = 0; y < 128; ++y)
         for (x = 0; x < 128; ++x) {   /* an orange disc, transparent around it */
-            uint8_t *p = disc + ((size_t)y * 128 + x) * RGBA;
+            uint8_t *p = disc + ((size_t)y * 128 + (size_t)x) * RGBA;
             const int dx = x - 64, dy = y - 64;
             p[0] = 255; p[1] = 150; p[2] = 40; p[3] = dx * dx + dy * dy < 60 * 60 ? FULL : 0;
         }
@@ -258,6 +266,7 @@ int main(int argc, char **argv)
     if (!flat) { fprintf(stderr, "vips_composite: libvips: %s\n", vips_error_buffer()); goto done; }
     doc->composite        = flat;    /* ... and minipsd writes them with that image */
     doc->composite_matted = 0;       /* straight alpha: the writer mattes it, as the format wants */
+    doc->composite_alpha  = 1;       /* RGBA: it has transparency */
 
     f = fopen(argv[1], "wb");
     if (!f) rc = MINIPSD_ERR_OPEN;

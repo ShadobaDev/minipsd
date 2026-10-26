@@ -45,7 +45,7 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
     layers[1].name = "Layer";    layers[1].pixels = NULL; layers[1].opacity = 255; layers[1].hidden = 0;
     layers[1].blending_ranges = &blend_if; layers[1].blending_range_count = 1;
     memset(&doc, 0, sizeof doc);
-    doc.width = 3; doc.height = 2; doc.dpi = 300.0; doc.layers = layers; doc.layer_count = 2;
+    doc.width = 3; doc.height = 2; doc.dpi = 300.0; doc.layers = layers; doc.layer_count = 2; doc.composite_alpha = 1;
 
     /* Every function, so a static build has none unused. */
     if (!minipsd_error_string(MINIPSD_OK)[0] || minipsd_doc_check(&doc, NULL) != MINIPSD_OK)
@@ -74,6 +74,16 @@ int minipsd_c_smoke(unsigned char *out, size_t capacity, size_t *size)
     } while (rc == MINIPSD_MORE);
     if (rc != MINIPSD_OK || pulled != b.size || memcmp(again, b.data, b.size) != 0)
         return -102;
+
+    /* A row encoded, a row matted and a row predicted by the caller, as the writer does them. */
+    {
+        uint8_t row[MINIPSD_ROW_BOUND(3, 8)], copy[sizeof px];
+        memcpy(copy, px, sizeof copy);
+        if (minipsd_encode_row(MINIPSD_RLE, 8, px, 4, 3, row, sizeof row, &n) != MINIPSD_OK || !n
+            || minipsd_matte_row(MINIPSD_MODE_RGB, 8, copy, 3) != MINIPSD_OK
+            || minipsd_predict_row(8, px, 4, 3, row, sizeof row) != MINIPSD_OK)
+            return -126;
+    }
 
     /* The reader, over the bytes just written: the file, its resources, its layers, their pixels and
        their blocks, the composite. */

@@ -114,9 +114,9 @@ cpack --config build/package/CPackConfig.cmake -G DEB
 Check and install the `.deb`:
 
 ```bash
-dpkg-deb -I dist/libminipsd-dev_0.2.0_all.deb       # metadata
-dpkg-deb -c dist/libminipsd-dev_0.2.0_all.deb       # files
-sudo apt install ./dist/libminipsd-dev_0.2.0_all.deb
+dpkg-deb -I dist/libminipsd-dev_0.4.0_all.deb       # metadata
+dpkg-deb -c dist/libminipsd-dev_0.4.0_all.deb       # files
+sudo apt install ./dist/libminipsd-dev_0.4.0_all.deb
 sudo apt remove libminipsd-dev
 ```
 
@@ -136,6 +136,7 @@ sudo tar -xzf dist/minipsd-0.1.0.tar.gz --strip-components=1 -C /usr/local
 | `minipsd-cxx17` (build target) | the header compiles warning-free as C++17 |
 | `minipsd-include-check` (build target) | `minipsd.h` compiles alone, then with its implementation, leaving no internal function unused |
 | `psd-tools-roundtrip` | documents written through minipsd, read back by `psd-tools` |
+| `vips.plugin` | with `MINIPSD_VIPS_PLUGIN`: documents and every file at hand loaded through libvips (composite and layers) against minipsd's decode, saved and read back, a tall image read in bands, layered documents saved with `psdsave_layers` (masks, groups, the composite composed) |
 | `install` | `cmake --install` into the build tree (`tests/prefix/`) |
 | `consumer-copy` | a project with `include/` copied in |
 | `consumer-subdirectory` | `add_subdirectory` (git submodule) |
@@ -154,6 +155,7 @@ paths also check the SBOM fragment's version and that it lists the headers.
 | `MINIPSD_INSTALL` | ON only as the top-level project | install rules |
 | `MINIPSD_REQUIRE_PSD_TOOLS` | OFF (CI: ON) | fail the configure instead of skipping the round trip |
 | `MINIPSD_VIPS_EXAMPLE` | OFF (CI: ON in `msvc`) | build and run `examples/vips_composite.c`: on Windows fetch libvips' prebuilt "web" build (8.18.7, 11 MB, pinned by hash), elsewhere find libvips with pkg-config; with `tests/fixtures/Test-g-example.psd` present, also on that file |
+| `MINIPSD_VIPS_PLUGIN` | OFF (CI: ON in `msvc`) | build `minipsd::vips`, the libvips plugin (`libvips-plugin/`), and with the tests `vips.plugin`; libvips as for `MINIPSD_VIPS_EXAMPLE`, plus its zlib (on Windows zlib 1.3.1's headers, pinned by hash) |
 | `MINIPSD_PSD_TOOLS_FILES` | OFF (CI: ON in `linux-gcc`) | fetch psd-tools' 315 test files, 278 PSD and 37 PSB (v1.25.0, about 22 MB, pinned by hash) and read every one |
 | `MINIPSD_TEST_FIXTURES` | ON (`linux-coverage`: OFF) | read the local PSDs in `tests/fixtures/` too; off, a local coverage run measures what CI's does |
 | `MINIPSD_CLANG_TIDY` | empty (`linux-tidy`: `clang-tidy`) | run clang-tidy on the test targets |

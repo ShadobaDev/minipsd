@@ -24,7 +24,7 @@ Procreate open as layered documents.
 
 # Status
 
-**release: 0.3.1**
+**release: 0.4.0**
 The API is [include/minipsd.h](include/minipsd.h); the implementation is in
 [include/minipsd/](include/minipsd/).
 
@@ -84,6 +84,10 @@ decode through the caller's inflate (zlib's `uncompress`, libdeflate or miniz: m
 no deflate), and are copied as they are when such a file is read and written back. A file can be read from its start only, and untrusted
 files are bounded by caller limits. How it does on 315 files from
 other programs: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+
+In a program built on libvips, [libvips-plugin/](libvips-plugin/) makes minipsd its PSD and PSB
+loader and saver: a file's composite or any layer in, one image or several as layers out; see
+the manual's [PSD in libvips](docs/MANUAL.md#psd-in-libvips-the-plugin).
 
 ## Adding it to a project
 

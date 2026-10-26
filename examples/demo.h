@@ -43,6 +43,7 @@ static void demo_init(demo *d)
     memset(&d->doc, 0, sizeof d->doc);
     d->doc.width = DEMO_W; d->doc.height = DEMO_H; d->doc.dpi = 300.0;
     d->doc.layers = d->layers; d->doc.layer_count = 2; d->doc.compression = MINIPSD_RLE;
+    d->doc.composite_alpha = 1;   /* the layers have transparency, and so has the composite composed of them */
 }
 
 #endif /* EXAMPLES_DEMO_H */

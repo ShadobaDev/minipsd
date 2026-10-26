@@ -51,7 +51,7 @@
  *
  * \par What it writes
  * A document in any colour mode (minipsd_doc.color_mode) at the depths Photoshop has it, as a PSD
- * or (minipsd_doc.format) a PSB, with a transparency channel but in the flat modes (bitmap,
+ * or (minipsd_doc.format) a PSB, with or without transparency (none in the flat modes: bitmap,
  * indexed, multichannel, which have no layers); no colour is converted:
  * - one or more layers, bottom first, each a rectangle anywhere on or off the canvas (by default
  *   the full canvas) or empty, with a name, opacity, visibility, blend key, clipping and flags;
@@ -60,9 +60,11 @@
  * - the composite (merged) image, which is what a reader that ignores layers shows: the caller's
  *   own render (minipsd_doc.composite), the right way, since flattening layers is rendering; or,
  *   without one, a best effort with no guarantee: the visible layers blended with straight-alpha
- *   "over" at their rectangles, clipped to the canvas.  Its transparency rides as the first extra
- *   channel, flagged by a negative layer count, and its colour is matted against white
- *   (c * a + 255 * (1 - a)), as Photoshop stores it and readers expect to undo;
+ *   "over" at their rectangles, clipped to the canvas.  Its colour is matted against white
+ *   (c * a + 255 * (1 - a)), as Photoshop stores it and readers expect to undo; its transparency,
+ *   when it has one (minipsd_doc.composite_alpha), rides as the first extra channel, flagged by a
+ *   negative layer count.  Without layers and without transparency the file is flat, as
+ *   Photoshop saves an image without layers;
  * - the resolution, in pixels per inch (resource 1005);
  * - an optional ICC profile (resource 1039); without one, readers assume sRGB;
  * - resources and the global layer mask and blocks kept from a file, as they are.
@@ -79,8 +81,9 @@
  * Bytes come out in order, never seeking back, so a pipe or a socket works as well as a file:
  * pulled by the caller into its own buffer (minipsd_writer_fill), or pushed to a callback
  * (minipsd_write).  The pull writer allocates nothing; its workspace, from the caller, holds a
- * size table (layer_count * 6 numbers), the composite's row sizes and one composite row.
- * minipsd_write allocates that workspace once.  Layer pixels and a supplied composite are read
+ * size table (layer_count * 7 numbers), the composite's row sizes and one composite row, and,
+ * when a layer is ZIP, its largest channel twice (raw, then deflated).  minipsd_write allocates
+ * that workspace once, with a buffer for the widest row.  Layer pixels and a supplied composite are read
  * in place, never copied whole.
  *
  * \par Project
@@ -108,12 +111,12 @@
  * The single source of the project version: CMakeLists.txt reads these three lines.
  */
 #define MINIPSD_VERSION_MAJOR 0
-#define MINIPSD_VERSION_MINOR 3
-#define MINIPSD_VERSION_PATCH 1
+#define MINIPSD_VERSION_MINOR 4
+#define MINIPSD_VERSION_PATCH 0
 
 #define MPSD__STR(x)  #x
 #define MPSD__XSTR(x) MPSD__STR(x)
-/** \brief The version as a string literal, e.g. "0.3.1". */
+/** \brief The version as a string literal, e.g. "0.4.0". */
 #define MINIPSD_VERSION_STRING \
     MPSD__XSTR(MINIPSD_VERSION_MAJOR) "." MPSD__XSTR(MINIPSD_VERSION_MINOR) "." MPSD__XSTR(MINIPSD_VERSION_PATCH)
 
@@ -233,16 +236,19 @@ enum {
 };
 
 /**
- * \brief Channel compression.  Zero is RLE, so a zero-initialised document gets the compact one.
+ * \brief Channel compression.  Zero is the default: a document's RLE, the compact one; a layer's
+ *        the document's.
  *
  * ZIP is for the layers' and masks' channels, through the caller's deflate
- * (minipsd_write_opts.deflate); the composite is then RLE, as Photoshop writes it.
+ * (minipsd_write_opts.deflate); the composite is RLE then, as Photoshop writes it, and raw only in
+ * a raw document.
  */
 enum {
-    MINIPSD_RLE = 0,          /*!< PackBits run-length encoding.                               */
-    MINIPSD_RAW = 1,          /*!< Uncompressed.                                               */
-    MINIPSD_ZIP = 2,          /*!< zlib, through the caller's deflate.                         */
-    MINIPSD_ZIP_PREDICTED = 3 /*!< zlib of each sample's difference from its left neighbour,
+    MINIPSD_COMPRESSION_DEFAULT = 0, /*!< A document's: RLE; a layer's: the document's.             */
+    MINIPSD_RLE = 1,          /*!< PackBits run-length encoding.                               */
+    MINIPSD_RAW = 2,          /*!< Uncompressed.                                               */
+    MINIPSD_ZIP = 3,          /*!< zlib, through the caller's deflate.                         */
+    MINIPSD_ZIP_PREDICTED = 4 /*!< zlib of each sample's difference from its left neighbour,
                                    as Photoshop writes its 16-bit layers.                      */
 };
 
@@ -374,8 +380,9 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
     const uint8_t *pixels;      /*!< (right - left) * (bottom - top) pixels, rows top down, each the
                                     mode's colour channels then transparency (RGB: R, G, B, A),
                                     straight (not premultiplied) alpha, as minipsd_target_interleaved
-                                    decodes them; NULL means an empty layer.  A sample is a byte, or
-                                    with depth 16 a uint16_t in host order (two bytes).            */
+                                    decodes them; without transparency (no_alpha) the colour
+                                    channels only.  NULL means an empty layer.  A sample is a byte,
+                                    or with depth 16 a uint16_t in host order (two bytes).         */
     uint8_t        opacity;     /*!< 255 is opaque, 0 is fully transparent.                            */
     uint8_t        hidden;      /*!< Non-zero: the layer starts hidden (and stays out of the composite). */
     int32_t        top, left, bottom, right; /*!< The layer's rectangle on the canvas, as in
@@ -418,12 +425,21 @@ typedef struct minipsd_layer {  /* NOLINT(clang-analyzer-optin.performance.Paddi
                                     file's names say, they are written as they are, this one and
                                     a kept 'luni'; once it changes, the writer's own.  Size 0 and
                                     no kept 'luni': the writer's own.                            */
+    uint8_t        no_alpha;    /*!< Non-zero: the layer has no transparency: pixels hold the
+                                    colour channels only, and it is written without a transparency
+                                    channel (composed as opaque).  A stored layer says it by its
+                                    transparency of size 0 instead.  minipsd_read sets it for a
+                                    layer whose file has none.                                     */
+    int            compression; /*!< This layer's channels, its mask's too: MINIPSD_RLE, _RAW,
+                                    _ZIP or _ZIP_PREDICTED (a ZIP one with
+                                    minipsd_write_opts.deflate); 0 (MINIPSD_COMPRESSION_DEFAULT):
+                                    the document's.  Stored channels keep their own.               */
 } minipsd_layer;
 
 /**
  * \brief A whole document: canvas, resolution, layers and options.
  *
- * Zero-initialise it and set the fields you need; zero compression selects RLE.  Pointers are
+ * Zero-initialise it and set the fields you need; zero compression is the default, RLE.  Pointers are
  * borrowed for the duration of the write call.
  */
 typedef struct minipsd_doc {
@@ -435,11 +451,14 @@ typedef struct minipsd_doc {
                                               a flat file, its image the composite.           */
     const uint8_t       *icc;            /*!< Optional ICC profile; NULL means none (sRGB).  */
     size_t               icc_size;       /*!< Size of icc in bytes; 0 when icc is NULL.      */
-    int                  compression;    /*!< MINIPSD_RLE, MINIPSD_RAW, or MINIPSD_ZIP(_PREDICTED)
-                                              with minipsd_write_opts.deflate.                */
+    int                  compression;    /*!< The layers' channels: MINIPSD_RLE (or 0, the
+                                              default), MINIPSD_RAW, or MINIPSD_ZIP(_PREDICTED)
+                                              with minipsd_write_opts.deflate; a layer may have
+                                              its own (minipsd_layer.compression).  The
+                                              composite: raw when this is, else RLE.          */
     const uint8_t       *composite;      /*!< The composite (merged) image: width * height
-                                              pixels laid out as a layer's (the mode's colour
-                                              channels then transparency), rows top down,
+                                              pixels, the mode's colour channels then, with
+                                              composite_alpha, transparency; rows top down,
                                               straight alpha, written
                                               whatever the layers hold.  NULL: composite_stored
                                               is copied; without it too, composed from the
@@ -491,13 +510,15 @@ typedef struct minipsd_doc {
                                               (composite_alpha) and alpha or spot channels, in
                                               the file's order.  Ignored without
                                               composite_stored.                               */
-    uint8_t              composite_alpha; /*!< Non-zero: composite_stored's fourth channel is
-                                              transparency, and the layer count is written
-                                              negative; zero: any fourth channel is an alpha
-                                              channel, the count positive.  Ignored without
-                                              composite_stored: a supplied or composed
-                                              composite always has transparency.  minipsd_read
-                                              sets the file's.                                 */
+    uint8_t              composite_alpha; /*!< Non-zero: the composite has transparency, and the
+                                              layer count is written negative: a supplied
+                                              composite's pixels end with it, a composed one
+                                              keeps the layers', composite_stored's channel
+                                              after the colour ones is it.  Zero: the colour
+                                              channels only, the count positive (a composed one
+                                              matted against white; a stored one's further
+                                              channels are alpha channels).  Not in the flat
+                                              modes.  minipsd_read sets the file's.            */
     uint16_t             color_mode;     /*!< MINIPSD_MODE_*: what the samples are; 0 is RGB
                                               (bitmap with depth 1).  minipsd_read sets the
                                               file's.                                         */
@@ -710,8 +731,8 @@ MINIPSDDEF int minipsd_doc_check(const minipsd_doc *doc, const minipsd_write_opt
 /**
  * \brief Writes a document as PSD (or PSB) through a callback.
  *
- * The callback receives the whole file front to back, in pieces of up to 4 KiB, and is never
- * asked to seek.  After it returns 0 it is not called again.  The same document always produces
+ * The callback receives the whole file front to back, in pieces of up to 4 KiB (or of the
+ * widest row's MINIPSD_ROW_BOUND, when that is more), and is never asked to seek.  After it returns 0 it is not called again.  The same document always produces
  * the same bytes.  This is the pull writer driven to the end on a workspace from MINIPSD_MALLOC.
  *
  * \param doc  The document to write.
@@ -791,8 +812,10 @@ MINIPSDDEF uint64_t minipsd_writer_total(const minipsd_writer *w);
  * order, and returns at once: the writer never waits on anything, so it suits a non-blocking
  * target as well as a blocking one.  A target that took only part of the bytes is the caller's
  * business: keep the rest and send it before calling again.  Any cap works, 1 included; a call
- * re-encodes the row it stops in, so a buffer of a few rows (64 KiB is plenty) keeps that cost
- * negligible.  The bytes are those minipsd_write produces for the same document.
+ * re-encodes the row it stops in from its start, so a buffer of at least the widest row
+ * (MINIPSD_ROW_BOUND of its width and the depth: a row is one channel's, so 64 KiB holds every
+ * PSD row at 8 and 16 bits, and rows to about 16 000 px at 32) cuts each row at most once.
+ * The bytes are those minipsd_write produces for the same document.
  *
  * \param w        A writer from minipsd_writer_init.
  * \param buf      Receives up to cap bytes.
@@ -804,6 +827,84 @@ MINIPSDDEF uint64_t minipsd_writer_total(const minipsd_writer *w);
  * \retval MINIPSD_ERR_ARG w or produced is NULL, or buf is NULL with cap above 0.
  */
 MINIPSDDEF int minipsd_writer_fill(minipsd_writer *w, void *buf, size_t cap, size_t *produced);
+
+/** \brief The bytes a row of width samples of depth bits (1, 8, 16, 32) takes in a file, raw. */
+#define MINIPSD_ROW_BYTES(width, depth) (((uint64_t)(width) * (uint64_t)(depth) + 7) / 8)
+
+/** \brief The most bytes minipsd_encode_row writes for that row: raw, or PackBits' worst case, a
+    header byte for each 128 bytes. */
+#define MINIPSD_ROW_BOUND(width, depth) (MINIPSD_ROW_BYTES(width, depth) + (MINIPSD_ROW_BYTES(width, depth) + 127) / 128)
+
+/**
+ * \brief Encodes one row of one channel as minipsd_write encodes it: PackBits, or raw, its samples
+ *        big-endian as the file stores them.
+ *
+ * With every row of a channel encoded so, its compression marker (two bytes, big-endian: 1 for
+ * PackBits, 0 raw) and, for PackBits, each row's size ahead of the rows (two bytes in a PSD, four
+ * in a PSB), they are the channel as a file stores it: what minipsd_layer.stored and
+ * minipsd_doc.composite_stored take, written then as they are.  A program that holds its image
+ * whole or reads it once, top to bottom, encodes each channel once this way, where minipsd_write,
+ * which keeps nothing between pieces, encodes a row again for its size.
+ *
+ * \param compression MINIPSD_RLE (or 0, the default) or MINIPSD_RAW.
+ * \param depth       Bits a sample: 8, 16 (a uint16_t in host order), 32 (a float); at 1, the
+ *                    row already packed, eight pixels a byte, step 1.
+ * \param samples     The row's first sample.
+ * \param step        Bytes from a sample to the next: the pixel's size for one channel out of
+ *                    interleaved pixels.
+ * \param width       Samples in the row.
+ * \param out         Receives the row; cap bytes, MINIPSD_ROW_BOUND(width, depth) always enough.
+ * \param cap         The size of out.
+ * \param size        Receives the bytes written; with MINIPSD_ERR_SIZE, the bytes it needs.
+ * \return MINIPSD_OK or an error code.
+ *
+ * \retval MINIPSD_ERR_ARG  samples, out or size is NULL, the compression is not MINIPSD_RLE or
+ *                          MINIPSD_RAW, or the depth not 1, 8, 16 or 32.
+ * \retval MINIPSD_ERR_SIZE The row does not fit in cap bytes.
+ */
+MINIPSDDEF int minipsd_encode_row(int compression, int depth, const void *samples, size_t step, uint32_t width,
+                                  uint8_t *out, size_t cap, size_t *size);
+
+/**
+ * \brief Mattes a row of a composite against white in place, as minipsd_write stores a supplied
+ *        composite with transparency: c * a + max * (max - a), rounded (at 32 bits c * a + 1 - a).
+ *
+ * minipsd_write mattes an RGB composite only; every other mode is left as given, and so it is
+ * here.  A program that encodes a composite itself (minipsd_encode_row, for composite_stored)
+ * mattes each row first, as minipsd_write would.
+ *
+ * \param color_mode MINIPSD_MODE_*.
+ * \param depth      Bits a sample: 8, 16 or 32.
+ * \param pixels     width pixels: the mode's colour channels, then transparency.
+ * \param width      Pixels in the row.
+ * \return MINIPSD_OK, or MINIPSD_ERR_ARG when pixels is NULL or the depth not 8, 16 or 32.
+ */
+MINIPSDDEF int minipsd_matte_row(int color_mode, int depth, void *pixels, uint32_t width);
+
+/**
+ * \brief A row of one channel as minipsd_write hands it to the deflate for MINIPSD_ZIP_PREDICTED:
+ *        its samples big-endian, each the difference from its left neighbour.
+ *
+ * At 8 bits the differences are the bytes'; at 16 the samples'; at 32 the row is first shuffled
+ * (every sample's first byte, then every second byte, and so on) and the differences are the
+ * shuffled bytes'.  Every row of a channel so, deflated as one zlib stream after the compression
+ * marker (two bytes, big-endian: 3), is the channel as a file stores it, for
+ * minipsd_layer.stored.  For MINIPSD_ZIP, without prediction, the rows are minipsd_encode_row's
+ * raw ones.  A program that deflates as rows come (zlib's deflate, fed row by row) holds no raw
+ * channel.
+ *
+ * \param depth   Bits a sample: 8, 16 (a uint16_t in host order) or 32 (a float).
+ * \param samples The row's first sample.
+ * \param step    Bytes from a sample to the next, as minipsd_encode_row's.
+ * \param width   Samples in the row.
+ * \param out     Receives the row: MINIPSD_ROW_BYTES(width, depth) bytes.
+ * \param cap     The size of out.
+ * \return MINIPSD_OK or an error code.
+ *
+ * \retval MINIPSD_ERR_ARG  samples or out is NULL, or the depth not 8, 16 or 32.
+ * \retval MINIPSD_ERR_SIZE cap is less than MINIPSD_ROW_BYTES(width, depth).
+ */
+MINIPSDDEF int minipsd_predict_row(int depth, const void *samples, size_t step, uint32_t width, uint8_t *out, size_t cap);
 #endif /* MINIPSD_NO_WRITER */
 
 #ifndef MINIPSD_NO_READER
@@ -1123,8 +1224,9 @@ typedef struct minipsd_decode_opts {
     int      keep_matte; /*!< Composite only: non-zero keeps the white matte, as stored.        */
     int      depth;      /*!< The target's bits a sample, which must be the file's
                               (minipsd_info.depth): 1, 0 or 8, 16, 32 (see minipsd_plane).      */
-    minipsd_inflate_fn inflate; /*!< Layers and masks: decodes ZIP channels (compression 2, and
-                              3 with prediction); NULL leaves them MINIPSD_ERR_UNSUPPORTED.      */
+    minipsd_inflate_fn inflate; /*!< Layers and masks: decodes ZIP channels (the file's marker 2,
+                              and 3 with prediction: MINIPSD_ZIP and MINIPSD_ZIP_PREDICTED
+                              when written); NULL leaves them MINIPSD_ERR_UNSUPPORTED.          */
     void    *inflate_user; /*!< Passed to inflate.                                               */
     uint8_t *scratch;    /*!< With inflate: where a ZIP channel is inflated whole, even for a
                               band; at least the layer's (or mask's) height times rows of

@@ -21,7 +21,8 @@ int main(void)
     static uint8_t rgba[64 * 64 * 4];   /* straight alpha, rows top down */
     /* Fields left out are zero, the defaults: visible, the full canvas, RLE. */
     minipsd_layer  layer = {.name = "Hello", .pixels = rgba, .opacity = 255};
-    minipsd_doc    doc   = {.width = 64, .height = 64, .dpi = 72.0, .layers = &layer, .layer_count = 1};
+    minipsd_doc    doc   = {.width = 64, .height = 64, .dpi = 72.0, .layers = &layer, .layer_count = 1,
+                          .composite_alpha = 1};   /* composed from the layer, with its transparency */
     FILE          *f;
     int            i, rc;
 

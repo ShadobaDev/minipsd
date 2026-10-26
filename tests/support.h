@@ -97,6 +97,9 @@ Bytes unpack(Reader &r, std::size_t packed, std::size_t expected)
     return out;
 }
 
+// The compression markers a file stores (the format's numbers, not the API's MINIPSD_*).
+constexpr int RAW_MARKER = 0, RLE_MARKER = 1, ZIP_MARKER = 2, ZIP_PREDICTED_MARKER = 3;
+
 // One channel's rows (raw or RLE, counts read by the caller), scattered into interleaved RGBA.
 void readPlane(Reader &r, int compression, const std::vector<std::uint16_t> &counts,
                std::uint32_t w, std::uint32_t h, Bytes &rgba, int offset)
@@ -232,6 +235,7 @@ minipsd_doc docOf(std::uint32_t w, std::uint32_t h, const minipsd_layer *layers,
 {
     minipsd_doc d{};
     d.width = w; d.height = h; d.dpi = 300.0; d.layers = layers; d.layer_count = n;
+    d.composite_alpha = n != 0;   // with layers: composed with their transparency, as most tests want
     return d;
 }
 

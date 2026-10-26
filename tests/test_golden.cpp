@@ -136,8 +136,10 @@ TEST(MinipsdGoldenTest, OutputMatchesTheBytesOf010)
 
     for (const Case &t : cases) {
         SCOPED_TRACE(t.golden.name);
+        minipsd_doc doc = t.doc;
+        doc.composite_alpha = 1;   // 0.1.0 always composed the composite with transparency
         Bytes out;
-        const int rc = minipsd_write(&t.doc, nullptr, collect, &out);
+        const int rc = minipsd_write(&doc, nullptr, collect, &out);
         ASSERT_EQ(rc, MINIPSD_OK) << minipsd_error_string(rc);
         EXPECT_EQ(sha256(out), t.golden.sha256) << "the bytes of '" << t.golden.name << "' changed";
         // encode(decode(x)) == x, through minipsd_read; the file's buffer is freed before writing.
@@ -153,9 +155,9 @@ TEST(MinipsdGoldenTest, OutputMatchesTheBytesOf010)
         ASSERT_EQ(minipsd_read(out.data(), out.size(), nullptr, &stored, &back, nullptr), MINIPSD_OK);
         EXPECT_EQ(write(*back), out) << "channels copied as stored: the same bytes";
         minipsd_doc_free(back);
-        EXPECT_EQ(pullTotal(t.doc), out.size()) << "the pull writer knows the size before writing";
+        EXPECT_EQ(pullTotal(doc), out.size()) << "the pull writer knows the size before writing";
         for (std::size_t cap : {std::size_t(1), std::size_t(7), std::size_t(4096), out.size(), std::size_t(0)})
-            EXPECT_EQ(pull(t.doc, cap), out) << "pulled " << (cap ? std::to_string(cap) : "random") << " bytes at a time";
+            EXPECT_EQ(pull(doc, cap), out) << "pulled " << (cap ? std::to_string(cap) : "random") << " bytes at a time";
     }
 }
 

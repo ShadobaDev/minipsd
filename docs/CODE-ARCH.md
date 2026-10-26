@@ -115,12 +115,26 @@ examples/                      the I/O implementations; built and run in CI, nev
   write_nonblocking.c          O_NONBLOCK pipe + poll (POSIX)
   read_file.c                  whole file into memory, described, every layer and the composite decoded
   resave.c                     minipsd_read with stored, one layer changed, written back: the round trip
+libvips-plugin/                minipsd as libvips' loader and saver (psdload, psdsave, psdsave_layers), registered by the program
+  minipsd_vips.h               the public header: minipsd_vips_init, MinipsdVipsCompression, minipsd_vips_psdsave_layers
+  minipsd_vips.c               minipsd_vips_init: registers both sides with libvips
+  foreign/                     the formats' code, as libvips lays out its own; names the plugin's (MinipsdVips*)
+    psdload.c                  psdload, _buffer, _source; minipsd's reader compiled in, private
+    psdsave.c                  psdsave and psdsave_layers, each _buffer, _target; minipsd's writer compiled in, private
+    psd.c, psd.h               internal: constants, helpers and the types both sides share
+  test_vips.c                  documents and files loaded and saved through libvips, against minipsd's decode
+cmake/
+  minipsd_libvips.cmake        libvips and its zlib for the example and the plugin: fetched on Windows, else pkg-config
+  minipsd_spdx.cmake           the SPDX fragment generator: minipsd's, and the plugin zip's
 tests/
   test_<module>.cpp            one file per module; detail modules are tested directly
   fuzz/                        the reader's libFuzzer target, run locally (linux-fuzz preset);
                                replay.c runs it on regressions/, the inputs that once failed
 tools/
   amalgamate.cmake             joins include/ into one file, a release artifact
+  package_vips.cmake           packs the plugin as released: minipsd-vips-X.Y.Z.zip, its SBOM fragment inside
+  check_spdx.cmake             checks an SPDX fragment against its files (checksums, every file listed)
+  compat_report.py             regenerates COMPATIBILITY.md
 ```
 
 | Module (section of `minipsd.h`) | Struct | Functions (sketch) | Implementation |
@@ -214,9 +228,11 @@ int      minipsd_writer_fill (minipsd_writer *w, void *buf, size_t cap, size_t *
 - **No staging buffer.** `fill` produces the current piece again from its start, through a sink
   that copies only the bytes not yet handed out and only as many as fit. A piece is one row at
   most (the ICC profile is copied, not re-encoded), so a call that stops inside a row costs one
-  more encoding of that row: nothing with a buffer of a few rows, quadratic in the row only for
-  tiny caps. The composite row being produced is blended once and kept. A staging buffer would
-  remove that cost at the price of workspace; it is left out until a caller needs tiny caps.
+  more encoding of that row: nothing with a buffer of at least the widest row's
+  `MINIPSD_ROW_BOUND`, which `minipsd_write` allocates; quadratic in the row for smaller caps
+  (4 KiB cut a 32-bit PSB row of 300 000 px about 290 times). The composite row being produced
+  is blended once and kept. A staging buffer would remove that cost at the price of workspace;
+  it is left out until a caller needs tiny caps.
   - Any `cap >= 1` works, so a caller with a 1-byte buffer still gets the whole file.
   - A non-blocking caller writes as much of `buf` as the target accepts and keeps the rest for
     the next round. The library never needs to know about partial writes.
@@ -539,6 +555,12 @@ int            composite_matted;   /* non-zero: composite is already matted, wri
   layers, and the writer mattes it. Only `composite_matted` skips it: `minipsd_read` sets it,
   because un-matting and matting again drift where alpha is low (8-bit matting merges nearby
   colours), and a file's own composite must come back pixel for pixel.
+- **Transparency is the document's to say** (`composite_alpha`, 0.4.0): every composite,
+  supplied, composed or stored, has transparency only when it is set; without it the composite
+  is the colour channels alone (composed: matted against white), as Photoshop writes an image
+  without layers or transparency. A layer's own is `no_alpha`. Before 0.4.0 a supplied or
+  composed composite always had transparency, which a program saving an opaque image could not
+  avoid.
 - **Workspace.** A supplied composite is read row by row like a layer; the composed one keeps
   its one row in the workspace, as now.
 - **Kept (`composite_stored`, when `composite == NULL`): a file's own, copied.** The composite as
@@ -643,7 +665,8 @@ typedef struct minipsd_read_opts {
 - **ZIP written** (`compression` `MINIPSD_ZIP`, `_PREDICTED`, with `minipsd_write_opts.deflate`):
   a channel's size is in its record before its data, and the writer never seeks back, so
   `mpsd__measure_layers` deflates each channel once and the `MPSD__ZIP` piece once more, as RLE
-  rows are packed twice. The workspace holds the largest channel's raw rows (gathered big-endian,
+  rows are packed for their size before they are written (three times a layer row: its size
+  while measuring, then its count and the row; the composite's sizes are kept, so twice). The workspace holds the largest channel's raw rows (gathered big-endian,
   predicted in place) and its stream; the stream is kept while a piece of it is handed out in
   parts, and a second stream of another size is `MINIPSD_ERR_WRITE`. The composite stays RLE.
 - **Limits:** `minipsd_limits` as in the reader; `max_decoded_bytes` bounds the sum of the call's
@@ -730,7 +753,7 @@ commit message. [ROADMAP.md](ROADMAP.md) turns these into numbered steps.
 | **4. Reader** | `reader.h` for the own subset, then real-application files; fuzzing | 0.2.1 |
 | **5. Round trip** | layer rectangles in the writer, a supplied composite, full import, kept unknown content, pass-through | 0.2.x |
 | **6. Features** | one row of the table above per stage, writer and reader together | 0.2.x |
-| **7. Interoperability** | libvips: an example and a MANUAL chapter | 0.2.x |
+| **7. Interoperability** | libvips: an example, a MANUAL chapter, and the plugin (`psdload`, `psdsave`, `psdsave_layers`) | 0.3.x, 0.4.0 |
 
 Every stage follows these rules:
 

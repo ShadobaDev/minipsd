@@ -111,6 +111,9 @@ The declarations, with every parameter and return code, are in
 | `minipsd_writer_total(w)` | the file size, known before the first byte |
 | `minipsd_writer_fill(w, buf, cap, &produced)` | the next bytes, into the caller's buffer: `MINIPSD_MORE` until `MINIPSD_OK` |
 | `minipsd_write(doc, opts, fn, user)` | the whole file through a callback, on a workspace from `MINIPSD_MALLOC`; absent under `MINIPSD_NO_MALLOC` |
+| `minipsd_encode_row(compression, depth, samples, step, width, out, cap, &size)` | one row of one channel as the writer encodes it, PackBits or raw, into the caller's buffer (`MINIPSD_ROW_BOUND` always enough): with the marker and the row sizes, a channel for `stored` and `composite_stored` |
+| `minipsd_predict_row(depth, samples, step, width, out, cap)` | one row as the writer hands it to the deflate for `MINIPSD_ZIP_PREDICTED` (`MINIPSD_ROW_BYTES`) |
+| `minipsd_matte_row(color_mode, depth, pixels, width)` | a composite's row matted against white in place, as the writer mattes a given one (RGB; other modes as given) |
 | `minipsd_reader_workspace_size(&size)` | the reader's workspace: fixed, known before the file |
 | `minipsd_reader_init(&r, data, size, workspace, workspace_size, limits, &info)` | the file's description and its resources, from the whole file or a prefix of it |
 | `minipsd_reader_needed(r)` | after `MINIPSD_ERR_SHORT`: the least buffer size with which the call goes further |
@@ -169,7 +172,7 @@ its layers and composite as stored: no colour is converted.
 
 | Type | What it is |
 |---|---|
-| `minipsd_doc`, `minipsd_layer` | the document: canvas, dpi, layers bottom first, ICC profile, compression |
+| `minipsd_doc`, `minipsd_layer` | the document: canvas, dpi, layers bottom first, ICC profile, compression (the document's, and a layer's own), whether the composite and each layer have transparency |
 | `minipsd_workspace` | `void`: caller memory lent to the writer or the reader, sized by its `*_workspace_size` function |
 | `minipsd_writer` | opaque; built by `minipsd_writer_init` inside the workspace |
 | `minipsd_write_fn` | the callback of `minipsd_write`: non-zero to go on, 0 to abort |
@@ -184,7 +187,12 @@ its layers and composite as stored: no colour is converted.
 | `minipsd_decode_opts` | the rows to decode, the target's `depth` and, for the composite, `keep_matte`; `NULL` for all rows, 8-bit, un-matted |
 
 **Defaults and field meanings**
-- A zero-initialised document selects RLE (`MINIPSD_RLE = 0`).
+- A zero-initialised document selects RLE: `MINIPSD_COMPRESSION_DEFAULT` (0) is RLE for the
+  document and the document's compression for a layer. The other constants (`MINIPSD_RLE` 1,
+  `MINIPSD_RAW` 2, `MINIPSD_ZIP` 3, `MINIPSD_ZIP_PREDICTED` 4) are not the markers the file
+  stores (0 raw, 1 RLE, 2 ZIP, 3 ZIP with prediction).
+- `composite_alpha = 0` is a composite without transparency, its colour channels only;
+  `no_alpha = 0` a layer with transparency.
 - `opacity = 0` means a fully transparent layer; it is **not** "default opaque".
 - `pixels = NULL` is an empty layer; `name = NULL` is an empty name.
 - Layers are listed bottom first.
@@ -245,12 +253,13 @@ the caller frees with `minipsd_doc_free`. Everything else is the caller's memory
 | Name | Owner | Size | Must stay valid | May live in |
 |---|---|---|---|---|
 | `minipsd_doc`, `minipsd_layer[]` | caller; borrowed | `sizeof`; `layer_count` layers | the call; for the pull writer, from init for as long as the writer is used | stack, static, heap |
-| raw document data: layer pixels (`pixels`) or stored channels (`stored`), names, ICC profile, the supplied `composite`, kept `additional_info`, `resources` and `layer_tail` | caller; borrowed, read in place, never copied | a layer's rectangle times 4 samples, of 1 or 2 bytes (or its channels' stored size); `width * height * 4` samples for the composite | as `minipsd_doc` | wherever the application keeps it |
+| raw document data: layer pixels (`pixels`) or stored channels (`stored`), names, ICC profile, the supplied `composite`, kept `additional_info`, `resources` and `layer_tail` | caller; borrowed, read in place, never copied | a layer's rectangle times its pixel's samples, the mode's colour channels and transparency unless `no_alpha` (or its channels' stored size); `width * height` times the colour channels, and transparency with `composite_alpha`, for the composite | as `minipsd_doc` | wherever the application keeps it |
 | `minipsd_workspace` of the writer | caller; lent to the writer | `minipsd_writer_workspace_size()` | for as long as the writer is used | heap; stack or static sized for the largest document |
 | `minipsd_writer` | inside `minipsd_workspace`; opaque | part of the workspace | as the workspace | the caller keeps only the pointer |
-| raw PSD bytes | passed to the callback of `minipsd_write()` | pieces of up to 4 KiB, in order | the callback copies what it keeps | the callback decides |
-| output buffer, `buf` of `minipsd_writer_fill()` | caller | any `cap`, 1 included; a few rows (64 KiB) keeps re-encoding negligible | the call | stack, static or heap |
-| `minipsd_write()` internals | minipsd: the workspace through `MINIPSD_MALLOC` / `MINIPSD_FREE`, a 4 KiB chunk on the stack | `minipsd_writer_workspace_size()` | the call | heap and stack |
+| raw PSD bytes | passed to the callback of `minipsd_write()` | pieces of up to 4 KiB, or of the widest row's `MINIPSD_ROW_BOUND` when that is more, in order | the callback copies what it keeps | the callback decides |
+| output buffer, `buf` of `minipsd_writer_fill()` | caller | any `cap`, 1 included; one of at least the widest row's `MINIPSD_ROW_BOUND` encodes each row at most twice | the call | stack, static or heap |
+| `minipsd_write()` internals | minipsd: the workspace and its buffer through `MINIPSD_MALLOC` / `MINIPSD_FREE` | `minipsd_writer_workspace_size()`, and the larger of 4 KiB and the widest row's bound | the call | heap |
+| `out` of `minipsd_encode_row()`, `minipsd_predict_row()`; `pixels` of `minipsd_matte_row()` | caller; written (`pixels` read and written in place) | `MINIPSD_ROW_BOUND`, `MINIPSD_ROW_BYTES`; `width` pixels | the call | stack, static or heap |
 | the PSD to read (`data` of `minipsd_reader_init()`) | caller; borrowed, read in place, never copied | the file, or a prefix of it | for as long as the reader or any view from it is used, unchanged | wherever it was read, mapped or received |
 | `minipsd_workspace` of the reader | caller; lent to the reader | `minipsd_reader_workspace_size()`, the same for every file | for as long as the reader is used | stack, static or heap |
 | `minipsd_reader` | inside its workspace; opaque | part of the workspace | as the workspace | the caller keeps only the pointer |
@@ -289,6 +298,7 @@ interact, whatever the table says.
 | `minipsd_writer_init` | no | fills the writer's workspace; several writers of one document at once are fine |
 | `minipsd_writer_fill` | no | advances the writer |
 | `minipsd_writer_total` | yes | reads what `minipsd_writer_init` set; safe beside `minipsd_writer_fill` |
+| `minipsd_encode_row`, `minipsd_predict_row`, `minipsd_matte_row` | yes | read the caller's samples; write only the caller's buffer (`minipsd_matte_row` its row) |
 | `minipsd_reader_init` | no | fills the reader's workspace; several readers of one PSD at once are fine |
 | `minipsd_reader_needed` | yes | reads the reader; after a decode returned `MINIPSD_ERR_SHORT`, call it in that thread |
 | `minipsd_reader_next_resource` | yes | each thread its own `pos`; only reads the reader |
@@ -335,7 +345,8 @@ several threads from one reader into one image.
   bits, RGB and grey also at 32, indexed at 8, bitmap at 1. Another depth of a mode is
   `MINIPSD_ERR_UNSUPPORTED`; a mode or depth the format does not have, `MINIPSD_ERR_ARG`.
 - **Samples** are the mode's colour channels then transparency (`pixels`, `composite`), as the
-  file stores them: no colour is converted (CMYK inverted, 255 no ink; Lab's L, a, b). A sample
+  file stores them, transparency only where there is some (a layer's unless `no_alpha`, the
+  composite's with `composite_alpha`): no colour is converted (CMYK inverted, 255 no ink; Lab's L, a, b). A sample
   is a byte at 8 bits, a `uint16_t` at 16, a `float` (0.0 to 1.0) at 32, in host order, written
   big-endian; a mask is one channel of the same depth.
 - **The colour mode data** (`color_mode_data`) is written as given: an indexed document's palette
@@ -355,7 +366,11 @@ several threads from one reader into one image.
   Photoshop's 16-bit files have them; what the block held goes, the document's layers win.
 - **No layers:** a document with a composite (supplied or stored) and `layer_count` 0 is written
   flat: an empty layer info and the tail, as `minipsd_read` keeps a flat file with
-  `opts->stored`.
+  `opts->stored`; when the composite has transparency (not in a flat mode), an empty `Mtrn`,
+  `Mt16` or `Mt32` by its depth after the tail, unless the tail has one (Adobe's "merged
+  transparency"; no file in psd-tools' set is flat with transparency, since Photoshop keeps it on
+  a layer). Without transparency (`composite_alpha` 0) it is the colour channels alone, the count
+  positive: how Photoshop saves an image that has neither layers nor transparency.
 - **The format is what the document is.** A PSB is written with its wide fields (eight-byte
   section and channel lengths, four-byte RLE row counts), and everything kept from a file is
   written as it is, so it must be in that format's layout: `minipsd_read` sets `format` to the
@@ -390,9 +405,11 @@ several threads from one reader into one image.
   - the writer's own blocks first, `luni` (a kept one as it is while it says the name) and the
     group marker, then the blocks kept from a file (`additional_info`), as they are and in their order:
     the name wins, and kept `luni` blocks go;
-  - channel data encoded from `pixels`, or copied as it is from `stored` (any compression the
-    file had, ZIP included), so a layer that was not changed is not encoded again; a stored
-    layer without transparency is written without one (three colour channels);
+  - channel data encoded from `pixels` in the layer's compression (`compression`, 0 the
+    document's), or copied as it is from `stored` (any compression the file had, ZIP included),
+    so a layer that was not changed is not encoded again; a layer without transparency
+    (`no_alpha`, or stored with a transparency channel of size 0) is written without one, its
+    colour channels only;
   - groups (`section_divider_type`), bottom first: a divider (`lsct` type 3), the group's layers, then the
     group's top record (type 1 open, 2 closed) with its name, visibility and mode in its `lsct`
     block (`blend_mode`, Pass Through by default; the record keeps `norm`). A kept `lsct` of the same
@@ -407,17 +424,27 @@ several threads from one reader into one image.
     writes a length of 0, as GIMP does; a file's are written back as they were (Photoshop
     writes five: the composite grey, then four channels). The composed composite ignores them.
 - **Composite image:**
-  - the caller's `composite` when set (the full canvas, straight alpha), whatever the layers
-    hold: flattening layers is rendering, the caller's domain;
+  - the caller's `composite` when set (the full canvas: the colour channels, then, with
+    `composite_alpha`, transparency, straight), whatever the layers hold: flattening layers is
+    rendering, the caller's domain;
   - otherwise a file's composite kept as it stores it (`composite_stored`, with
     `composite_channels`: up to 56, the mode's colour channels, then transparency when `composite_alpha`
     says so, then alpha and spot channels), copied byte for byte, never decoded nor encoded; the
     header's channel count follows it, and the layer count is negative with `composite_alpha`;
   - otherwise composed as a **best effort, with no guarantee**: the visible layers combined with
-    straight-alpha "over", each at its rectangle, clipped to the canvas. Blend modes, masks,
-    clipping, groups and effects are not drawn;
-  - transparency (of a supplied or composed composite, always, but in a flat mode) is the first extra channel,
+    straight-alpha "over", each at its rectangle, clipped to the canvas, a layer without
+    transparency as opaque. Blend modes, masks, clipping, groups and effects are not drawn.
+    Without `composite_alpha` the result is matted against white and its colour channels alone
+    are written;
+  - transparency, whichever the composite (supplied, composed or stored), only when
+    `composite_alpha` says it has some (never in a flat mode: `MINIPSD_ERR_ARG`), is the first extra channel,
     signalled by writing the layer count as a **negative** number, as the format specifies;
+    where the count cannot say it (the writer's `Lr32`, whose count is positive, and a document
+    with no layers), by the `Mt32` (`Mtrn`, `Mt16`) block and by naming the channel as
+    Photoshop's `transparentbg.psd` in psd-tools' set does: 1006 "Transparency", 1045 the same
+    with its NUL, 1053 id 0. GIMP takes the channel for transparency only by a negative count or
+    that name, and reads none of the blocks; a document that keeps any of 1006, 1045 or 1053
+    gets none of the writer's;
   - **colour is matted against white:** `c*a + max*(1-a)`, `max` being 255 or 65535 (at 32 bits
     `c*a + (1-a)`). Photoshop stores it this way and readers subtract the white back out. The
     writer mattes, a supplied composite too, unless `composite_matted` says it already is: then it
@@ -435,6 +462,8 @@ several threads from one reader into one image.
     1064 goes. The resolution stays square: the ratio is never folded into 1005. Photoshop's files
     in psd-tools' set all hold 1.0 (290 version 2, 15 version 1), so another ratio is written as
     the format lays it out but not verified against a reader;
+  - 1006, 1045 and 1053 naming the composite's transparency, where the layer count cannot say it
+    (Composite image, above);
   - a resource of odd length is padded to even.
 - **Typed setters:** the mirror of the typed views (in [What is read](#what-is-read)): a struct in,
   the bytes the view reads out, into the caller's buffer, counted first (`needed`, and
@@ -459,19 +488,24 @@ several threads from one reader into one image.
 - **After the layer info:** the kept `layer_tail` (global layer mask, global blocks) as it is,
   or an empty global layer mask, also for a file read that ends the section with its layer info
   (GIMP's).
-- **Compression:** PackBits RLE (runs from 3 bytes, packets up to 128 bytes) or raw.
-  Row byte counts are computed in a separate sizing pass, so output streams forward through the
-  callback and never seeks back.
+- **Compression:** PackBits RLE (runs from 3 bytes, packets up to 128 bytes) or raw, the
+  document's (`compression`) or a layer's own (`minipsd_layer.compression`, its mask's channels
+  too). Row byte counts are computed in a separate sizing pass, so output streams forward through
+  the callback and never seeks back. A PSD counts an RLE row's bytes in 16 bits: a row that packs
+  to more than 65 535 bytes (32-bit samples that do not pack, wider than about 16 380 px) is
+  `MINIPSD_ERR_SIZE`, the layer's or the composite's; a PSB counts in 32.
   ZIP (`MINIPSD_ZIP`, and `MINIPSD_ZIP_PREDICTED` with each sample stored as its difference from
   its left neighbour) compresses the layers' and masks' channels through the caller's deflate,
-  `minipsd_write_opts.deflate` (`MINIPSD_ERR_ARG` without one): minipsd implements none. The
-  composite is then RLE, as Photoshop writes it. The sizing pass deflates each channel once to
+  `minipsd_write_opts.deflate` (`MINIPSD_ERR_ARG` without one, whenever any layer deflates):
+  minipsd implements none. The composite is RLE, as Photoshop writes it, and raw in a raw
+  document. The sizing pass deflates each channel once to
   learn its size and the writing pass once more, so the deflate must give the same bytes for the
   same input; one that fails, or gives other bytes, is `MINIPSD_ERR_WRITE`. The workspace holds
   the largest such channel raw and the room for its stream.
 - **Allocations:** see [Memory and ownership](#memory-and-ownership).
 - **Limits** (all checked before anything is written):
   - each side 1 .. 30 000 px in a PSD, 1 .. 300 000 in a PSB, otherwise `MINIPSD_ERR_SIZE`;
+  - an RLE row of at most 65 535 bytes in a PSD (Compression, above), otherwise `MINIPSD_ERR_SIZE`;
   - 1 .. 32 767 layers, otherwise `MINIPSD_ERR_ARG`;
   - dpi must round to 1 .. 2^32 - 1 in 16.16 fixed point, i.e. from about 0.0000076 to just below
     65 536 (NaN and infinity excluded), otherwise `MINIPSD_ERR_ARG`;
@@ -585,7 +619,11 @@ them; nothing is copied or allocated. Results on real files from other programs:
   (or, with `opts->stored`, its channels as stored, ZIP ones too) and blocks, the composite as
   stored (`composite_matted`; with `opts->stored`, every channel's bytes in `composite_stored`), the dpi (72 when none is stored), the ICC profile, every resource
   and the layer tail, the `Lr16` or `Lr32` its layers came from in it, empty, all copied into one
-  block. A file without layers gets one, "Background", holding its image; with `opts->stored` it
+  block. A layer without a transparency channel decodes to its colour channels, `no_alpha` set;
+  the composite to the channels the file has, `composite_alpha` saying whether one of them is
+  transparency. A mask whose side is above the format's is `MINIPSD_ERR_UNSUPPORTED`, as a
+  layer's. A file without layers gets one, "Background", holding its image, without transparency
+  when the file has none; with `opts->stored` it
   stays without, its image the composite, copied, and so does a flat mode's (bitmap, indexed,
   multichannel), which has no layers: decoded, but multichannel's always copied. Anything else is reported in `lost` (`MINIPSD_LOST_*`), never
   dropped silently.
@@ -600,7 +638,8 @@ them; nothing is copied or allocated. Results on real files from other programs:
   `minipsd_reader_needed` says how much more a call needs.
 - **Limits:** every length is checked against the buffer and the section it lies in; the
   caller's `minipsd_limits` add the canvas's and the layers' side, the layer count and the bytes
-  one decode call writes, all checked before anything is decoded.
+  one decode call writes, all checked before anything is decoded. A channel whose side is above
+  either format's (300 000) is `MINIPSD_ERR_UNSUPPORTED` before its size is computed.
 
 ## Blend modes
 
@@ -683,6 +722,132 @@ does, and its memory images are minipsd's buffers, with no conversion:
 - minipsd never depends on libvips. `examples/vips_composite.c` does the whole round: layers out
   of libvips, the composite rendered by `vips_composite`, the file written with it and read back;
   CI's `msvc` job runs it on libvips' prebuilt Windows build, pinned to the newest release.
+
+### The plugin
+
+`libvips-plugin/` (`MINIPSD_VIPS_PLUGIN`, the static library `minipsd::vips`) is minipsd as
+libvips' loader and saver, laid out as libvips' own (a base class over a `VipsSource` or a
+`VipsTarget`, file and buffer variants that make one), in names of its own (`MinipsdVips*`,
+`minipsd_vips_*`) that never meet libvips'. It stays a project apart from libvips: libvips'
+CONTRIBUTING.md accepts no contribution made with generative AI, and minipsd is made with it.
+
+- **Registration.** `minipsd_vips_init()`, after `VIPS_INIT`, registers the nine operations'
+  types; libvips then finds them among its loaders and savers by `is_a` and suffix. libvips'
+  prebuilt Windows builds (8.18.7: `enable modules: false`) load no modules, so a loadable module
+  would not work there; the program registers instead. The loader's priority is libvips'
+  default, 0, above `magickload`'s -100.
+- **Loading** (`psdload`, `psdload_buffer`, `psdload_source`). The file is mapped
+  (`vips_source_map`) and read in place. The image is the composite, or with `layer` (bottom
+  first; -1, the default, the composite) that layer: its rectangle, placed by `xoffset` and
+  `yoffset`, with transparency when the layer has it (no alpha band when it has none). A record
+  without pixels (an empty layer, a group's record, an adjustment) is one transparent pixel
+  with `psd-layer-empty`, so every record loads and `layer=N` counts them all. Bands are the mode's colour channels and transparency, up to
+  `MINIPSD_PLANES` (a multichannel file's sixth channel on is not decoded):
+
+  | Mode | libvips | Samples |
+  |---|---|---|
+  | grey, duotone | `B_W`, `GREY16` at 16 bits | as stored |
+  | RGB | `sRGB`, `RGB16`, `scRGB` at 32 bits | as stored |
+  | CMYK | `CMYK` | ink inverted from PSD's (full: no ink) to libvips' (0: no ink), as its `jpegload` makes Adobe's inverted CMYK and ImageMagick makes PSD's; transparency as stored |
+  | bitmap | `B_W`, 8-bit | black 0, white 255 |
+  | indexed | `sRGB`, 8-bit | through the palette, a fourth band when 1047 names a transparent index |
+  | Lab, multichannel | `MULTIBAND` | as stored |
+
+  Decoding is `SEQUENTIAL`: `vips_image_generate`, then `vips_sequential`, as `spngload` does.
+  Each band of rows is one `minipsd_decode_composite` (or `_layer`) straight into the region,
+  from libvips' threads at once on the one reader (see Threads); with `access=sequential` the
+  image streams, otherwise libvips keeps it for random access. A ZIP layer inflates through the
+  zlib libvips links, each thread keeping the layer's channels inflated between its bands
+  (`scratch_kept`), so every thread holds the layer's channels once.
+- **Metadata**, set on the image:
+
+  | Field | From |
+  |---|---|
+  | `xres`, `yres`, `resolution-unit` | 1005 (horizontal and vertical, in or cm); else `dpi` |
+  | `icc-profile-data`, `exif-data`, `xmp-data`, `iptc-data` | 1039, 1058, 1060, 1028 |
+  | `bits-per-sample` | the file's depth (1 for bitmap) |
+  | `psd-color-mode-data` | the palette or the duotone data |
+  | `psd-pixel-aspect-ratio` | 1064, 1.0 without it |
+  | `psd-has-real-merged-data` | 1057; 1 without it |
+  | `psd-layer-count` | the file's layers |
+  | `psd-layer-name`, `-opacity`, `-hidden`, `-clipping` | the record, with `layer` |
+  | `psd-layer-blend-mode` | the record's key; a group's top record, its group's mode from its `lsct` block (`pass`: passes through) |
+  | `psd-layer-empty` | 1 for a record without pixels (one transparent pixel stands for it), else 0 |
+  | `psd-layer-section` | a group's records only: `open`, `closed` (the top record), `end` (the divider below its layers) |
+  | `psd-layer-mask` | the record's mask, an image: one band of the file's depth (`B_W`, `GREY16`), its rectangle in `xoffset`, `yoffset`; one pixel with `psd-layer-empty` for a mask without area; decoded whole, a mask being one band |
+  | `psd-layer-mask-default-color`, `-mask-disabled` | the mask's value outside its rectangle (0 or 255); its flag 0x02 |
+
+- **Saving** (`psdsave`, `psdsave_buffer`, `psdsave_target`). Grey, RGB or CMYK (by
+  `interpretation` and bands, each with or without alpha), 8 or 16 bits, grey and RGB as floats;
+  other band counts are refused. With alpha: one layer and the composite, each with
+  transparency. Without: a flat file, the composite only, its colour channels (as Photoshop's
+  `history.psd`, `0layers_tblocks.psd` and `slices.psd` in psd-tools' set, and psd-tools'
+  `frompil`); with `layered`, one layer without transparency as well, which psdload reads back
+  without an alpha band. Nothing is added: an image's bands are what is written. CMYK goes back
+  to PSD's inverted ink. Kept: the resolution, the ICC profile, EXIF, XMP, IPTC and
+  `psd-pixel-aspect-ratio`. Options: `compression` (the layer's channels: `rle`, the default,
+  `zip`, `zip-predicted`, or `none`, which writes the composite raw too; otherwise the composite
+  is RLE; `MinipsdVipsCompression` in `minipsd_vips.h`), `psb`, `layer_name` ("Layer 1"),
+  `layered`.
+
+  The image is read once, top to bottom, in the bands libvips hands a saver
+  (`vips_sink_disc`), and each channel's rows are encoded as they come with
+  `minipsd_encode_row`, `minipsd_predict_row` and `minipsd_matte_row`, ZIP through a zlib stream
+  a channel, then handed to minipsd as `stored` and `composite_stored`: memory about the file's
+  size, not the image's (an 8000 x 8000 RGBA image, 247 MB as a file, peaks at 326 MB). Each
+  channel keeps room ahead of its rows for its marker and a PSB's row sizes, so its block is
+  written in place for either format. zlib's stream depends on how its input is cut, so a ZIP
+  channel's bytes are those of a deflate fed one row at a time.
+
+  PSB by the option, for a file named `.psb` (read from the target, since libvips writes files
+  through `psdsave_target`), or a side past 30 000; then, the channels encoded, when a PSD
+  cannot hold the file: an RLE row past 65 535 bytes, a layer section past 4 GiB, or a file
+  past 2 GB, which Adobe documents as Photoshop's limit for a PSD.
+- **Saving layers** (`psdsave_layers`, `psdsave_layers_buffer`, `psdsave_layers_target`; in C
+  `minipsd_vips_psdsave_layers`, `_buffer`, `_target`, through `vips_call_split`). A saver takes
+  one image, so this is a `VipsOperation` over a `VipsArrayImage`, as `vips_composite` is,
+  `NOCACHE` since it writes. Each image is a record, bottom first, read from the fields the
+  loader sets (the table above), so a file's records loaded and saved come back:
+
+  | Field | Written as |
+  |---|---|
+  | `psd-layer-name` | the name; else "Layer N" (N from 1, bottom first), a divider "</Layer group>" |
+  | `-opacity`, `-hidden`, `-clipping` | as given; opacity clamped to 0 to 255 |
+  | `-blend-mode` | a four-character key, any other length refused; `pass` on a group's top record as none, which minipsd writes as Photoshop does (record `norm`, `lsct` `pass`) |
+  | `-empty`, `-section` | no pixels, no rectangle; `section_divider_type` (another text refused) |
+  | `xoffset`, `yoffset` | the rectangle, less (`left`, `top`) |
+  | `-mask` and its two fields | the mask: one band of the layers' depth (else refused), its rectangle from its offsets, `flags` 0x02 when disabled, encoded as the layer is |
+
+  Every record with pixels is of one mode and depth (the first such decides, else the composite,
+  else the first record); none is converted. Each image is read once, in bands, into its
+  channels (one helper encodes a layer, a mask and the composite), and the document goes to
+  `minipsd_write` with them stored; PSB as `psdsave` chooses it, retried over every block.
+  What a record holds beyond these fields (text, effects, smart objects, an adjustment's
+  settings, Blend If, its other flags and blocks) is not carried.
+
+  Options: `composite`, `compression`, `psb`, `width`, `height`, `left`, `top`. The canvas is
+  `width` by `height`; else the composite's size; else the smallest from (`left`, `top`) that
+  holds every record with pixels; (`left`, `top`) is where it lies in the records' coordinates.
+  The composite is the given one (the canvas's size, the records' mode and depth), or composed:
+  `vips_composite` of the visible records onto a transparent canvas, blend modes by the table
+  above (others over), opacity, a mask (not disabled; its default colour outside its rectangle)
+  and its groups' visibility and opacity (walked top down) in the alpha, flattened against
+  white (CMYK: no ink) when no record has alpha. Clipping, a group's own blend mode and mask are
+  not drawn. libvips computes in floats: on the test's RGBA, 4774 of 244 412 bytes are off by
+  1 or 2 levels where alpha is partial, none where it is full. 16-bit CMYK needs the composite
+  given (libvips takes CMYK's alpha as 8-bit).
+- **Builds.** The plugin compiles minipsd in privately (`MINIPSD_STATIC`). On Windows it uses the
+  zip's `libz1` (zlib-ng, built zlib-compatible) with zlib 1.3.1's headers, fetched and pinned,
+  since the zip has none; elsewhere pkg-config's `vips` and `zlib`. A program's own libvips
+  replaces the fetched one by `FETCHCONTENT_SOURCE_DIR_MINIPSD_LIBVIPS`, or by the targets
+  `minipsd_libvips` and `minipsd_libvips_zlib`. Released as `minipsd-vips-X.Y.Z.zip`
+  (`tools/package_vips.cmake`): the plugin as a CMake project, minipsd's single header private to
+  it, with its SBOM fragment (`minipsd-vips.spdx.json`, every other file with its checksums,
+  `MINIPSD_SBOM_FILE` on `minipsd::vips`; `tools/check_spdx.cmake` checks it), built from the zip
+  and its example run by CI and by the release. libvips 8.17 replaced
+  `VipsSaveable` with `VipsForeignSaveable`; both are handled. CI's `msvc` job runs its test,
+  which compares every pixel with minipsd's own decode, on psd-tools' set too, and checks that a
+  30000-row image read sequentially leaves libvips holding a few rows' worth.
 
 ## Consumer requirements
 
