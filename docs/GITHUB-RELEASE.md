@@ -16,13 +16,17 @@ Pushing the tag starts the [`Release`](../.github/workflows/release.yml) workflo
    (`tools/package_vips.cmake`), with its SBOM fragment, then checked against that fragment
    (`tools/check_spdx.cmake`) and built from the zip alone against Ubuntu's libvips, its
    example run: a zip that does not build is not published;
-5. a build-provenance attestation for `minipsd.h` and the zip;
-6. a GitHub Release with `minipsd.h`, the zip and a `.sha256` for each, its notes taken from the
-   changelog section.
+5. the Debian package `libminipsd-dev_X.Y.Z_all.deb` (CPack), installed on the runner and found
+   by a consumer by `find_package` and pkg-config (`tools/check_deb.sh`): a package that does not
+   install is not published;
+6. a build-provenance attestation for `minipsd.h`, the zip and the `.deb`;
+7. a GitHub Release with `minipsd.h`, the zip, the `.deb` and a `.sha256` for each, its notes
+   taken from the changelog section.
 
 There is nothing to build for consumers: the source tree at the tag *is* the release. `minipsd.h`
 is for users who prefer one file to copying `include/`; the zip, for those who want the plugin
-without the repository. CI packs and builds the zip on every push too, so it fails there first.
+without the repository; the `.deb`, for an install by apt. CI packs and checks the zip and the
+`.deb` on every push too, so they fail there first.
 
 ## 0. Pre-flight
 
@@ -52,10 +56,10 @@ notes come from `docs/CHANGELOG.md`, not from the tag.
 ## 3. Verify
 
 - **Actions** → the Release run is green.
-- **Releases** → `0.1.0` has `minipsd.h`, `minipsd-vips-0.1.0.zip`, a `.sha256` for each, and
-  the changelog notes.
+- **Releases** → `0.1.0` has `minipsd.h`, `minipsd-vips-0.1.0.zip`, `libminipsd-dev_0.1.0_all.deb`,
+  a `.sha256` for each, and the changelog notes.
 - Provenance: `gh attestation verify minipsd.h --repo ShadobaDev/minipsd`, and the same for the
-  zip.
+  zip and the `.deb`.
 - A FetchContent consumer pinned to `GIT_TAG 0.1.0` configures and builds.
 
 ## 4. Then the consumers

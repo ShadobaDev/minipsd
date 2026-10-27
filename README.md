@@ -91,8 +91,9 @@ the manual's [PSD in libvips](docs/MANUAL.md#psd-in-libvips-the-plugin).
 
 ## Adding it to a project
 
-Copy the `include/` directory, or use CMake (FetchContent, git submodule, `find_package`),
-pkg-config, an archive or a `.deb`; see [docs/INSTALL.md](docs/INSTALL.md).
+Copy the `include/` directory (or the single `minipsd.h` each GitHub Release attaches), or use
+CMake (FetchContent, git submodule, `find_package`), pkg-config, or the release's `.deb`; see
+[docs/INSTALL.md](docs/INSTALL.md).
 
 ## Configuration
 

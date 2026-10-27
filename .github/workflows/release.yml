@@ -1,8 +1,9 @@
 # Release: a pushed tag X.Y.Z (bare semver) checks that CI already passed on its commit on master,
 # checks the tag against the header version and the changelog, and publishes minipsd.h (include/ joined into one file by
 # tools/amalgamate.cmake) + minipsd.h.sha256, and the libvips plugin as a CMake project that builds as it is
-# (minipsd-vips-X.Y.Z.zip, tools/package_vips.cmake, built and run here first) + its .sha256, as a GitHub Release
-# with build-provenance attestations. "Run workflow" (workflow_dispatch) does everything except publish,
+# (minipsd-vips-X.Y.Z.zip, tools/package_vips.cmake, built and run here first) + its .sha256, and the
+# Debian package (libminipsd-dev_X.Y.Z_all.deb, tools/check_deb.sh, installed and found here first) + its
+# .sha256, as a GitHub Release with build-provenance attestations. "Run workflow" (workflow_dispatch) does everything except publish,
 # so it is a dry run. See docs/GITHUB-RELEASE.md.
 name: Release
 
@@ -78,17 +79,25 @@ jobs:
           sudo apt-get update && sudo apt-get install -y --no-install-recommends libvips-dev ninja-build
           mkdir "$RUNNER_TEMP/plugin" && cd "$RUNNER_TEMP/plugin"
           cmake -E tar xf "$GITHUB_WORKSPACE"/dist/minipsd-vips-*.zip
-          cmake -DSPDX="$(echo minipsd-vips-*)/minipsd-vips.spdx.json" -DBASE="$(echo minipsd-vips-*)" -DCOMPLETE=ON                 -P "$GITHUB_WORKSPACE"/tools/check_spdx.cmake
+          cmake -DSPDX="$(echo minipsd-vips-*)/minipsd-vips.spdx.json" -DBASE="$(echo minipsd-vips-*)" -DCOMPLETE=ON \
+                -P "$GITHUB_WORKSPACE"/tools/check_spdx.cmake
           cmake -S minipsd-vips-* -B build -G Ninja
           cmake --build build
           ctest --test-dir build --output-on-failure
 
-      # Verifiable with: gh attestation verify minipsd.h --repo ShadobaDev/minipsd (the zip alike)
+      # The install tree as a Debian package (CPack), installed here and found by a consumer.
+      - name: Stage the Debian package and its checksum
+        run: |
+          sh tools/check_deb.sh
+          cd dist && for deb in *.deb; do sha256sum "$deb" > "$deb.sha256" && cat "$deb.sha256"; done
+
+      # Verifiable with: gh attestation verify minipsd.h --repo ShadobaDev/minipsd (the zip and the .deb alike)
       - uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             dist/minipsd.h
             dist/minipsd-vips-*.zip
+            dist/libminipsd-dev_*_all.deb
 
       - name: Publish the GitHub Release
         if: github.ref_type == 'tag'
@@ -102,3 +111,5 @@ jobs:
             dist/minipsd.h.sha256
             dist/minipsd-vips-*.zip
             dist/minipsd-vips-*.zip.sha256
+            dist/libminipsd-dev_*_all.deb
+            dist/libminipsd-dev_*_all.deb.sha256
