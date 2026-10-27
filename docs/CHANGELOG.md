@@ -3,6 +3,13 @@
 Changes between releases, for users of minipsd. Versioning follows the pre-1.0 rules in
 [TODO.md](TODO.md): breaking changes bump the MINOR, additions and fixes the PATCH.
 
+## [Unreleased]
+
+### Added
+- Each GitHub Release attaches `libminipsd-dev_X.Y.Z_all.deb` and its `.sha256`, the install tree
+  as a Debian/Ubuntu package, installed and found by `find_package` and pkg-config before it is
+  published.
+
 ## [0.4.0] — 2026-10-26
 
 **Breaking:** `minipsd_doc.composite_alpha` now says, for every composite (given, composed from

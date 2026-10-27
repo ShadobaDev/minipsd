@@ -134,6 +134,7 @@ tools/
   amalgamate.cmake             joins include/ into one file, a release artifact
   package_vips.cmake           packs the plugin as released: minipsd-vips-X.Y.Z.zip, its SBOM fragment inside
   check_spdx.cmake             checks an SPDX fragment against its files (checksums, every file listed)
+  check_deb.sh                 packs the .deb the release attaches, installs it, builds a consumer against it
   compat_report.py             regenerates COMPATIBILITY.md
 ```
 

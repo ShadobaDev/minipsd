@@ -59,18 +59,18 @@ You can get that tree in any of these ways:
   cmake -S minipsd -B build -DMINIPSD_BUILD_TESTS=OFF
   cmake --install build --prefix /usr/local        # Linux: with sudo
   ```
-- **As an archive**, `minipsd-X.Y.Z.tar.gz` or `.zip`: use it unpacked where it is, or extract
-  it into a prefix. The tree is relocatable, so nothing needs regenerating:
-  ```bash
-  sudo tar -xzf minipsd-0.4.0.tar.gz --strip-components=1 -C /usr/local
-  ```
-- **As a Debian/Ubuntu package**, `libminipsd-dev_X.Y.Z_all.deb`:
+- **As a Debian/Ubuntu package**, `libminipsd-dev_X.Y.Z_all.deb`, attached to each GitHub
+  Release with its `.sha256` (installed and found by a consumer before it is published):
   ```bash
   sudo apt install ./libminipsd-dev_0.4.0_all.deb
   ```
-
-The archive and the `.deb` are built with CPack, see
-[CHEATSHEET.md](CHEATSHEET.md#packages-and-installing).
+- **As an archive you pack yourself**, `minipsd-X.Y.Z.tar.gz` or `.zip`, with CPack from the source
+  ([CHEATSHEET.md](CHEATSHEET.md#packages-and-installing)); no release attaches one. Use it
+  unpacked where it is, or extract it into a prefix. The tree is relocatable, so nothing needs
+  regenerating:
+  ```bash
+  sudo tar -xzf minipsd-0.4.0.tar.gz --strip-components=1 -C /usr/local
+  ```
 
 Then, in CMake (add `-DCMAKE_PREFIX_PATH=<tree>` unless the tree is in a system prefix):
 
