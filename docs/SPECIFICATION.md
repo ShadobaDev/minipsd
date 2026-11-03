@@ -235,7 +235,7 @@ its layers and composite as stored: no colour is converted.
 | `MINIPSD_ERR_ARG` | -1 | NULL document or callback, no layers and no composite, ICC size without data, or a dpi that 16.16 fixed point cannot hold (see below) |
 | `MINIPSD_ERR_SIZE` | -2 | a side is 0 or above the format's (`MINIPSD_MAX_SIDE`, `MINIPSD_MAX_SIDE_PSB`), or a section is longer than its length field allows (see below) |
 | `MINIPSD_ERR_WRITE` | -3 | the callback returned 0 |
-| `MINIPSD_ERR_ALLOC` | -4 | `MINIPSD_MALLOC` returned NULL |
+| `MINIPSD_ERR_ALLOC` | -4 | `MINIPSD_MALLOC` returned NULL, or for `minipsd_read` a block aligned to less than 8 bytes |
 | `MINIPSD_ERR_OPEN` | -5 | not returned by minipsd; reserved for the caller's file code (`examples/write_file.c`) |
 | `MINIPSD_ERR_FORMAT` | -6 | reader: not a well-formed PSD |
 | `MINIPSD_ERR_UNSUPPORTED` | -7 | reader: a valid file outside what minipsd reads: for decoding, a file of another depth than `opts->depth`, or a ZIP-compressed channel without `opts->inflate`; for `minipsd_read`, a file the writer could not take back (a mode at a depth it does not write, such as 32-bit CMYK, or layers in a flat mode); writer: a mode at a depth it does not write; on a 32-bit platform, a PSB whose layer and mask section `size_t` cannot hold |
@@ -886,7 +886,7 @@ Platemaker is the first consumer. Breaking any of these breaks it:
   with the correct dpi.
 - The same tests also run instrumented in CI: under AddressSanitizer and UBSan, under clang-tidy
   (`.clang-tidy`, findings are errors), and with coverage of `minipsd.h`: **lines must stay at
-  100 %** and branches at 95 % or more, so new code comes with the test that executes it,
+  100 %** and branches at 97 % or more, so new code comes with the test that executes it,
   error paths included (`test_alloc_failure.cpp` fails each allocation in turn).
 - **Single file:** the same tests also run against the single-file `minipsd.h` the release
   attaches, and `minipsd.h` is compiled alone and then with its implementation, with no internal

@@ -114,7 +114,7 @@ jobs:
   #                   No round trip: Python would need the sanitizer runtime preloaded.
   #   linux-tsan      ThreadSanitizer: decode calls run at once on one reader.
   #   linux-tidy      clang-tidy with .clang-tidy, findings are errors.
-  #   linux-coverage  coverage of minipsd.h, round trip included: lines 100 %, branches >= 95 %.
+  #   linux-coverage  coverage of minipsd.h, round trip included: lines 100 %, branches >= 97 %.
   analysis:
     if: ${{ !github.event.pull_request.draft }}
     name: ${{ matrix.preset }}
@@ -155,7 +155,7 @@ jobs:
         run: |
           find build/linux-coverage \( -name '*.c.gcda' -o -name '*.c.gcno' \) -delete
           gcovr --root . --filter include/ --merge-lines --exclude-throw-branches \
-                --fail-under-line 100 --fail-under-branch 95 \
+                --fail-under-line 100 --fail-under-branch 97 \
                 --cobertura coverage.xml --txt coverage.txt --txt-metric branch --txt-summary \
                 build/linux-coverage || status=$?
           { echo '```'; cat coverage.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

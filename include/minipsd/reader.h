@@ -313,7 +313,7 @@ MINIPSDDEF int minipsd_reader_init(minipsd_reader **out, const void *data, size_
 
     r->data         = (const uint8_t *)data;
     r->size         = size;
-    r->base         = 0;
+    r->base         = 0;   /* the window starts the file; nothing moves it yet (ROADMAP, streaming read) */
     r->needed_from  = r->needed = 0;
     r->limits.max_side   = limits ? limits->max_side : 0;   /* 0: the format's own, known from the header */
     r->limits.max_layers = limits && limits->max_layers ? limits->max_layers : MPSD__MAX_LAYERS;

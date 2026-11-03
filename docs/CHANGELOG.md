@@ -3,6 +3,12 @@
 Changes between releases, for users of minipsd. Versioning follows the pre-1.0 rules in
 [TODO.md](TODO.md): breaking changes bump the MINOR, additions and fixes the PATCH.
 
+## [Unreleased]
+
+### Changed
+- Stated what `minipsd_read` always required: a `MINIPSD_MALLOC` of your own must give blocks
+  aligned to 8 bytes, as `malloc`'s are, or `minipsd_read` returns `MINIPSD_ERR_ALLOC`.
+
 ## [0.4.1] — 2026-11-03
 
 ### Added

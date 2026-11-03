@@ -1,7 +1,8 @@
 /**
  * \file
- * \brief minipsd.h built with an allocator that fails on demand, so every MINIPSD_ERR_ALLOC path
- *        runs (its own translation unit: MINIPSD_MALLOC must be set before the implementation).
+ * \brief minipsd.h built with an allocator that fails on demand, or aligns less than malloc, so
+ *        every MINIPSD_ERR_ALLOC path runs (its own translation unit: MINIPSD_MALLOC must be set
+ *        before the implementation).
  *
  * SPDX-License-Identifier: MIT
  * SPDX-FileCopyrightText: Copyright (c) 2026 Bartlomiej Mucha <shadobadev@gmail.com>
@@ -13,19 +14,26 @@
 #include <utility>
 
 namespace {
-int g_allocs_left = -1;   // allocations that still succeed; -1: all of them
+int         g_allocs_left = -1;   // allocations that still succeed; -1: all of them
+std::size_t g_misalign    = 0;    // bytes past malloc's address: a pool that aligns less
 
 void *failingMalloc(std::size_t size)
 {
     if (g_allocs_left == 0) return nullptr;
     if (g_allocs_left > 0) --g_allocs_left;
-    return std::malloc(size);
+    auto *p = static_cast<unsigned char *>(std::malloc(size + g_misalign));
+    return p ? p + g_misalign : nullptr;
+}
+
+void misalignedFree(void *ptr)
+{
+    std::free(ptr ? static_cast<unsigned char *>(ptr) - g_misalign : nullptr);
 }
 }   // namespace
 
 #define MINIPSD_STATIC
 #define MINIPSD_MALLOC(size) failingMalloc(size)
-#define MINIPSD_FREE(ptr)    std::free(ptr)
+#define MINIPSD_FREE(ptr)    misalignedFree(ptr)
 #define MINIPSD_IMPLEMENTATION
 #include "minipsd.h"
 
@@ -71,4 +79,13 @@ TEST(MinipsdAllocTest, EachFailedAllocationIsReported)
     ASSERT_EQ(minipsd_read(file, n, nullptr, nullptr, &doc, nullptr), MINIPSD_OK) << "one allocation is all a read needs";
     minipsd_doc_free(doc);
     g_allocs_left = -1;
+
+    // Blocks aligned to less than the document needs: the writer aligns inside its workspace, but
+    // minipsd_read's document could not start its block, so minipsd_doc_free could not free it.
+    g_misalign = MPSD__ALIGN / 2;
+    EXPECT_EQ(minipsd_write(&d, nullptr, count, &size), MINIPSD_OK) << "the writer takes any alignment";
+    doc = reinterpret_cast<minipsd_doc *>(1);
+    EXPECT_EQ(minipsd_read(file, n, nullptr, nullptr, &doc, nullptr), MINIPSD_ERR_ALLOC);
+    EXPECT_EQ(doc, nullptr);
+    g_misalign = 0;
 }

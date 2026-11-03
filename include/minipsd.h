@@ -35,7 +35,8 @@
  * \par Configuration
  * Define before the implementation include:
  * - \c MINIPSD_STATIC: make every function static (private to that file);
- * - \c MINIPSD_MALLOC / \c MINIPSD_FREE: replace malloc / free (define both);
+ * - \c MINIPSD_MALLOC / \c MINIPSD_FREE: replace malloc / free (define both; minipsd_read needs
+ *   blocks aligned to 8 bytes, as malloc's are);
  * - \c MINIPSD_NO_MALLOC: leave out every allocation: minipsd_write, minipsd_read and
  *   minipsd_doc_free go (and <stdlib.h>); the pull writer, the reader and minipsd_read_into, on
  *   the caller's memory, stay;
@@ -158,7 +159,8 @@ enum {
                                         MINIPSD_MAX_SIDE_PSB), or the document is too large for
                                         PSD's 32-bit section lengths (about 4 GiB).             */
     MINIPSD_ERR_WRITE   = -3,       /*!< The write callback reported a failure.                 */
-    MINIPSD_ERR_ALLOC   = -4,       /*!< MINIPSD_MALLOC returned NULL.                          */
+    MINIPSD_ERR_ALLOC   = -4,       /*!< MINIPSD_MALLOC returned NULL, or for minipsd_read a
+                                        block aligned to less than 8 bytes.                     */
     MINIPSD_ERR_OPEN    = -5,       /*!< Not returned by minipsd; kept for the caller's own file
                                         code (examples/): a file not opened or closed.          */
     MINIPSD_ERR_FORMAT  = -6,       /*!< Reader and typed views: the bytes are not well-formed. */
@@ -1049,7 +1051,9 @@ MINIPSDDEF int minipsd_reader_workspace_size(size_t *size);
  * thumbnail), and nothing after; for layers in a global block (see minipsd_info.layer_tail), up
  * to their count in that block.  A buffer that ends sooner gives MINIPSD_ERR_SHORT: read more and
  * call again, on the same workspace; minipsd_reader_needed says how much.  Nothing is allocated or
- * copied, and calling init again restarts every iteration.
+ * copied, and calling init again restarts every iteration.  What follows is checked as it is
+ * read: a record or channel data that overruns its section is minipsd_reader_next_layer's
+ * MINIPSD_ERR_FORMAT, so MINIPSD_OK here does not mean the whole file is sound.
  *
  * \param r              Receives the reader, built inside workspace; set on MINIPSD_OK and on
  *                       MINIPSD_ERR_SHORT, NULL otherwise.
@@ -1744,7 +1748,8 @@ MINIPSDDEF int minipsd_read_into(const void *data, size_t size, const minipsd_li
  * \brief Reads a whole file into a document in one MINIPSD_MALLOC block; minipsd_doc_free frees it.
  *
  * minipsd_read_size and minipsd_read_into on a block of its own: the same document, the same
- * return codes, and MINIPSD_ERR_ALLOC when the allocation fails.
+ * return codes, and MINIPSD_ERR_ALLOC when the allocation fails or its block is aligned to less
+ * than 8 bytes (malloc's never is): the document must start the block for minipsd_doc_free.
  */
 MINIPSDDEF int minipsd_read(const void *data, size_t size, const minipsd_limits *limits,
                             const minipsd_read_opts *opts, minipsd_doc **doc, uint32_t *lost);

@@ -1498,8 +1498,9 @@ int countingInflate(void *user, const std::uint8_t *src, std::size_t size, std::
 minipsd_target targetOf(Bytes &out, std::uint32_t w, int depth)
 {
     minipsd_target t;
-    if (depth == 16) minipsd_target_rgba16(&t, reinterpret_cast<std::uint16_t *>(out.data()), std::size_t(w) * 8);
-    else             minipsd_target_rgba(&t, out.data(), std::size_t(w) * 4);
+    if (depth == 16)      minipsd_target_rgba16(&t, reinterpret_cast<std::uint16_t *>(out.data()), std::size_t(w) * 8);
+    else if (depth == 32) minipsd_target_interleaved(&t, out.data(), std::size_t(w) * 16, 4, depth);
+    else                  minipsd_target_rgba(&t, out.data(), std::size_t(w) * 4);
     return t;
 }
 

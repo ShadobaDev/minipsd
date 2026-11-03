@@ -789,7 +789,7 @@ static int mpsd__own_layers_block(const minipsd_doc *d)
    none. */
 static int mpsd__alpha_uncounted(const minipsd_doc *d)
 {
-    return mpsd__composite_alpha(d) && !mpsd__doc_flat(d) && (mpsd__own_layers_block(d) || !d->layer_count);
+    return mpsd__composite_alpha(d) && (mpsd__own_layers_block(d) || !d->layer_count);
 }
 
 /* Then the writer names it as Photoshop does, which GIMP reads it by, unless the document keeps

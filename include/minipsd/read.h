@@ -185,7 +185,7 @@ static int mpsd__read(const void *data, size_t size, const minipsd_limits *limit
         int            k, keep;
         unsigned       lplanes;                                 /* decoded: transparency only when the file has it */
         rc = minipsd_reader_next_layer(r, &v);
-        if (rc != MINIPSD_MORE) return rc == MINIPSD_OK ? MINIPSD_ERR_FORMAT : rc;
+        if (rc != MINIPSD_MORE) return rc == MINIPSD_OK ? MINIPSD_ERR_FORMAT : rc;   /* OK: never, init counted them */
         if (v.other_channels) loss |= MINIPSD_LOST_CHANNELS;    /* TODO: alpha and spot channels (ROADMAP, Not scheduled) */
         w = (uint64_t)((int64_t)v.right - v.left);
         h = (uint64_t)((int64_t)v.bottom - v.top);
