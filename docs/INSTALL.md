@@ -13,7 +13,7 @@ attaches the same headers joined into one `minipsd.h`, for those who prefer a si
 include(FetchContent)
 FetchContent_Declare(minipsd
     GIT_REPOSITORY https://github.com/ShadobaDev/minipsd.git
-    GIT_TAG        0.4.0)
+    GIT_TAG        0.4.1)
 FetchContent_MakeAvailable(minipsd)
 target_link_libraries(my-app PRIVATE minipsd::minipsd)
 ```
@@ -21,11 +21,11 @@ target_link_libraries(my-app PRIVATE minipsd::minipsd)
 **[CPM.cmake](https://github.com/cpm-cmake/CPM.cmake)**
 
 ```cmake
-CPMAddPackage("gh:ShadobaDev/minipsd#0.4.0")
+CPMAddPackage("gh:ShadobaDev/minipsd#0.4.1")
 target_link_libraries(my-app PRIVATE minipsd::minipsd)
 ```
 
-Use `#0.4.0`, not `@0.4.0`: the `@` form looks for a tag `v0.4.0`, and minipsd tags have no `v`.
+Use `#0.4.1`, not `@0.4.1`: the `@` form looks for a tag `v0.4.1`, and minipsd tags have no `v`.
 
 **git submodule**
 
@@ -62,14 +62,14 @@ You can get that tree in any of these ways:
 - **As a Debian/Ubuntu package**, `libminipsd-dev_X.Y.Z_all.deb`, attached to each GitHub
   Release with its `.sha256` (installed and found by a consumer before it is published):
   ```bash
-  sudo apt install ./libminipsd-dev_0.4.0_all.deb
+  sudo apt install ./libminipsd-dev_0.4.1_all.deb
   ```
 - **As an archive you pack yourself**, `minipsd-X.Y.Z.tar.gz` or `.zip`, with CPack from the source
   ([CHEATSHEET.md](CHEATSHEET.md#packages-and-installing)); no release attaches one. Use it
   unpacked where it is, or extract it into a prefix. The tree is relocatable, so nothing needs
   regenerating:
   ```bash
-  sudo tar -xzf minipsd-0.4.0.tar.gz --strip-components=1 -C /usr/local
+  sudo tar -xzf minipsd-0.4.1.tar.gz --strip-components=1 -C /usr/local
   ```
 
 Then, in CMake (add `-DCMAKE_PREFIX_PATH=<tree>` unless the tree is in a system prefix):
@@ -105,8 +105,8 @@ plugin, so a program's own minipsd, of any version, is left alone:
 ```cmake
 include(FetchContent)
 FetchContent_Declare(minipsd_vips
-    URL      https://github.com/ShadobaDev/minipsd/releases/download/0.4.0/minipsd-vips-0.4.0.zip
-    URL_HASH SHA256=<the hash in minipsd-vips-0.4.0.zip.sha256>)
+    URL      https://github.com/ShadobaDev/minipsd/releases/download/0.4.1/minipsd-vips-0.4.1.zip
+    URL_HASH SHA256=<the hash in minipsd-vips-0.4.1.zip.sha256>)
 FetchContent_MakeAvailable(minipsd_vips)
 target_link_libraries(my-app PRIVATE minipsd::vips)
 ```

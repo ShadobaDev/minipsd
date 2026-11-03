@@ -12,6 +12,7 @@
 #
 #   minipsd::vips          the plugin, a static library; its MINIPSD_SBOM_FILE, minipsd-vips.spdx.json
 #   minipsd-vips-example   example.c: an image saved and read back through the plugin (its test)
+#   minipsd-vips-example-shared  example.c in a shared library: the plugin links into one
 # ---------------------------------------------------------------------------
 cmake_minimum_required(VERSION 3.21)   # PROJECT_IS_TOP_LEVEL
 project(minipsd_vips LANGUAGES C)
@@ -26,6 +27,9 @@ add_library(minipsd::vips ALIAS minipsd_vips)
 target_include_directories(minipsd_vips PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/foreign/minipsd")
 target_link_libraries(minipsd_vips PUBLIC minipsd_libvips PRIVATE minipsd_libvips_zlib)
 set_target_properties(minipsd_vips PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+# Position-independent: a program may link the plugin into a shared library of its own (Platemaker's
+# libplatemaker.so), which on Linux takes only position-independent code.
+set_target_properties(minipsd_vips PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # The SBOM fragment of this zip, found as minipsd's own: get_target_property(... MINIPSD_SBOM_FILE).
 set_target_properties(minipsd_vips PROPERTIES MINIPSD_SBOM_FILE "${CMAKE_CURRENT_SOURCE_DIR}/minipsd-vips.spdx.json")
 
@@ -33,6 +37,11 @@ if(MINIPSD_VIPS_EXAMPLE)
     add_executable(minipsd-vips-example example.c)
     target_link_libraries(minipsd-vips-example PRIVATE minipsd::vips)
     set_target_properties(minipsd-vips-example PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    # The example's code in a shared library, as a program's own library carries the plugin: it links
+    # only if the plugin is position-independent. Built, never run.
+    add_library(minipsd-vips-example-shared SHARED example.c)
+    target_link_libraries(minipsd-vips-example-shared PRIVATE minipsd::vips)
+    set_target_properties(minipsd-vips-example-shared PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
     enable_testing()
     add_test(NAME minipsd-vips-example COMMAND minipsd-vips-example "${CMAKE_CURRENT_BINARY_DIR}/example.psd")
     if(MINIPSD_LIBVIPS_ENV)   # Windows: libvips' DLLs on PATH

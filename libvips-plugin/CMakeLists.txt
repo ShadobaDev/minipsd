@@ -19,6 +19,9 @@ target_include_directories(minipsd_vips PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(minipsd_vips PUBLIC minipsd_libvips PRIVATE minipsd::minipsd minipsd_libvips_zlib)
 target_compile_options(minipsd_vips PRIVATE ${MINIPSD_WARNINGS})
 set_target_properties(minipsd_vips PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+# Position-independent: a program may link the plugin into a shared library of its own (Platemaker's
+# libplatemaker.so), which on Linux takes only position-independent code.
+set_target_properties(minipsd_vips PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 if(NOT MINIPSD_BUILD_TESTS)
     return()
