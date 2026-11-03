@@ -1493,3 +1493,118 @@ TEST(MinipsdWriterTest, CompiledAsCItWritesTheSameBytes)
     EXPECT_EQ(Bytes(buf, buf + size), write(docOf(3, 2, layers, 2)));
 }
 
+
+// ---------------------------------------------------------------------------------------------------
+// Crafted documents and kept bytes for the branches the tests above leave untaken.
+// ---------------------------------------------------------------------------------------------------
+
+// A kept resource's name: a size without data is the caller's mistake.
+TEST(MinipsdCraftedWriterTest, AKeptResourceNameWithoutDataIsRefused)
+{
+    const Bytes px = testImage(2, 2), data = {1, 2};
+    const minipsd_layer layer{"L", px.data(), 255, 0};
+    const minipsd_resource kept{1000, view(data), {nullptr, 3}};
+    minipsd_doc d = docOf(2, 2, &layer, 1);
+    d.resources = &kept;
+    d.resource_count = 1;
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG);
+}
+
+// A mask whose right edge is left of its left edge: inverted, refused.
+TEST(MinipsdCraftedWriterTest, AnInvertedMaskIsRefused)
+{
+    const Bytes px = testImage(2, 2), ramp(4, 0x80);
+    const minipsd_mask mask{.top = 0, .left = 2, .bottom = 2, .right = 0, .pixels = ramp.data()};
+    const minipsd_layer layer{.name = "L", .pixels = px.data(), .opacity = 255, .mask = &mask};
+    const minipsd_doc d = docOf(2, 2, &layer, 1);
+    EXPECT_EQ(minipsd_doc_check(&d, nullptr), MINIPSD_ERR_ARG);
+}
+
+// 32 bits: greyscale is taken as RGB is; multichannel's composite is only ever copied, never given
+// as pixels.
+TEST(MinipsdCraftedWriterTest, ModesAtTheEdgeOfWhatTheWriterTakes)
+{
+    const std::vector<float> grey = {0.0f, 0.25f, 0.5f, 1.0f};   // 2 x 2, one channel
+    minipsd_doc g{};
+    g.width = 2; g.height = 2; g.dpi = 72.0;
+    g.depth = 32;
+    g.color_mode = MINIPSD_MODE_GREY;
+    g.composite = reinterpret_cast<const std::uint8_t *>(grey.data());
+    EXPECT_EQ(minipsd_doc_check(&g, nullptr), MINIPSD_OK);
+    const Bytes file = write(g);
+    EXPECT_FALSE(file.empty());
+
+    const Bytes planes(std::size_t{2} * 2 * 2, 0x40);
+    minipsd_doc m{};
+    m.width = 2; m.height = 2; m.dpi = 72.0;
+    m.color_mode = MINIPSD_MODE_MULTICHANNEL;
+    m.composite_channels = 2;
+    m.composite = planes.data();   // pixels, not stored channels
+    EXPECT_EQ(minipsd_doc_check(&m, nullptr), MINIPSD_ERR_ARG);
+    m.composite = nullptr;
+    m.composite_stored = view(planes);
+    m.composite_channels = 0;      // stored, but no count of its channels
+    EXPECT_EQ(minipsd_doc_check(&m, nullptr), MINIPSD_ERR_ARG);
+}
+
+// A kept layer tail ending in a few bytes that are not a block: written as they are in the
+// document's own format, refused when it must change format (its blocks re-written).
+TEST(MinipsdCraftedWriterTest, AKeptTailEndingInStrayBytes)
+{
+    const Bytes px = testImage(2, 2);
+    const minipsd_layer layer{"L", px.data(), 255, 0};
+    const Bytes tail = Bytes(4, 0) + tagged("Patt", {}) + Bytes(4, 'x');
+    minipsd_doc d = docOf(2, 2, &layer, 1);
+    d.layer_tail = view(tail);
+    const Bytes same = write(d);
+    EXPECT_NE(std::search(same.begin(), same.end(), tail.begin(), tail.end()), same.end()) << "as they are";
+    minipsd_write_opts psb{};
+    psb.format = MINIPSD_PSB;
+    write(d, MINIPSD_ERR_UNSUPPORTED, &psb);
+
+    // At 32 bits the writer looks in the tail for a layers' block: the stray bytes end the search.
+    const std::vector<float> deep(std::size_t{2} * 2 * 4, 1.0f);
+    const minipsd_layer floats{"F", reinterpret_cast<const std::uint8_t *>(deep.data()), 255, 0};
+    minipsd_doc f = docOf(2, 2, &floats, 1);
+    f.depth = 32;
+    f.composite = floats.pixels;
+    f.layer_tail = view(tail);
+    const Bytes file = write(f);
+    EXPECT_NE(std::search(file.begin(), file.end(), tail.begin(), tail.end()), file.end());
+
+    // The same behind an '8B64' block, the other signature a block may have.
+    Bytes b64 = tagged("Patt", {});
+    std::copy_n("8B64", 4, b64.begin());
+    const Bytes tail64 = Bytes(4, 0) + b64 + Bytes(4, 'x');
+    d.layer_tail = f.layer_tail = view(tail64);
+    write(d, MINIPSD_ERR_UNSUPPORTED, &psb);
+    EXPECT_FALSE(write(f).empty());
+
+    // In a PSB, a long key's header takes 16 bytes ('Alph': an eight-byte length); 12 left are
+    // not a header but stray bytes too.
+    Bytes alph = tagged("Alph", {});
+    alph.resize(12);
+    const Bytes cut = Bytes(4, 0) + alph;
+    d.format = f.format = MINIPSD_PSB;
+    d.layer_tail = f.layer_tail = view(cut);
+    minipsd_write_opts psd{};
+    psd.format = MINIPSD_PSD;
+    write(d, MINIPSD_ERR_UNSUPPORTED, &psd);
+    EXPECT_FALSE(write(f).empty());
+}
+
+// A kept 'lsct' too short to hold a section type says nothing: the group gets the writer's own.
+TEST(MinipsdCraftedWriterTest, AKeptSectionBlockTooShortForItsTypeIsNotTheGroups)
+{
+    const Bytes shortLsct = tagged("lsct", {0, 0});
+    const minipsd_layer layers[2] = {
+        {.name = "</Group>", .opacity = 255, .section_divider_type = MINIPSD_SECTION_GROUP_END},
+        {.name = "Group", .opacity = 255, .additional_info = view(shortLsct), .section_divider_type = MINIPSD_SECTION_GROUP}};
+    const minipsd_doc d = docOf(2, 2, layers, 2);
+    const Bytes file = write(d);
+    minipsd_doc *back = nullptr;
+    ASSERT_EQ(minipsd_read(file.data(), file.size(), nullptr, nullptr, &back, nullptr), MINIPSD_OK);
+    ASSERT_EQ(back->layer_count, 2u);
+    EXPECT_EQ(back->layers[1].section_divider_type, MINIPSD_SECTION_GROUP);
+    minipsd_doc_free(back);
+}

@@ -18,11 +18,13 @@
 #include "zlib_stored.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <thread>
 #include <tuple>
@@ -3507,5 +3509,312 @@ TEST(MinipsdReaderTest, FilesFromOtherProgramsAreReadWholeAndInParts)
             done = true;
         }
         EXPECT_LE(have, file.size());
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Crafted files for the branches the files above leave untaken: a value the reader must refuse or
+// ignore, a zero-area layer or mask, a mode at the edge of the planes, a channel that does not
+// decode.
+// ---------------------------------------------------------------------------------------------------
+
+namespace {
+
+Bytes aspectRatio(double ratio)   // resource 1064: its version, then the ratio as a big-endian double
+{
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &ratio, sizeof bits);
+    return Out().u32(MPSD__PIXEL_ASPECT_VERSION).u64(bits).b;
+}
+
+Spec flatRgb()   // 2 x 2 RGB, no layers, a raw composite
+{
+    Spec s;
+    s.channels = 3;
+    s.count = 0;
+    s.image = rawImage(3, 2, 2, 0x80);
+    return s;
+}
+
+Bytes maskRect(int top, int left, int bottom, int right)   // a layer mask record: the rectangle, colour, flags
+{
+    return Out().u32(static_cast<std::uint32_t>(top)).u32(static_cast<std::uint32_t>(left))
+                .u32(static_cast<std::uint32_t>(bottom)).u32(static_cast<std::uint32_t>(right)).u8(0).u8(0).zeros(2).b;
+}
+
+} // namespace
+
+// A pixel aspect ratio the writer would not take (zero, negative, infinite, NaN) is none: the
+// document gets 0; a second 1064 is ignored, the first one counts.  Read under a decoding limit
+// it stays within.
+TEST(MinipsdCraftedTest, APixelAspectRatioThatIsNotPositiveIsDropped)
+{
+    const double inf = std::numeric_limits<double>::infinity();
+    const struct { double ratio, kept; } cases[] = {
+        {2.0, 2.0}, {0.0, 0.0}, {-1.0, 0.0}, {inf, 0.0}, {std::numeric_limits<double>::quiet_NaN(), 0.0},
+    };
+    minipsd_limits lim{};
+    lim.max_decoded_bytes = 1u << 20;
+    for (const auto &c : cases) {
+        SCOPED_TRACE(c.ratio);
+        Spec s = flatRgb();
+        s.resources = Out().raw(resource(1005, resolution(72))).raw(resource(1064, aspectRatio(c.ratio)))
+                           .raw(resource(1064, aspectRatio(3.0))).b;   // the second: ignored
+        const Bytes file = build(s).bytes;
+        Open o(file);
+        ASSERT_EQ(o.rc, MINIPSD_OK);
+        if (!std::isnan(c.ratio)) {
+            EXPECT_EQ(o.info.pixel_aspect_ratio, c.ratio) << "the first 1064";
+        }
+        const Doc d = readDoc(file, nullptr, MINIPSD_OK, &lim);
+        ASSERT_TRUE(d);
+        EXPECT_EQ(d->pixel_aspect_ratio, c.kept);
+    }
+}
+
+// The bitmap mode is 1-bit and only it: a bitmap of 8 bits, or a 1-bit greyscale, is refused.
+TEST(MinipsdCraftedTest, ABitmapModeAndA1BitDepthGoTogether)
+{
+    for (const auto &[mode, depth] : {std::pair<unsigned, unsigned>{MINIPSD_MODE_BITMAP, 8}, {MINIPSD_MODE_GREY, 1}}) {
+        SCOPED_TRACE(mode);
+        Spec s = flatRgb();
+        s.mode = mode;
+        s.depth = depth;
+        s.channels = 1;
+        s.image = rawImage(1, 2, 2, 0);
+        readDoc(build(s).bytes, nullptr, MINIPSD_ERR_UNSUPPORTED);
+    }
+}
+
+// A negative layer count says the composite has transparency, but three channels leave no room
+// for it: the composite is refused, not read past its channels.
+TEST(MinipsdCraftedTest, ACompositeAlphaWithoutItsChannelIsRefused)
+{
+    Spec s;
+    s.channels = 3;
+    s.layers = {simpleRec()};
+    s.count = -1;
+    s.image = rawImage(3, 2, 2, 0x80);
+    const Bytes file = build(s).bytes;
+    Open o(file);
+    ASSERT_EQ(o.rc, MINIPSD_OK);
+    EXPECT_NE(o.info.composite_has_alpha, 0);
+    readDoc(file, nullptr, MINIPSD_ERR_FORMAT);
+}
+
+// Stored, a composite with fewer channels than the mode's colours cannot be kept as it is: it is
+// decoded instead, and refused for the channels it lacks.
+TEST(MinipsdCraftedTest, AStoredCompositeShortOfColourChannelsIsDecoded)
+{
+    Spec s = flatRgb();
+    s.channels = 1;
+    s.image = rawImage(1, 2, 2, 0x80);
+    const minipsd_read_opts stored{1, nullptr, nullptr};
+    readDoc(build(s).bytes, nullptr, MINIPSD_ERR_FORMAT, nullptr, &stored);
+}
+
+// A layer and a mask with a width but no height: nothing to decode, nothing to keep, in either
+// way of reading.
+TEST(MinipsdCraftedTest, ALayerAndAMaskWithoutHeightHaveNoPixels)
+{
+    Rec flat;
+    flat.right = 2;   // bottom 0: no rows
+    flat.channels = {chan(-1, 2, 0), chan(0, 2, 0), chan(1, 2, 0), chan(2, 2, 0)};
+    flat.pascal = "F";
+    Rec masked = simpleRec();
+    masked.mask = maskRect(0, 0, 0, 2);   // the mask: no rows either, and no channel for it
+    Spec s;
+    s.layers = {flat, masked};
+    s.count = -2;
+    s.image = rawImage(4, 2, 2, 0x80);
+    const Bytes file = build(s).bytes;
+    for (const int stored : {0, 1}) {
+        SCOPED_TRACE(stored);
+        const minipsd_read_opts opts{stored, nullptr, nullptr};
+        const Doc d = readDoc(file, nullptr, MINIPSD_OK, nullptr, &opts);
+        ASSERT_TRUE(d);
+        ASSERT_EQ(d->layer_count, 2u);
+        EXPECT_EQ(d->layers[0].pixels, nullptr);
+        EXPECT_EQ(d->layers[0].stored, nullptr);
+        ASSERT_NE(d->layers[1].mask, nullptr);
+        EXPECT_EQ(d->layers[1].mask->pixels, nullptr);
+        EXPECT_EQ(d->layers[1].mask->stored.size, 0u);
+    }
+}
+
+// A mask whose channel does not decode fails the whole read.
+TEST(MinipsdCraftedTest, AMaskThatDoesNotDecodeFailsTheRead)
+{
+    Rec r = simpleRec();
+    r.mask = maskRect(0, 0, 2, 2);
+    r.channels.push_back(Chan{-2, Out().u16(1).u16(1).u16(1).u8(0x80).u8(0x80).b});   // RLE: a no-op where a row is
+    Spec s;
+    s.layers = {r};
+    s.count = -1;
+    s.image = rawImage(4, 2, 2, 0x80);
+    const Bytes file = build(s).bytes;
+    readDoc(file, nullptr, MINIPSD_ERR_FORMAT);
+
+    // Asked for no rows (from the last), the same mask decodes to nothing, its data never read.
+    Open o(file);
+    ASSERT_EQ(o.rc, MINIPSD_OK);
+    const minipsd_layer_view v = nextLayer(o.r);
+    std::uint8_t              px[4];
+    const minipsd_plane       plane{px, 1, 2};
+    const minipsd_decode_opts fromEnd{2, 0, 0, 8};
+    EXPECT_EQ(minipsd_decode_mask(o.r, &v, &plane, &fromEnd), MINIPSD_OK);
+}
+
+// read_into: a file that does not measure is refused before the block is touched.
+TEST(MinipsdCraftedTest, ReadIntoRefusesAFileItCannotMeasure)
+{
+    const Bytes garbage(40, 'x');
+    Bytes block(64, 0xEE);
+    minipsd_doc *d = reinterpret_cast<minipsd_doc *>(1);
+    EXPECT_EQ(minipsd_read_into(garbage.data(), garbage.size(), nullptr, nullptr, block.data(), block.size(), &d, nullptr),
+              MINIPSD_ERR_FORMAT);
+    EXPECT_EQ(d, nullptr);
+    EXPECT_EQ(block, Bytes(64, 0xEE));
+}
+
+// An interleaved target of more planes than there are takes the most there are; a depth of 0
+// is 8 bits.
+TEST(MinipsdCraftedTest, AnInterleavedTargetClampsItsPlanes)
+{
+    std::uint8_t   px[2 * MINIPSD_PLANES] = {};
+    minipsd_target t;
+    minipsd_target_interleaved(&t, px, sizeof px, 9, 0);
+    for (int k = 0; k < MINIPSD_PLANES; ++k) {
+        EXPECT_EQ(t.channel[k].data, px + k) << k;
+        EXPECT_EQ(t.channel[k].pixel_step, MINIPSD_PLANES) << k;
+    }
+}
+
+// At 32 bits, a fully transparent pixel has no colour to un-matte: it is 0, not a division by 0.
+TEST(MinipsdCraftedTest, AFullyTransparentFloatPixelUnmattesToZero)
+{
+    const std::vector<float> px = {0.25f, 0.5f, 0.75f, 0.0f, 0.25f, 0.5f, 0.75f, 1.0f};   // 2 x 1: clear, opaque
+    const minipsd_layer layer{.name = "L", .pixels = reinterpret_cast<const std::uint8_t *>(px.data()), .opacity = 255};
+    minipsd_doc doc = docOf(2, 1, &layer, 1);
+    doc.depth = 32;
+    doc.composite = layer.pixels;
+    Open o(write(doc));
+    ASSERT_EQ(o.rc, MINIPSD_OK);
+    float                     back[8];
+    minipsd_target            t;
+    const minipsd_decode_opts opts{0, 0, 0, 32};   // un-matted
+    minipsd_target_interleaved(&t, back, sizeof back, 4, 32);
+    ASSERT_EQ(minipsd_decode_composite(o.r, &t, &opts), MINIPSD_OK);
+    EXPECT_EQ(back[0], 0.0f) << "clear: no colour";
+    EXPECT_EQ(back[3], 0.0f);
+    EXPECT_FLOAT_EQ(back[4], 0.25f) << "opaque: as given";
+}
+
+// Multichannel with as many channels as there are planes: every plane a colour, none left for
+// transparency; the composite decodes plane by plane.
+TEST(MinipsdCraftedTest, AMultichannelCompositeFillsEveryPlane)
+{
+    Spec s = flatRgb();
+    s.mode = MINIPSD_MODE_MULTICHANNEL;
+    s.channels = MINIPSD_PLANES;
+    s.image = rawImage(MINIPSD_PLANES, 2, 2, 0x40);
+    Open o(build(s).bytes);
+    ASSERT_EQ(o.rc, MINIPSD_OK);
+    Bytes px(std::size_t{2} * 2 * MINIPSD_PLANES, 0);
+    minipsd_target t;
+    minipsd_target_interleaved(&t, px.data(), std::size_t{2} * MINIPSD_PLANES, MINIPSD_PLANES, 8);
+    ASSERT_EQ(minipsd_decode_composite(o.r, &t, nullptr), MINIPSD_OK);
+    EXPECT_EQ(px, Bytes(px.size(), 0x40));
+}
+
+// A PSB layer taller than any format allows is refused when decoded: its plane's size could wrap.
+TEST(MinipsdCraftedTest, ALayerTallerThanAPsbAllowsIsNotDecoded)
+{
+    Rec r;
+    r.right = 1;
+    r.bottom = MINIPSD_MAX_SIDE_PSB + 1;
+    r.channels = {chan(-1, 2, 0), chan(0, 2, 0), chan(1, 2, 0), chan(2, 2, 0)};
+    Spec s;
+    s.version = 2;
+    s.layers = {r};
+    s.count = -1;
+    s.image = rawImage(4, 2, 2, 0x80);
+    Open o(build(s).bytes);
+    ASSERT_EQ(o.rc, MINIPSD_OK);
+    const minipsd_layer_view v = nextLayer(o.r);
+    Bytes px(4);
+    EXPECT_EQ(decodeRgba(o.r, v, 1, px, 0, 1), MINIPSD_ERR_UNSUPPORTED);
+}
+
+// The channel data of the layers, added up, longer than the layer info that holds it: refused by
+// the first next_layer, which walks the records to find where the data starts.
+TEST(MinipsdCraftedTest, ChannelDataPastTheLayerInfoIsRefused)
+{
+    Rec r = simpleRec();
+    r.channels.back().lengthDelta = 4;   // declares four bytes the section does not have
+    Spec s;
+    s.layers = {r};
+    s.count = -1;
+    s.image = rawImage(4, 2, 2, 0x80);
+    const Bytes file = build(s).bytes;
+    Open o(file);
+    ASSERT_EQ(o.rc, MINIPSD_OK);
+    nextLayer(o.r, MINIPSD_ERR_FORMAT);
+    readDoc(file, nullptr, MINIPSD_ERR_FORMAT);   // and the whole read with it, at its first layer
+}
+
+// A mask with rows but no columns: nothing to decode, not even a plane to write to.
+TEST(MinipsdCraftedTest, AMaskWithoutWidthDecodesToNothing)
+{
+    Rec r = simpleRec();
+    r.mask = maskRect(0, 0, 2, 0);
+    r.channels.push_back(chan(-2, 2, 0));
+    Spec s;
+    s.layers = {r};
+    s.count = -1;
+    s.image = rawImage(4, 2, 2, 0x80);
+    Open o(build(s).bytes);
+    ASSERT_EQ(o.rc, MINIPSD_OK);
+    const minipsd_layer_view v = nextLayer(o.r);
+    ASSERT_NE(v.has_mask, 0);
+    const minipsd_plane none{nullptr, 1, 0};
+    EXPECT_EQ(minipsd_decode_mask(o.r, &v, &none, nullptr), MINIPSD_OK);
+}
+
+// Multichannel read with options that do not ask for stored channels: kept as stored all the same,
+// as multichannel always is.
+TEST(MinipsdCraftedTest, MultichannelIsKeptStoredWithOrWithoutTheOption)
+{
+    Spec s = flatRgb();
+    s.mode = MINIPSD_MODE_MULTICHANNEL;
+    s.channels = 2;
+    s.image = rawImage(2, 2, 2, 0x40);
+    const Bytes file = build(s).bytes;
+    for (const int stored : {0, 1}) {
+        SCOPED_TRACE(stored);
+        const minipsd_read_opts opts{stored, nullptr, nullptr};
+        const Doc d = readDoc(file, nullptr, MINIPSD_OK, nullptr, &opts);
+        ASSERT_TRUE(d);
+        EXPECT_EQ(d->composite, nullptr);
+        EXPECT_EQ(d->composite_channels, 2);
+    }
+}
+
+// Global blocks: 'Mtrn' and 'Mt16' each say the composite's first extra channel is transparency;
+// a few bytes after the last block, too short for a header, end the walk quietly.
+TEST(MinipsdCraftedTest, TransparencyBlocksAndAShortTailAfterThem)
+{
+    const Bytes mask(4, 0);
+    for (const char *key : {"Mtrn", "Mt16"}) {
+        SCOPED_TRACE(key);
+        Spec s;
+        s.hasRawSection = true;
+        const Bytes tail = Out().raw(mask).str("8BIM").str(key).u32(0).zeros(4).b;
+        s.rawLayerSection = Out().u32(static_cast<std::uint32_t>(4 + tail.size())).u32(0).raw(tail).b;
+        s.image = rawImage(4, 2, 2, 0x80);
+        Open o(build(s).bytes);
+        ASSERT_EQ(o.rc, MINIPSD_OK);
+        EXPECT_NE(o.info.composite_has_alpha, 0);
+        EXPECT_EQ(o.info.layer_count, 0u);
     }
 }
