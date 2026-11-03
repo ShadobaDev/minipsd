@@ -112,7 +112,7 @@
  */
 #define MINIPSD_VERSION_MAJOR 0
 #define MINIPSD_VERSION_MINOR 4
-#define MINIPSD_VERSION_PATCH 0
+#define MINIPSD_VERSION_PATCH 1
 
 #define MPSD__STR(x)  #x
 #define MPSD__XSTR(x) MPSD__STR(x)

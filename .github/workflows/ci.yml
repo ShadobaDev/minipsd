@@ -35,8 +35,9 @@ jobs:
           - { os: windows-2022,   preset: msvc, vips: ON }
           - { os: windows-latest, preset: mingw }
           # linux-gcc also reads psd-tools' 315 files (22 MB, pinned by hash): every comparison
-          # with psd-tools, Photoshop's ZIP files through zlib among them.
-          - { os: ubuntu-latest,  preset: linux-gcc, psd_tools_files: ON }
+          # with psd-tools, Photoshop's ZIP files through zlib among them. It builds the plugin too,
+          # on Ubuntu's libvips: on Linux a shared library takes it only as position-independent code.
+          - { os: ubuntu-latest,  preset: linux-gcc, psd_tools_files: ON, vips: ON }
           - { os: ubuntu-latest,  preset: linux-clang }
     runs-on: ${{ matrix.os }}
     steps:
@@ -63,9 +64,9 @@ jobs:
             mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-pkgconf
 
-      # Linux: gcc and clang are preinstalled.
+      # Linux: gcc and clang are preinstalled; libvips for the plugin.
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y ninja-build pkg-config
+        run: sudo apt-get update && sudo apt-get install -y ninja-build pkg-config ${{ matrix.vips == 'ON' && 'libvips-dev' || '' }}
 
       - name: Configure, build, test (MinGW)
         if: matrix.preset == 'mingw'
@@ -88,8 +89,9 @@ jobs:
         run: sh tools/check_deb.sh
 
       # The plugin as released (minipsd-vips-X.Y.Z.zip, tools/package_vips.cmake): built from the
-      # zip alone, outside the repository, its example run, its SBOM fragment checked against its
-      # files; libvips as fetched above. The release builds it again on Linux before publishing.
+      # zip alone, outside the repository, its example run and linked into a shared library, its
+      # SBOM fragment checked against its files; libvips as fetched above (Windows) or Ubuntu's.
+      # The release builds it again on Linux before publishing.
       - name: Check the released plugin builds and runs
         if: matrix.vips == 'ON'
         shell: pwsh

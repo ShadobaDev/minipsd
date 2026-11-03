@@ -3,12 +3,18 @@
 Changes between releases, for users of minipsd. Versioning follows the pre-1.0 rules in
 [TODO.md](TODO.md): breaking changes bump the MINOR, additions and fixes the PATCH.
 
-## [Unreleased]
+## [0.4.1] — 2026-11-03
 
 ### Added
 - Each GitHub Release attaches `libminipsd-dev_X.Y.Z_all.deb` and its `.sha256`, the install tree
   as a Debian/Ubuntu package, installed and found by `find_package` and pkg-config before it is
   published.
+
+### Fixed
+- The libvips plugin (`minipsd::vips`, the `minipsd-vips` zip) is built as position-independent
+  code, so a program can link it into a shared library of its own: on Linux the link failed with
+  *"relocation R_X86_64_PC32 … recompile with -fPIC"*. The zip's example is now also linked into a
+  shared library, and CI builds the plugin on Linux.
 
 ## [0.4.0] — 2026-10-26
 
