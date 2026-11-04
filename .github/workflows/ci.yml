@@ -149,11 +149,13 @@ jobs:
       # --exclude-throw-branches: the C++ builds add exception edges that C code never takes.
       # The C units (the C smoke test, the examples, the fuzz replay) check that the header builds
       # and behaves as C, not coverage: gcc numbers a line's branches differently in C, so gcovr
-      # cannot merge them with the C++ units' and lists them twice. Their data goes first.
+      # cannot merge them with the C++ units' and lists them twice. Their data goes first, and so
+      # do the C++ compile checks' (*_check.cpp, built, never run): their functions, never called,
+      # would be listed beside the tests' under their C names.
       - name: Coverage report
         if: matrix.preset == 'linux-coverage'
         run: |
-          find build/linux-coverage \( -name '*.c.gcda' -o -name '*.c.gcno' \) -delete
+          find build/linux-coverage \( -name '*.c.gcda' -o -name '*.c.gcno' -o -name '*_check.cpp.gcno' \) -delete
           gcovr --root . --filter include/ --merge-lines --exclude-throw-branches \
                 --fail-under-line 100 --fail-under-branch 97 \
                 --cobertura coverage.xml --txt coverage.txt --txt-metric branch --txt-summary \

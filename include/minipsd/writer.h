@@ -225,7 +225,8 @@ static mpsd__source mpsd__channel_source(const minipsd_doc *d, const minipsd_lay
         src.height  = r.height;
     } else if (k == mpsd__ch_mask(d)) {
         const minipsd_mask *m = l->mask;
-        const uint32_t      w = (uint32_t)((int64_t)m->right - m->left), h = (uint32_t)((int64_t)m->bottom - m->top);
+        /* NOLINTNEXTLINE(clang-analyzer-core.NullDereference): mpsd__channel_count counts this channel only with a mask */
+        const uint32_t      w =(uint32_t)((int64_t)m->right - m->left), h = (uint32_t)((int64_t)m->bottom - m->top);
         src.height = h;
         if (m->stored.size) { src.stored = &m->stored; return src; }
         if (m->pixels && w && h) { src.samples = m->pixels; src.width = w; }
