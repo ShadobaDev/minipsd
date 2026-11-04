@@ -763,7 +763,7 @@ Every stage follows these rules:
 - **Independent reader for every byte change.** `psd-tools` in CI checks new bytes, as
   [Verification](SPECIFICATION.md#verification) requires. minipsd's own reader is never the
   only check of its own writer.
-- **Coverage stays at 100 % of lines** and at least 95 % of branches, per module. A new module
+- **Coverage stays at 100 % of lines** and at least 97 % of branches in all (95 % per module). A new module
   comes with its `test_<module>.cpp`.
 - **The spec follows the code.** When a stage lands, its part of this file moves into
   [SPECIFICATION.md](SPECIFICATION.md), and this file keeps only what is still ahead.

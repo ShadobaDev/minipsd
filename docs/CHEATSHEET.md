@@ -42,7 +42,7 @@ cmake --preset linux-asan && cmake --build --preset linux-asan && ctest --preset
 cmake --preset linux-tidy && cmake --build --preset linux-tidy   # findings fail the build
 
 cmake --preset linux-coverage && cmake --build --preset linux-coverage && ctest --preset linux-coverage
-find build/linux-coverage \( -name '*.c.gcda' -o -name '*.c.gcno' \) -delete   # the C units: see below
+find build/linux-coverage \( -name '*.c.gcda' -o -name '*.c.gcno' -o -name '*_check.cpp.gcno' \) -delete   # see below
 gcovr --root . --filter include/ --merge-lines --exclude-throw-branches \
       --txt-metric branch --txt build/linux-coverage          # lines and branches missing a test
 ```
@@ -52,8 +52,10 @@ gcovr --root . --filter include/ --merge-lines --exclude-throw-branches \
 The C units (the C smoke test, the examples, the fuzz replay) are left out, as CI leaves them
 out: they check the header builds and behaves as C, and gcc numbers a line's branches
 differently in C, so gcovr would list those lines twice and the duplicates would hide which test
-is missing. Coverage data adds up across runs: delete `build/linux-coverage` for a clean report.
-CI fails below 100 % of lines or 95 % of branches and publishes the report to Coveralls.
+is missing. So are the C++ compile checks (`*_check.cpp`, built, never run): their functions,
+never called, would show as missing a test. Coverage data adds up across runs: delete
+`build/linux-coverage` for a clean report.
+CI fails below 100 % of lines or 97 % of branches and publishes the report to Coveralls.
 
 ## Fuzzing
 
@@ -160,7 +162,9 @@ paths also check the SBOM fragment's version and that it lists the headers.
 | `MINIPSD_TEST_FIXTURES` | ON (`linux-coverage`: OFF) | read the local PSDs in `tests/fixtures/` too; off, a local coverage run measures what CI's does |
 | `MINIPSD_CLANG_TIDY` | empty (`linux-tidy`: `clang-tidy`) | run clang-tidy on the test targets |
 
-GoogleTest comes from the system if installed (`libgtest-dev`), otherwise it is fetched.
+GoogleTest comes from the system if installed (`libgtest-dev`), otherwise it is fetched (v1.14.0,
+pinned by hash). Offline, `-DFETCHCONTENT_SOURCE_DIR_GTEST=<unpacked googletest>` takes a copy
+of your own.
 
 The round trip needs Python with `psd-tools`; without it the test is skipped. A venv keeps it
 out of the system Python:

@@ -225,7 +225,8 @@ static mpsd__source mpsd__channel_source(const minipsd_doc *d, const minipsd_lay
         src.height  = r.height;
     } else if (k == mpsd__ch_mask(d)) {
         const minipsd_mask *m = l->mask;
-        const uint32_t      w = (uint32_t)((int64_t)m->right - m->left), h = (uint32_t)((int64_t)m->bottom - m->top);
+        /* NOLINTNEXTLINE(clang-analyzer-core.NullDereference): mpsd__channel_count counts this channel only with a mask */
+        const uint32_t      w =(uint32_t)((int64_t)m->right - m->left), h = (uint32_t)((int64_t)m->bottom - m->top);
         src.height = h;
         if (m->stored.size) { src.stored = &m->stored; return src; }
         if (m->pixels && w && h) { src.samples = m->pixels; src.width = w; }
@@ -789,7 +790,7 @@ static int mpsd__own_layers_block(const minipsd_doc *d)
    none. */
 static int mpsd__alpha_uncounted(const minipsd_doc *d)
 {
-    return mpsd__composite_alpha(d) && !mpsd__doc_flat(d) && (mpsd__own_layers_block(d) || !d->layer_count);
+    return mpsd__composite_alpha(d) && (mpsd__own_layers_block(d) || !d->layer_count);
 }
 
 /* Then the writer names it as Photoshop does, which GIMP reads it by, unless the document keeps

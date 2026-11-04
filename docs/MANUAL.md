@@ -991,7 +991,7 @@ Define before the `#include` in the implementation file:
 | Macro | Effect |
 |---|---|
 | `MINIPSD_STATIC` | every function `static`, private to that file: several copies never clash, and those you do not call do not warn |
-| `MINIPSD_MALLOC` / `MINIPSD_FREE` | replace `malloc` / `free`; define both |
+| `MINIPSD_MALLOC` / `MINIPSD_FREE` | replace `malloc` / `free`; define both. `minipsd_read` needs blocks aligned to 8 bytes, as `malloc`'s are, or gives `MINIPSD_ERR_ALLOC` |
 | `MINIPSD_NO_MALLOC` | no allocation at all, and no `<stdlib.h>`: `minipsd_write` goes, the pull writer and the reader stay |
 | `MINIPSD_NO_READER` | no reader, typed views or `minipsd_read`: less code for a program that only writes |
 | `MINIPSD_NO_WRITER` | no writer, typed setters or `minipsd_read`: less code for a program that only reads |

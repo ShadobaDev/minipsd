@@ -23,6 +23,7 @@ if(NOT GTest_FOUND)
     set(INSTALL_GTEST          OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(GTest
         URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+        URL_HASH SHA256=1f357c27ca988c3f7c6b4bf68a9395005ac6761f034046e9dde0896e3aba00e4
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     )
     FetchContent_MakeAvailable(GTest)
@@ -85,7 +86,8 @@ set(_minipsd_test_sources
     test_composite.cpp
     test_writer.cpp
     test_reader.cpp
-    minipsd_c_smoke.c        # minipsd.h compiled as C, compared byte for byte with the C++ build
+    test_edges.cpp           # NULLs, overflowing counts, empty inputs and limits: the branches left over
+    minipsd_c_smoke.c       # minipsd.h compiled as C, compared byte for byte with the C++ build
     test_alloc_failure.cpp   # minipsd.h with an allocator that fails on demand
     test_golden.cpp          # the bytes of 0.1.0, by SHA-256, for a fixed set of documents
 )
