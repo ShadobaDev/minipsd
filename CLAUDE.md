@@ -33,6 +33,8 @@ Read it before proposing a commit message or a CHANGELOG entry.
 One preset per toolchain (`msvc`, `mingw`, `linux-*`); commands in `docs/CHEATSHEET.md`.
 
 - The psd-tools tests need a Python with `tests/requirements.txt`. Keep its venv in a lasting place
-  (e.g. under `build/`): a venv in a temp folder gets half-cleaned and then fails on import.
-- A `mingw` build that fails with no compiler message is an environment flake when run from
-  PowerShell: rebuild through bash with `C:\msys64\mingw64\bin` on `PATH` before suspecting the code.
+  (e.g. under `build/`): a venv in a temp folder gets half-cleaned and then fails on import. When
+  psd-tools tests fail on import, check `Python3_EXECUTABLE` in the build's `CMakeCache.txt` first.
+- A `mingw` build or ctest run that fails with no compiler message (the `consumer-*` tests among them)
+  is an environment flake when run from PowerShell: rerun through bash with `C:\msys64\mingw64\bin` on
+  `PATH` before suspecting the code. A failure that prints a compiler message is real.
