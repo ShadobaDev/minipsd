@@ -74,14 +74,14 @@ jobs:
         run: |
           cmake --preset mingw -DMINIPSD_REQUIRE_PSD_TOOLS=ON "-DPython3_EXECUTABLE=${{ steps.python.outputs.python-path }}"
           cmake --build --preset mingw
-          ctest --preset mingw
+          ctest --preset mingw --output-on-failure
 
       - name: Configure, build, test
         if: matrix.preset != 'mingw'
         run: |
           cmake --preset ${{ matrix.preset }} -DMINIPSD_REQUIRE_PSD_TOOLS=ON -DMINIPSD_PSD_TOOLS_FILES=${{ matrix.psd_tools_files || 'OFF' }} -DMINIPSD_VIPS_EXAMPLE=${{ matrix.vips || 'OFF' }} -DMINIPSD_VIPS_PLUGIN=${{ matrix.vips || 'OFF' }} "-DPython3_EXECUTABLE=${{ steps.python.outputs.python-path }}"
           cmake --build --preset ${{ matrix.preset }}
-          ctest --preset ${{ matrix.preset }}
+          ctest --preset ${{ matrix.preset }} --output-on-failure
 
       # The Debian package the release publishes: packed, installed, found by a consumer.
       - name: Check the Debian package
@@ -143,7 +143,7 @@ jobs:
         run: |
           cmake --preset ${{ matrix.preset }} -DMINIPSD_REQUIRE_PSD_TOOLS=${{ matrix.preset == 'linux-coverage' && 'ON' || 'OFF' }}
           cmake --build --preset ${{ matrix.preset }}
-          ctest --preset ${{ matrix.preset }}
+          ctest --preset ${{ matrix.preset }} --output-on-failure
 
       # --merge-lines: minipsd.h is compiled into several test files; count each line once.
       # --exclude-throw-branches: the C++ builds add exception edges that C code never takes.
